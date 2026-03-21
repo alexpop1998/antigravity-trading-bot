@@ -31,9 +31,17 @@ class BotDatabase:
                 price REAL,
                 amount REAL,
                 pnl REAL,
-                reason TEXT
+                reason TEXT,
+                exchange_trade_id TEXT UNIQUE
             )
         ''')
+        
+        # Add exchange_trade_id column to existing table if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE trade_history ADD COLUMN exchange_trade_id TEXT UNIQUE")
+        except sqlite3.OperationalError:
+            pass # Column already exists
+            
         self.conn.commit()
 
     def save_state(self, key, data):
@@ -57,16 +65,74 @@ class BotDatabase:
             logger.error(f"Errore caricamento database: {e}")
             return None
 
-    def log_trade(self, symbol, side, price, amount, pnl=0, reason=""):
+    def log_trade(self, symbol, side, price, amount, pnl=0, reason="", exchange_trade_id=None):
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT INTO trade_history (symbol, side, price, amount, pnl, reason)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (symbol, side, price, amount, pnl, reason))
+                INSERT INTO trade_history (symbol, side, price, amount, pnl, reason, exchange_trade_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (symbol, side, price, amount, pnl, reason, exchange_trade_id))
             self.conn.commit()
+        except sqlite3.IntegrityError:
+            pass # Ignoriamo duplicati basati su exchange_trade_id
         except Exception as e:
             logger.error(f"Errore log trade: {e}")
+            
+    def sync_binance_trades(self, trades_list):
+        """Syncs an array of CCXT trade objects to the local SQLite database"""
+        if not trades_list:
+            return
+            
+        from datetime import datetime, timezone
+        
+        try:
+            cursor = self.conn.cursor()
+            inserted_count = 0
+            
+            for t in trades_list:
+                # Basic CCXT trade properties
+                exchange_trade_id = t.get('id')
+                if not exchange_trade_id:
+                    continue
+                    
+                symbol = t.get('symbol', 'UNKNOWN')
+                side = t.get('side', 'unknown')
+                price = float(t.get('price', 0) or 0)
+                amount = float(t.get('amount', 0) or 0)
+                
+                # Realized PnL is usually inside trade.info on Binance Futures
+                pnl = 0.0
+                info = t.get('info', {})
+                if 'realizedPnl' in info:
+                    pnl = float(info['realizedPnl'])
+                    
+                timestamp_ms = t.get('timestamp')
+                dt_str = None
+                if timestamp_ms:
+                    # Convert to YYYY-MM-DD HH:MM:SS string
+                    dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+                    dt_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    continue # Skip trades without time
+                
+                try:
+                    # Usiamo INSERT OR IGNORE sfruttando il vincolo UNIQUE su exchange_trade_id
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO trade_history 
+                        (timestamp, symbol, side, price, amount, pnl, reason, exchange_trade_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (dt_str, symbol, side, price, amount, pnl, "BINANCE", exchange_trade_id))
+                    
+                    if cursor.rowcount > 0:
+                        inserted_count = inserted_count + 1
+                except Exception as row_error:
+                    logger.error(f"Error inserting individual trade {exchange_trade_id}: {row_error}")
+                    
+            self.conn.commit()
+            if inserted_count > 0:
+                logger.info(f"🔄 Sincronizzati {inserted_count} storici trade da Binance al database locale.")
+        except Exception as e:
+            logger.error(f"Errore durante sync_binance_trades: {e}")
 
     def get_trades(self, start_date=None, end_date=None):
         try:

@@ -74,6 +74,7 @@
             letter-spacing: 1px;
             background: linear-gradient(to right, #fff, var(--accent));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -405,6 +406,98 @@
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* --- Hamburger Button (visible only on mobile) --- */
+        .hamburger {
+            display: none;
+            flex-direction: column;
+            justify-content: space-between;
+            width: 24px;
+            height: 18px;
+            cursor: pointer;
+            background: none;
+            border: none;
+            padding: 0;
+            margin-right: 16px;
+        }
+        .hamburger span {
+            display: block;
+            width: 100%;
+            height: 2px;
+            background: var(--text-primary);
+            border-radius: 2px;
+            transition: transform 0.3s, opacity 0.3s;
+        }
+        .hamburger.open span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
+        .hamburger.open span:nth-child(2) { opacity: 0; }
+        .hamburger.open span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
+
+        /* --- Sidebar Dimmer Overlay --- */
+        .nav-dimmer {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 99;
+        }
+        .nav-dimmer.visible { display: block; }
+
+        /* --- Mobile Responsive Layout --- */
+        @media (max-width: 768px) {
+            body { overflow: hidden; }
+
+            .hamburger { display: flex; }
+
+            nav {
+                position: fixed;
+                top: 0;
+                left: 0;
+                height: 100%;
+                transform: translateX(-100%);
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                z-index: 200;
+                box-shadow: 4px 0 24px rgba(0, 0, 0, 0.5);
+            }
+            nav.open { transform: translateX(0); }
+
+            .top-bar {
+                padding: 0 16px;
+                height: 64px;
+                min-height: 64px;
+            }
+
+            .account-summary {
+                gap: 16px;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                padding-bottom: 4px;
+            }
+            .account-summary::-webkit-scrollbar { display: none; }
+
+            .stat-label { font-size: 10px; }
+            .stat-value { font-size: 16px; }
+
+            .content-area { padding: 16px; }
+
+            .markets-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            th { padding: 12px 14px; font-size: 11px; }
+            td { padding: 12px 14px; font-size: 13px; }
+
+            /* History filter bar: stack vertically */
+            #history > div:first-child {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 12px;
+            }
+        }
+    
     </style>
 </head>
 <body>
@@ -444,10 +537,16 @@
         </div>
     </nav>
 
+    <!-- Sidebar Dimmer -->
+    <div class="nav-dimmer" id="navDimmer" onclick="closeSidebar()"></div>
+
     <!-- App Container -->
     <div class="app-container">
         <!-- Top Navigation / Stats Bar -->
         <div class="top-bar">
+            <button class="hamburger" id="hamburger" onclick="toggleSidebar()" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
             <div class="account-summary">
                 <div class="stat-item">
                     <span class="stat-label">Total Wallet (USDT)</span>
@@ -604,6 +703,9 @@
             
             document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
             element.classList.add('active');
+
+            // Auto-close sidebar on mobile after navigation
+            closeSidebar();
         }
 
         function renderDashboard(data) {
@@ -686,6 +788,7 @@
                 posCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-secondary);">No active positions.</div>';
             }
 
+            const totalUpnl = parseFloat(data.unrealized_pnl || 0);
             document.getElementById('total-pnl').innerText = (totalUpnl >= 0 ? '+' : '') + totalUpnl.toFixed(2);
             document.getElementById('total-pnl').className = 'stat-value ' + (totalUpnl >= 0 ? 'positive' : 'negative');
             
@@ -788,6 +891,21 @@
                 console.error("History fetch error:", e);
                 histCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--sell-red);">Error fetching history.</div>';
             }
+        }
+
+        function toggleSidebar() {
+            const nav = document.querySelector('nav');
+            const hamburger = document.getElementById('hamburger');
+            const dimmer = document.getElementById('navDimmer');
+            nav.classList.toggle('open');
+            hamburger.classList.toggle('open');
+            dimmer.classList.toggle('visible');
+        }
+
+        function closeSidebar() {
+            document.querySelector('nav').classList.remove('open');
+            document.getElementById('hamburger').classList.remove('open');
+            document.getElementById('navDimmer').classList.remove('visible');
         }
 
         function resetHistory() {

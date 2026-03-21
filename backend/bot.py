@@ -283,18 +283,18 @@ class CryptoBot:
             # We are at capacity, no new entries allowed
             return
 
-        # 1. Order Book Imbalance Strategy (The Invisible Wall)
-        if imbalance > 3.0 and self.active_positions[symbol] != 'LONG':
-            logger.info(f"🧱 WALL DETECTED: Massive Buy Wall for {symbol}. Bids {imbalance:.1f}x Asks. LONG signal.")
-            self.active_positions[symbol] = 'LONG'
-            asyncio.create_task(self.execute_order(symbol, 'buy', price))
-            return
-            
-        elif imbalance < 0.33 and self.active_positions[symbol] != 'SHORT':
-            logger.info(f"🧱 WALL DETECTED: Massive Sell Wall for {symbol}. Asks {1/imbalance:.1f}x Bids. SHORT signal.")
-            self.active_positions[symbol] = 'SHORT'
-            asyncio.create_task(self.execute_order(symbol, 'sell', price))
-            return
+        # 1. Order Book Imbalance Strategy (The Invisible Wall) - DISABLED DUE TO FAKE WALLS (SPOOFING)
+        # if imbalance > 3.0 and self.active_positions[symbol] != 'LONG':
+        #     logger.info(f"🧱 WALL DETECTED: Massive Buy Wall for {symbol}. Bids {imbalance:.1f}x Asks. LONG signal.")
+        #     self.active_positions[symbol] = 'LONG'
+        #     asyncio.create_task(self.execute_order(symbol, 'buy', price))
+        #     return
+        #     
+        # elif imbalance < 0.33 and self.active_positions[symbol] != 'SHORT':
+        #     logger.info(f"🧱 WALL DETECTED: Massive Sell Wall for {symbol}. Asks {1/imbalance:.1f}x Bids. SHORT signal.")
+        #     self.active_positions[symbol] = 'SHORT'
+        #     asyncio.create_task(self.execute_order(symbol, 'sell', price))
+        #     return
             
         # 2. Classic Technical Strategy (RSI + MACD + Bollinger)
         is_technical_signal = False
@@ -336,7 +336,16 @@ class CryptoBot:
         side = str(trade.get('side', 'buy')).lower()
         is_long = side in ['buy', 'long']
         sl = trade.get('sl', 0)
-        tp = trade.get('tp', 0)
+        tp_old = trade.get('tp', 0)
+        tp1 = trade.get('tp1', tp_old)
+        tp2 = trade.get('tp2', tp_old)
+        
+        # Use dynamic CURRENT ATR for trailing Stop-Loss distance
+        current_atr = self.latest_data.get(symbol, {}).get('atr')
+        if current_atr and current_atr != "N/A":
+            sl_distance = current_atr * 2.0
+        else:
+            sl_distance = trade.get('sl_distance', current_price * self.stop_loss_pct)
         
         # --- Trailing Stop-Loss Logic ---
         if 'highest_price' not in trade and is_long:
@@ -352,7 +361,7 @@ class CryptoBot:
             if current_price > trade.get('highest_price', 0):
                 trade['highest_price'] = current_price
                 # Move SL up if price has moved significantly (trailing gap)
-                new_sl = current_price * (1 - self.stop_loss_pct)
+                new_sl = current_price - sl_distance
                 if new_sl > sl:
                     trade['sl'] = new_sl
                     logger.info(f"📈 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
@@ -360,24 +369,24 @@ class CryptoBot:
             if current_price <= trade.get('sl', 0):
                 should_close = True
                 reason = "STOP-LOSS (TRAILING)" if 'highest_price' in trade else "STOP-LOSS"
-            elif current_price >= tp:
+            elif current_price >= tp2:
+                # Final TP
+                should_close = True
+                reason = "TAKE-PROFIT 2 (FINAL)"
+            elif current_price >= tp1:
                 # PARTIAL TAKE PROFIT (PTP)
                 if not trade.get('tp1_hit', False):
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
                     trade['tp1_hit'] = True
                     # Move SL to break-even to protect remaining 50%
-                    trade['sl'] = trade.get('entry_price', current_price) 
-                else:
-                    # Final TP
-                    should_close = True
-                    reason = "TAKE-PROFIT (FINAL)"
+                    trade['sl'] = max(trade.get('entry_price', current_price), trade.get('sl', 0))
                     
         else: # SHORT
             # Update trailing low and move SL down
             if current_price < trade.get('lowest_price', 999999):
                 trade['lowest_price'] = current_price
-                new_sl = current_price * (1 + self.stop_loss_pct)
+                new_sl = current_price + sl_distance
                 if new_sl < sl:
                     trade['sl'] = new_sl
                     logger.info(f"📉 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
@@ -385,15 +394,16 @@ class CryptoBot:
             if current_price >= trade.get('sl', 999999):
                 should_close = True
                 reason = "STOP-LOSS (TRAILING)" if 'lowest_price' in trade else "STOP-LOSS"
-            elif current_price <= tp:
+            elif current_price <= tp2:
+                # Final TP
+                should_close = True
+                reason = "TAKE-PROFIT 2 (FINAL)"
+            elif current_price <= tp1:
                 if not trade.get('tp1_hit', False):
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
                     trade['tp1_hit'] = True
-                    trade['sl'] = trade.get('entry_price', current_price)
-                else:
-                    should_close = True
-                    reason = "TAKE-PROFIT (FINAL)"
+                    trade['sl'] = min(trade.get('entry_price', current_price), trade.get('sl', 999999))
                 
         if should_close:
             logger.warning(f"🔔 SOFT {reason} HIT for {symbol} at {current_price}!")
@@ -543,23 +553,28 @@ class CryptoBot:
             
             if side.lower() == 'buy':
                 sl_price = current_price - sl_distance
-                tp_price = current_price + (tp1_distance * 2.0) # Aim for TP2 initially
+                tp1_price = current_price + tp1_distance
+                tp2_price = current_price + (tp1_distance * 2.0)
                 close_side = 'sell'
             else:
                 sl_price = current_price + sl_distance
-                tp_price = current_price - (tp1_distance * 2.0)
+                tp1_price = current_price - tp1_distance
+                tp2_price = current_price - (tp1_distance * 2.0)
                 close_side = 'buy'
                 
             sl_price = float(self.exchange.price_to_precision(symbol, sl_price))
-            tp_price = float(self.exchange.price_to_precision(symbol, tp_price))
+            tp1_price = float(self.exchange.price_to_precision(symbol, tp1_price))
+            tp2_price = float(self.exchange.price_to_precision(symbol, tp2_price))
             
-            logger.info(f"📊 ATR Risk Levels for {symbol}: SL @ {sl_price} (2xATR), TP @ {tp_price} (3xATR)")
+            logger.info(f"📊 ATR Risk Levels for {symbol}: SL @ {sl_price} (2xATR), TP1 @ {tp1_price} (1.5xATR), TP2 @ {tp2_price} (3xATR)")
             
             self.trade_levels[symbol] = {
                 'side': side.lower(),
                 'entry_price': current_price,
                 'sl': sl_price,
-                'tp': tp_price,
+                'sl_distance': sl_distance,
+                'tp1': tp1_price,
+                'tp2': tp2_price,
                 'amount': amount_to_buy,
                 'tp1_hit': False,
                 'highest_price': current_price if side.lower() == 'buy' else 0,
@@ -765,20 +780,25 @@ class CryptoBot:
                                     # --- TIGHTER RISK MANAGEMENT ---
                                     # Reduce ATR multiplier from 2.0 to 1.5 to cut losses faster
                                     sl_distance = current_atr * 1.5
-                                    tp_distance = current_atr * 3.5 # Slightly wider TP for better R:R
+                                    tp1_distance = current_atr * 1.5
+                                    tp2_distance = current_atr * 3.0
                                     
                                     if side == 'long':
                                         sl = entry_price - sl_distance
-                                        tp = entry_price + tp_distance
+                                        tp1 = entry_price + tp1_distance
+                                        tp2 = entry_price + tp2_distance
                                     else:
                                         sl = entry_price + sl_distance
-                                        tp = entry_price - tp_distance
+                                        tp1 = entry_price - tp1_distance
+                                        tp2 = entry_price - tp2_distance
                                     
                                     self.trade_levels[symbol] = {
                                         'side': side,
                                         'entry_price': entry_price,
                                         'sl': float(self.exchange.price_to_precision(symbol, sl)),
-                                        'tp': float(self.exchange.price_to_precision(symbol, tp)),
+                                        'sl_distance': sl_distance,
+                                        'tp1': float(self.exchange.price_to_precision(symbol, tp1)),
+                                        'tp2': float(self.exchange.price_to_precision(symbol, tp2)),
                                         'amount': amount,
                                         'tp1_hit': False,
                                         'highest_price': entry_price if side == 'long' else 0,
@@ -809,10 +829,15 @@ class CryptoBot:
                             all_trades.extend(res)
                     await asyncio.sleep(0.5)
                 
+                # Sync trades to local database for history tracking
+                if all_trades:
+                    # Eseguiamo il sync in un thread per non bloccare il loop asincrono
+                    await asyncio.to_thread(self.db.sync_binance_trades, all_trades)
+                    
                 # Sort trades by timestamp descending and keep top 20
                 all_trades.sort(key=lambda x: x.get('timestamp', 0) or 0, reverse=True)
                 self.latest_account_data['trades'] = all_trades[:20]
-                logger.info(f"Account Update: Found {len(all_trades)} recent trades.")
+                logger.info(f"Account Update: Found {len(all_trades)} recent trades, synced to DB.")
                 
             except Exception as e:
                 logger.error(f"Error in account update loop: {e}")
@@ -834,19 +859,21 @@ class CryptoBot:
                     if rate_raw is not None:
                         rate_pct = float(rate_raw) * 100
                         
-                        if rate_pct > 0.1 and self.active_positions[symbol] != 'SHORT':
-                            logger.warning(f"🏦 FUNDING ARB: Extreme positive funding ({rate_pct:.3f}%) on {symbol}. Executing SHORT to collect fees.")
-                            current_price = self.latest_data[symbol]['price']
-                            if current_price > 0:
-                                self.active_positions[symbol] = 'SHORT'
-                                asyncio.create_task(self.execute_order(symbol, 'sell', current_price))
-                        
-                        elif rate_pct < -0.1 and self.active_positions[symbol] != 'LONG':
-                            logger.warning(f"🏦 FUNDING ARB: Extreme negative funding ({rate_pct:.3f}%) on {symbol}. Executing LONG to collect fees.")
-                            current_price = self.latest_data[symbol]['price']
-                            if current_price > 0:
-                                self.active_positions[symbol] = 'LONG'
-                                asyncio.create_task(self.execute_order(symbol, 'buy', current_price))
+                        # -- DISABLED: Entering naked directional trades just for funding is too dangerous --
+                        # if rate_pct > 0.1 and self.active_positions[symbol] != 'SHORT':
+                        #     logger.warning(f"🏦 FUNDING ARB: Extreme positive funding ({rate_pct:.3f}%) on {symbol}. Executing SHORT to collect fees.")
+                        #     current_price = self.latest_data[symbol]['price']
+                        #     if current_price > 0:
+                        #         self.active_positions[symbol] = 'SHORT'
+                        #         asyncio.create_task(self.execute_order(symbol, 'sell', current_price))
+                        # 
+                        # elif rate_pct < -0.1 and self.active_positions[symbol] != 'LONG':
+                        #     logger.warning(f"🏦 FUNDING ARB: Extreme negative funding ({rate_pct:.3f}%) on {symbol}. Executing LONG to collect fees.")
+                        #     current_price = self.latest_data[symbol]['price']
+                        #     if current_price > 0:
+                        #         self.active_positions[symbol] = 'LONG'
+                        #         asyncio.create_task(self.execute_order(symbol, 'buy', current_price))
+                        pass
                             
             except Exception as e:
                 if "does not support fetchFundingRates" not in str(e):
