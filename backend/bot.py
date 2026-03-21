@@ -1,6 +1,7 @@
-import ccxt
+import ccxt.async_support as ccxt
 import pandas as pd
 import asyncio
+import traceback
 import logging
 from dotenv import load_dotenv
 import os
@@ -35,14 +36,12 @@ class CryptoBot:
         api_secret = os.getenv("EXCHANGE_API_SECRET")
         # binance doesn't need a passphrase
         
-        # Initialize Binance
-        self.exchange = ccxt.binance({
+        # Initialize Binance USDT-M Futures explicitly
+        self.exchange = ccxt.binanceusdm({
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
-            'options': {
-                'defaultType': 'future', # 'future' for Binance USDT-M Futures
-            }
+            'timeout': 10000, # 10 seconds timeout
         })
         
         # Set to sandbox mode based on .env
@@ -97,22 +96,34 @@ class CryptoBot:
         self.notifier = TelegramNotifier()
         self.signal_manager = SignalManager(self)
         
+        # Resource management
+        self.ml_semaphore = asyncio.Semaphore(1) # Concurrent ML training limit
+        self.api_semaphore = asyncio.Semaphore(5) # Concurrent API call limit
+        
+        # Risk Management & Guards
+        self.circuit_breaker_active = False
+        self.symbol_blacklist = set()
+        self.initial_wallet_balance = None
+        
         # Recupero stato persistente
         saved_levels = self.db.load_state("trade_levels")
         if saved_levels:
             self.trade_levels = saved_levels
             logger.info("📦 Stato trade_levels recuperato correttamente dal database.")
         
-        # We must load markets first in a synchronous or asynchronous manner
-        # Since __init__ is sync, and load_markets requires an API call when using asyncio with ccxt
-        # It's better to load markets in the async update_loop before starting.
-        # So we'll move _set_leverage_for_all to be called from the async loop instead, or we run it sync.
-        # But CCXT async requires await. Wait, the ccxt provided is sync or async? 
-        # Looking at bot.py: it uses `asyncio.to_thread(self.exchange.fetch_ohlcv...)` which means 
-        # `self.exchange` is the synchronous version of ccxt. Therefore we can simply call `self.exchange.load_markets()` sync!
+        # Exchange instance will be initialized with load_markets in initialize()
+        self.initialized = False
+
+    async def initialize(self):
+        if self.initialized:
+            return
+            
         try:
-            self.exchange.load_markets()
-            # Filter symbols to only include those available on the current exchange (Production vs Testnet)
+            logger.info("📡 Loading markets from Binance (Async)...")
+            await self.exchange.load_markets()
+            logger.info("✅ Markets loaded successfully.")
+            
+            # Filter symbols to only include those available on the current exchange
             available_symbols = []
             for s in self.symbols:
                 if s in self.exchange.markets:
@@ -123,10 +134,19 @@ class CryptoBot:
             if not available_symbols:
                 logger.error("❌ NO VALID SYMBOLS FOUND ON THIS EXCHANGE!")
             
+            logger.info(f"🎯 Validated {len(available_symbols)} symbols.")
             self.symbols = available_symbols
-            self._set_leverage_for_all()
+            
+            logger.info("⚙️ Setting leverage for all symbols...")
+            await self._set_leverage_for_all()
+            logger.info("✅ Leverage set successfully.")
+            
+            self.initialized = True
         except Exception as e:
-            logger.error(f"Failed to load markets on init: {e}")
+            logger.error(f"❌ Failed during bot initialization: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise e
 
     def _load_risk_profile(self):
         try:
@@ -137,22 +157,20 @@ class CryptoBot:
             logger.error(f"Could not load risk profile config: {e}. Using defaults.")
             return {}
 
-    def _set_leverage_for_all(self):
+    async def _set_leverage_for_all(self):
         for symbol in self.symbols:
             try:
                 # CCXT way to set margin/leverage on Binance Futures
                 market = self.exchange.market(symbol)
-                self.exchange.set_leverage(self.leverage, market['id'])
+                await self.exchange.set_leverage(self.leverage, market['id'])
                 logger.info(f"Set leverage to {self.leverage}x for {symbol}")
             except Exception as e:
                 logger.error(f"Could not set leverage for {symbol}: {e}")
 
     async def fetch_data_and_analyze(self, symbol):
         try:
-            # Run ccxt synchronous functions in an executor to avoid blocking the async loop
-            ohlcv = await asyncio.to_thread(
-                self.exchange.fetch_ohlcv, symbol, self.timeframe, limit=100
-            )
+            # Using direct await instead of asyncio.to_thread with async_support
+            ohlcv = await self.exchange.fetch_ohlcv(symbol, self.timeframe, limit=100)
             
             if not ohlcv:
                 logger.warning(f"No data for {symbol}")
@@ -208,20 +226,21 @@ class CryptoBot:
             current_atr = df['atr'].iloc[-1]
             
             # --- Order Book Imbalance Calculation ---
-            orderbook = await asyncio.to_thread(self.exchange.fetch_order_book, symbol, limit=100)
+            orderbook = await self.exchange.fetch_order_book(symbol, limit=100)
             bids = sum(float(bid[1]) for bid in orderbook['bids'])
             asks = sum(float(ask[1]) for ask in orderbook['asks'])
             imbalance = bids / asks if asks > 0 else 1.0
             
-            ticker = await asyncio.to_thread(self.exchange.fetch_ticker, symbol)
+            ticker = await self.exchange.fetch_ticker(symbol)
             
-            # --- AI Machine Learning Prediction ---
-            # Optimize: Only re-train/predict every 5 minutes to save CPU
+            # Optimize: Only re-train/predict every 30 minutes to save CPU, and only one at a time
             import time
             current_time = time.time()
-            if current_time - self.ml_cooldowns.get(symbol, 0) > 300: # 5 minutes
+            if current_time - self.ml_cooldowns.get(symbol, 0) > 1800: # 30 minutes
                 try:
-                    predicted_price = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
+                    async with self.ml_semaphore:
+                        # ML predictor is still sync, keep to_thread for it
+                        predicted_price = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
                 except Exception as mle:
                     logger.error(f"⚠️ ML Training failed for {symbol}: {mle}")
                     predicted_price = "ML Error"
@@ -388,32 +407,50 @@ class CryptoBot:
             is_long = side in ['buy', 'long']
             close_side = 'sell' if is_long else 'buy'
             
+            # --- BUG FIX: Ensure amount is formatted as a clean string for ccxt/decimal ---
             amount = float(trade.get('amount', 0)) * partial_pct
-            # Precision adjustment
-            amount = float(self.exchange.amount_to_precision(symbol, amount))
+            # Precision adjustment using ccxt helper
+            amount_str = self.exchange.amount_to_precision(symbol, amount)
+            amount = float(amount_str)
+            
+            logger.info(f"🔄 Closing position for {symbol}: side={close_side}, amount_str='{amount_str}', amount_float={amount}")
             
             if amount <= 0:
                 logger.warning(f"Skipping closure for {symbol}: amount too small.")
                 return
 
+            # --- BUG FIX: Use a clean float or string to avoid decimal issues in some ccxt versions ---
             logger.info(f"Closing position for {symbol} ({'PARTIAL' if partial_pct < 1 else 'FULL'}): {close_side} {amount}")
-            
-            # Place Market Order to close
-            await asyncio.to_thread(
-                self.exchange.create_market_order, symbol, close_side, amount, {'reduceOnly': True}
-            )
+            # --- BUG FIX: Pass price=current_price even for Market orders to avoid CCXT 4.2.53 bug with None conversion ---
+            # Binance ignores the price for MARKET orders anyway.
+            current_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
+            await self.exchange.create_order(symbol, 'market', close_side, amount, current_price, {'reduceOnly': True})
             
             if partial_pct >= 1.0:
                 logger.info(f"Position closed successfully for {symbol}.")
                 self.active_positions[symbol] = None
-                self.notifier.notify_trade(symbol, "CLOSE", float(trade.get('entry_price', 0)), amount, "EXIT")
+                
+                # Calculate PnL for logging
+                exit_price = current_price
+                entry_price = float(trade.get('entry_price', exit_price))
+                pnl = (exit_price - entry_price) * amount if is_long else (entry_price - exit_price) * amount
+                self.db.log_trade(symbol, "CLOSE", exit_price, amount, pnl, f"EXIT")
+                
+                self.notifier.notify_trade(symbol, "CLOSE", entry_price, amount, "EXIT")
             else:
                 # Update remaining amount in state
                 trade['amount'] = float(trade['amount']) - amount
                 logger.info(f"Partial closure successful for {symbol}. Remaining: {trade['amount']}")
                 
+                # Log partial closure too
+                exit_price = current_price
+                entry_price = float(trade.get('entry_price', exit_price))
+                pnl = (exit_price - entry_price) * amount if is_long else (entry_price - exit_price) * amount
+                self.db.log_trade(symbol, "CLOSE_PARTIAL", exit_price, amount, pnl, "PARTIAL_EXIT")
+                
         except Exception as e:
             logger.error(f"Failed to close position for {symbol}: {e}")
+            logger.error(traceback.format_exc())
 
     # Calculate dynamic order amount based on risk capital and volatility
     def _calculate_order_amount(self, symbol, current_price, custom_leverage=None):
@@ -464,11 +501,24 @@ class CryptoBot:
                 self.notifier.notify_alert("CONSENSUS", f"Segnale Confermato: {type}", f"{symbol} {side.upper()}")
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False):
+        # --- GLOBAL RISK CHECKS ---
+        if symbol in self.symbol_blacklist:
+            logger.warning(f"🚫 Skipping {symbol}: In blacklist (requires manual agreement).")
+            return
+            
+        if self.circuit_breaker_active:
+            logger.error("🛑 CIRCUIT BREAKER ACTIVE: Skipping all new entries due to high daily loss.")
+            return
+        current_positions_count = len([p for p in self.latest_account_data.get('positions', []) if float(p.get('positionAmt', 0)) != 0])
+        if current_positions_count >= self.max_concurrent_positions and not is_black_swan:
+            logger.warning(f"⚠️ Max positions ({self.max_concurrent_positions}) reached. Skipping entry for {symbol}.")
+            return
+
         try:
             active_leverage = 50 if is_black_swan else self.leverage
             if is_black_swan:
                 try:
-                    await asyncio.to_thread(self.exchange.set_leverage, active_leverage, self.exchange.market(symbol)['id'])
+                    await self.exchange.set_leverage(active_leverage, self.exchange.market(symbol)['id'])
                     logger.warning(f"🦢 BLACK SWAN LEVERAGE: Increased to {active_leverage}x for {symbol}")
                 except Exception as e:
                     logger.error(f"Failed to set aggressive leverage for {symbol}: {e}")
@@ -478,9 +528,7 @@ class CryptoBot:
             logger.info(f"Executing {side} order for {amount_to_buy} {symbol} @ {current_price} USDT (Leverage {active_leverage}x)")
             
             # 1. Place Main Market Order
-            order = await asyncio.to_thread(
-                self.exchange.create_market_order, symbol, side, amount_to_buy
-            )
+            order = await self.exchange.create_market_order(symbol, side, amount_to_buy)
             logger.info(f"Main order success: {order['id']}")
             
             # 2. Calculate Risk Levels based on ATR (Institutional Standard)
@@ -523,8 +571,12 @@ class CryptoBot:
             self.db.log_trade(symbol, side, current_price, amount_to_buy, 0, "INIT")
             # Notifica Telegram
             self.notifier.notify_trade(symbol, side, current_price, amount_to_buy, "SIGNAL")
-            
         except Exception as e:
+            error_msg = str(e)
+            if "-4411" in error_msg or "agreement" in error_msg.lower():
+                logger.error(f"❌ Blacklisting {symbol}: Agreement not signed.")
+                self.symbol_blacklist.add(symbol)
+            
             logger.error(f"Order sequence failed for {symbol}: {e}")
 
     def add_alert(self, type, title, value=None):
@@ -592,16 +644,17 @@ class CryptoBot:
                             self.symbols = validated_symbols
                             
                         last_mtime = current_mtime
-                        self._set_leverage_for_all()
+                        await self._set_leverage_for_all()
             except Exception as e:
                 logger.error(f"Error hot-reloading config: {e}")
                 
-            # Esecuzione a "scaglioni" per non farsi bannare l'IP da Binance (Rate Limit)
+            # Esecuzione a "scaglioni" e con semaforo per non farsi bannare l'IP e non saturare la CPU
             for i in range(0, len(self.symbols), 4):
                 chunk = self.symbols[i:i+4]
-                tasks = [self.fetch_data_and_analyze(symbol) for symbol in chunk]
-                await asyncio.gather(*tasks)
-                await asyncio.sleep(1) # Respect API limits between chunks
+                async with self.api_semaphore:
+                    tasks = [self.fetch_data_and_analyze(symbol) for symbol in chunk]
+                    await asyncio.gather(*tasks)
+                await asyncio.sleep(2) # Increased sleep between chunks to be gentler
             
             # Sleep before fetching again
             await asyncio.sleep(10)
@@ -610,29 +663,49 @@ class CryptoBot:
         logger.info("Starting bot account update loop...")
         while True:
             try:
-                # 1. Fetch positions FIRST to avoid UnboundLocalError in margin guard
+                # 1. Fetch positions FIRST
                 try:
-                    positions = await asyncio.to_thread(self.exchange.fetch_positions)
+                    positions = await self.exchange.fetch_positions()
                     active_pos = [p for p in positions if float(p.get('contracts', 0) or 0) != 0]
                 except Exception as pe:
                     logger.error(f"Error fetching positions: {pe}")
                     active_pos = []
 
                 # 2. Fetch Balance and check Margin
-                balance_data = await asyncio.to_thread(self.exchange.fetch_balance)
-                total_usdt = balance_data.get('total', {}).get('USDT', 0)
-                wallet_balance = total_usdt
-                margin_balance = total_usdt
+                balance_data = await self.exchange.fetch_balance()
                 
-                if 'info' in balance_data:
-                    info = balance_data['info']
-                    wallet_balance = float(info.get('totalWalletBalance', wallet_balance))
-                    margin_balance = float(info.get('totalMarginBalance', margin_balance))
-                    unrealized_pnl = margin_balance - wallet_balance
-                else:
-                    unrealized_pnl = margin_balance - wallet_balance
+                # --- RECENT CHANGE: Use unified CCXT balance structure ---
+                wallet_balance = float(balance_data.get('total', {}).get('USDT', 0))
+                if wallet_balance == 0 and 'info' in balance_data:
+                    # Fallback to Binance specific if unified fails
+                    wallet_balance = float(balance_data['info'].get('totalWalletBalance', 0))
 
-                logger.info(f"Account Update: Wallet={wallet_balance}, Equity={margin_balance}, PnL={unrealized_pnl}")
+                margin_balance = float(balance_data.get('total', {}).get('USDT', 0)) # Approximate for futures
+                if 'totalMarginBalance' in balance_data.get('info', {}):
+                    margin_balance = float(balance_data['info']['totalMarginBalance'])
+
+                equity = margin_balance
+                
+                # Use unrealized PnL from the unified balance if available
+                unrealized_pnl = 0
+                if 'info' in balance_data and 'positions' in balance_data['info']:
+                    positions_info = balance_data['info']['positions']
+                    unrealized_pnl = sum(float(p.get('unrealizedProfit', 0)) for p in positions_info)
+                
+                if self.initial_wallet_balance is None:
+                    self.initial_wallet_balance = wallet_balance
+                    logger.info(f"🏦 Initial Wallet Balance set: {self.initial_wallet_balance} USDT")
+                
+                pnl_pct = (wallet_balance - self.initial_wallet_balance) / self.initial_wallet_balance if self.initial_wallet_balance > 0 else 0
+                
+                if pnl_pct <= -0.05: # 5% Daily Loss
+                    if not self.circuit_breaker_active:
+                        logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({pnl_pct:.2%}). Activating Circuit Breaker.")
+                        self.circuit_breaker_active = True
+                elif pnl_pct > -0.03: # Reset if we recover or restart with better balance
+                    self.circuit_breaker_active = False
+
+                logger.info(f"Account Update: Wallet={wallet_balance:.4f}, Equity={equity:.4f}, PnL={unrealized_pnl:.4f} ({pnl_pct:.2%})")
                 
                 # --- EMERGENCY MARGIN GUARD ---
                 margin_ratio = 0.0
@@ -689,15 +762,17 @@ class CryptoBot:
                                     if current_atr == "N/A" or not current_atr:
                                         current_atr = entry_price * 0.01
 
-                                    sl_dist = current_atr * 2.0
-                                    tp_dist = current_atr * 3.0
+                                    # --- TIGHTER RISK MANAGEMENT ---
+                                    # Reduce ATR multiplier from 2.0 to 1.5 to cut losses faster
+                                    sl_distance = current_atr * 1.5
+                                    tp_distance = current_atr * 3.5 # Slightly wider TP for better R:R
                                     
                                     if side == 'long':
-                                        sl = entry_price - sl_dist
-                                        tp = entry_price + tp_dist
+                                        sl = entry_price - sl_distance
+                                        tp = entry_price + tp_distance
                                     else:
-                                        sl = entry_price + sl_dist
-                                        tp = entry_price - tp_dist
+                                        sl = entry_price + sl_distance
+                                        tp = entry_price - tp_distance
                                     
                                     self.trade_levels[symbol] = {
                                         'side': side,
@@ -712,6 +787,10 @@ class CryptoBot:
                         else:
                             self.active_positions[symbol] = None
                             self.trade_levels[symbol] = None
+                else:
+                    for symbol in self.symbols:
+                        self.active_positions[symbol] = None
+                        self.trade_levels[symbol] = None
                 
                 # 3. Fetch recent trades (Slow part, do it in chunks)
                 # We only fetch for active positions or major symbols to be fast and resilient
@@ -722,7 +801,7 @@ class CryptoBot:
                     chunk = symbols_to_check[i:i+5]
                     tasks = []
                     for symbol in chunk:
-                        tasks.append(asyncio.to_thread(self.exchange.fetch_my_trades, symbol, limit=5))
+                        tasks.append(self.exchange.fetch_my_trades(symbol, limit=5))
                     
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     for res in results:
@@ -747,7 +826,7 @@ class CryptoBot:
         while True:
             try:
                 # Fetch all funding rates for all markets currently active in bot
-                rates = await asyncio.to_thread(self.exchange.fetch_funding_rates, self.symbols)
+                rates = await self.exchange.fetch_funding_rates(self.symbols)
                 
                 for symbol, data in rates.items():
                     # High funding > 0.1% means longs pay shorts. Protect by shorting to collect fee.

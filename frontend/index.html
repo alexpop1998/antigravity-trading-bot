@@ -503,7 +503,22 @@
 
             <!-- History Section -->
             <div id="history" class="view-section">
-                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Session Trade History</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                    <h2 style="font-family: 'Outfit', sans-serif; margin: 0;">Trade History & PnL</h2>
+                    <div style="display: flex; gap: 15px; align-items: center; background: var(--bg-surface); padding: 10px 20px; border-radius: 12px; border: 1px solid var(--border);">
+                        <div class="metric" style="min-width: 120px;">
+                            <span class="m-label">Range PnL</span>
+                            <span class="m-value" id="range-pnl" style="font-size: 18px;">$0.00</span>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="date" id="history-start" style="background: var(--bg-base); border: 1px solid var(--border); color: var(--text-primary); padding: 5px 10px; border-radius: 6px; font-family: 'Inter';">
+                            <span style="color: var(--text-secondary); font-size: 12px;">to</span>
+                            <input type="date" id="history-end" style="background: var(--bg-base); border: 1px solid var(--border); color: var(--text-primary); padding: 5px 10px; border-radius: 6px; font-family: 'Inter';">
+                            <button onclick="fetchHistory()" style="background: var(--accent); color: var(--bg-base); border: none; padding: 6px 15px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 12px;">FILTER</button>
+                            <button onclick="resetHistory()" style="background: var(--bg-hover); color: var(--text-secondary); border: 1px solid var(--border); padding: 6px 10px; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 12px;">RESET</button>
+                        </div>
+                    </div>
+                </div>
                 <div class="table-container" id="historyTab">
                     <div style="padding: 60px; text-align: center; color: var(--text-secondary);">
                         No trades executed in the current session.
@@ -555,8 +570,8 @@
         const host = window.location.host || 'localhost:8000';
         const wsUrl = `${protocol}//${host}/ws`;
         const apiUrl = `${window.location.protocol}//${host}/api/analyze`;
-        let socket = null;
         let lastDashboardData = {};
+        let isHistoryFiltered = false;
 
         function connectWebSocket() {
             socket = new WebSocket(wsUrl);
@@ -671,12 +686,11 @@
                 posCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-secondary);">No active positions.</div>';
             }
 
-            const totalUpnl = parseFloat(data.unrealized_pnl || 0);
             document.getElementById('total-pnl').innerText = (totalUpnl >= 0 ? '+' : '') + totalUpnl.toFixed(2);
             document.getElementById('total-pnl').className = 'stat-value ' + (totalUpnl >= 0 ? 'positive' : 'negative');
             
-            // Render History
-            if (data.trades && data.trades.length > 0) {
+            // Render History (only if not filtered manually)
+            if (!isHistoryFiltered && data.trades && data.trades.length > 0) {
                 let thtml = '<table><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Size</th><th>PnL</th><th>% PnL</th></tr>';
                 data.trades.forEach(t => {
                     const time = new Date(t.timestamp).toLocaleTimeString('it-IT');
@@ -723,6 +737,66 @@
                 if (wcount > 0) whaleCont.innerHTML = whtml + '</table>';
                 if (lcount > 0) liqCont.innerHTML = lhtml + '</table>';
             }
+        }
+
+        async function fetchHistory() {
+            const start = document.getElementById('history-start').value;
+            const end = document.getElementById('history-end').value;
+            const histCont = document.getElementById('historyTab');
+            const pnlElem = document.getElementById('range-pnl');
+
+            if (!start || !end) {
+                alert("Please select both Start and End dates.");
+                return;
+            }
+
+            isHistoryFiltered = true;
+            histCont.innerHTML = '<div style="padding:60px; text-align:center;"><div class="spinner" style="margin:0 auto;"></div></div>';
+
+            try {
+                const response = await fetch(`${window.location.protocol}//${host}/api/history?start=${start}&end=${end}`);
+                const data = await response.json();
+
+                if (data.status === "success") {
+                    pnlElem.innerText = `$${data.total_pnl.toFixed(2)}`;
+                    pnlElem.className = 'm-value ' + (data.total_pnl >= 0 ? 'positive' : 'negative');
+
+                    if (data.trades && data.trades.length > 0) {
+                        let thtml = '<table><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Size</th><th>PnL</th><th>Reason</th></tr>';
+                        data.trades.forEach(t => {
+                            const time = new Date(t.timestamp).toLocaleString('it-IT');
+                            const pnl = parseFloat(t.pnl || 0);
+                            const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+
+                            thtml += `<tr>
+                                <td style="color:var(--text-secondary); font-size:12px;">${time}</td>
+                                <td style="font-weight:700;">${t.symbol}</td>
+                                <td class="${t.side.includes('buy') || t.side.includes('INIT') ? 'positive' : 'negative'}" style="text-transform:uppercase;">${t.side}</td>
+                                <td>$${parseFloat(t.price || 0).toFixed(2)}</td>
+                                <td>${t.amount}</td>
+                                <td class="${pnlClass}">$${pnl.toFixed(2)}</td>
+                                <td style="color:var(--text-secondary); font-size:12px;">${t.reason}</td>
+                            </tr>`;
+                        });
+                        thtml += '</table>';
+                        histCont.innerHTML = thtml;
+                    } else {
+                        histCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-secondary);">No trades found for this range.</div>';
+                    }
+                }
+            } catch (e) {
+                console.error("History fetch error:", e);
+                histCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--sell-red);">Error fetching history.</div>';
+            }
+        }
+
+        function resetHistory() {
+            isHistoryFiltered = false;
+            document.getElementById('history-start').value = '';
+            document.getElementById('history-end').value = '';
+            document.getElementById('range-pnl').innerText = '$0.00';
+            document.getElementById('range-pnl').className = 'm-value';
+            document.getElementById('historyTab').innerHTML = '<div style="padding: 60px; text-align: center; color: var(--text-secondary);">Session view restored. Waiting for new trades...</div>';
         }
 
         async function openAIAnalysis(ticker, price, rsi) {

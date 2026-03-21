@@ -9,8 +9,9 @@ import pytz
 logger = logging.getLogger("MacroCalendar")
 
 class MacroCalendar:
-    def __init__(self, bot_instance, update_interval=3600):
+    def __init__(self, bot_instance, http_client=None, update_interval=3600):
         self.bot = bot_instance
+        self.http_client = http_client # Shared client from main.py
         self.update_interval = update_interval
         # Using ForexFactory free XML feed for economic events
         self.calendar_url = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
@@ -22,12 +23,12 @@ class MacroCalendar:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
             }
-            async with httpx.AsyncClient(headers=headers) as client:
+            client = self.http_client if self.http_client else httpx.AsyncClient(headers=headers)
+            response = await client.get(self.calendar_url, timeout=15.0)
+            if response.status_code == 429:
+                logger.warning("ForexFactory 429: Too Many Requests. Retrying in 5 seconds...")
+                await asyncio.sleep(5)
                 response = await client.get(self.calendar_url, timeout=15.0)
-                if response.status_code == 429:
-                    logger.warning("ForexFactory 429: Too Many Requests. Retrying in 5 seconds...")
-                    await asyncio.sleep(5)
-                    response = await client.get(self.calendar_url, timeout=15.0)
                 
                 if response.status_code != 200:
                     logger.error(f"Failed to fetch macroeconomic calendar: {response.status_code}")

@@ -1,0 +1,16 @@
+{
+    "python.defaultInterpreterPath": "/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/venv/bin/python3",
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/backend"
+    ],
+    "files.watcherExclude": {
+        "**/venv/**": true,
+        "**/.venv/**": true,
+        "**/backend/venv/**": true
+    },
+    "files.exclude": {
+        "**/venv": true,
+        "**/.venv": true
+    }
+}

@@ -2,6 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
+import httpx
 import json
 import os
 from dotenv import load_dotenv
@@ -18,6 +19,7 @@ from rl_tuner import RLTuner
 from dex_sniper import DEXSniper
 from fastapi.responses import FileResponse
 import logging
+print("🚀 DEBUG: LOADING MAIN.PY FROM " + __file__)
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -64,18 +66,26 @@ liquidation_hunter = None
 macro_calendar = None
 rl_tuner = None
 dex_sniper = None
+http_client = None # NEW: Global shared HTTP client
 
 @app.on_event("startup")
 async def startup_event():
-    global trading_bot, news_radar, whale_tracker, social_scraper, liquidation_hunter, macro_calendar, rl_tuner, dex_sniper
+    global trading_bot, news_radar, whale_tracker, social_scraper, liquidation_hunter, macro_calendar, rl_tuner, dex_sniper, http_client
+    
+    logger.info("Initializing Shared Resources...")
+    # Initialize global shared HTTP client to prevent connection pool exhaustion
+    http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
     
     logger.info("Initializing Bot and Tools...")
     trading_bot = CryptoBot()
-    news_radar = NewsRadar(bot_instance=trading_bot)
+    await trading_bot.initialize()
+    
+    # Pass the shared http_client to all tools that need it
+    news_radar = NewsRadar(bot_instance=trading_bot, http_client=http_client)
     whale_tracker = WhaleTracker(bot_instance=trading_bot, threshold_btc=500)
-    social_scraper = SocialScraper(bot_instance=trading_bot)
+    social_scraper = SocialScraper(bot_instance=trading_bot, http_client=http_client)
     liquidation_hunter = LiquidationHunter(bot_instance=trading_bot, threshold_usd=500000)
-    macro_calendar = MacroCalendar(bot_instance=trading_bot)
+    macro_calendar = MacroCalendar(bot_instance=trading_bot, http_client=http_client)
     rl_tuner = RLTuner(interval_hours=24)
     dex_sniper = DEXSniper(bot_instance=trading_bot)
 
@@ -109,6 +119,17 @@ async def startup_event():
     safe_run(macro_calendar.monitor_calendar(), "Macro Calendar")
     safe_run(rl_tuner.run_optimization_loop(), "RL Tuner")
     safe_run(dex_sniper.monitor_arbitrage(), "DEX Sniper")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global http_client, trading_bot
+    logger.info("Shutting down and cleaning up resources...")
+    if http_client:
+        await http_client.aclose()
+        logger.info("Shared HTTP client closed.")
+    if trading_bot and trading_bot.exchange:
+        await trading_bot.exchange.close()
+        logger.info("Exchange connection closed.")
 
 async def broadcast_market_data():
     while True:
@@ -228,6 +249,28 @@ async def analyze_ticker(req: AnalyzeRequest):
             "analysis": f"Si è verificato un errore: {str(e)}"
         }
 
+from typing import Optional
+
+@app.get("/api/ping")
+async def ping():
+    return {"status": "ok", "message": "pong"}
+
+@app.get("/api/history")
+async def get_history(start: Optional[str] = None, end: Optional[str] = None):
+    if not trading_bot or not trading_bot.db:
+        return {"status": "error", "message": "Bot non inizializzato"}
+    
+    trades = trading_bot.db.get_trades(start_date=start, end_date=end)
+    
+    total_pnl = sum(float(t.get('pnl', 0) or 0) for t in trades)
+    
+    return {
+        "status": "success",
+        "count": len(trades),
+        "total_pnl": round(total_pnl, 2),
+        "trades": trades
+    }
+
 frontend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
 @app.get("/")
@@ -236,6 +279,17 @@ async def get_index():
 
 if __name__ == "__main__":
     import uvicorn
-    # Final check: Testnet connectivity with clean keys
-    # Multi-Reload is disabled to prevent infinite loops when config files are auto-tuned
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    import traceback
+    
+    try:
+        # Final check: Testnet connectivity with clean keys
+        # Multi-Reload is disabled to prevent infinite loops when config files are auto-tuned
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    except Exception as e:
+        # CRITICAL: Capture the ultimate crash that takes the server down
+        with open("crash.log", "a") as f:
+            f.write(f"\n--- CRASH AT {asyncio.get_event_loop().time()} ---\n")
+            f.write(traceback.format_exc())
+            f.write("\n")
+        logger.critical(f"FATAL SERVER CRASH: {e}")
+        raise e

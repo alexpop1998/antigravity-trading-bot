@@ -10,8 +10,9 @@ logger = logging.getLogger("SocialScraper")
 logger.setLevel(logging.INFO)
 
 class SocialScraper:
-    def __init__(self, bot_instance):
+    def __init__(self, bot_instance, http_client=None):
         self.bot = bot_instance
+        self.http_client = http_client # Shared client from main.py
         self.api_key = os.getenv("CRYPTOPANIC_API_KEY")
         self.last_news_id = None
         
@@ -36,14 +37,14 @@ class SocialScraper:
             
         url = f"https://cryptopanic.com/api/v1/posts/?auth_token={self.api_key}&public=true"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get('results', [])
-                    else:
-                        logger.error(f"CryptoPanic API Error: {response.status}")
-                        return []
+            client = self.http_client if self.http_client else httpx.AsyncClient(timeout=15.0)
+            response = await client.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('results', [])
+            else:
+                logger.error(f"CryptoPanic API Error: {response.status_code}")
+                return []
         except Exception as e:
             logger.error(f"Error fetching CryptoPanic news: {e}")
             return []
