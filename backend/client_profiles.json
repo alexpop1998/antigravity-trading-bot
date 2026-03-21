@@ -1,0 +1,32 @@
+{
+  "active_profile": "aggressive",
+  "profiles": {
+    "conservative": {
+      "max_leverage": 5,
+      "trade_allocation_pct": 0.05,
+      "trailing_stop_loss_pct": 1.0,
+      "take_profit_pct": 3.0,
+      "allow_shorts": true,
+      "enable_hft_liquidations": false,
+      "enable_whale_tracker": false
+    },
+    "balanced": {
+      "max_leverage": 20,
+      "trade_allocation_pct": 0.10,
+      "trailing_stop_loss_pct": 2.5,
+      "take_profit_pct": 6.0,
+      "allow_shorts": true,
+      "enable_hft_liquidations": true,
+      "enable_whale_tracker": true
+    },
+    "aggressive": {
+      "max_leverage": 75,
+      "trade_allocation_pct": 0.25,
+      "trailing_stop_loss_pct": 5.0,
+      "take_profit_pct": 15.0,
+      "allow_shorts": true,
+      "enable_hft_liquidations": true,
+      "enable_whale_tracker": true
+    }
+  }
+}

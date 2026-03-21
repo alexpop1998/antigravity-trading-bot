@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlphaQuant SaaS Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #07090f;
+            --bg-panel: #111522;
+            --bg-panel-hover: #171c2c;
+            --accent-primary: #00f0ff;
+            --accent-secondary: #3b82f6;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --success: #10b981;
+            --danger: #ef4444;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --font-sans: 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+                radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.05) 0%, transparent 50%);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: rgba(17, 21, 34, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            font-weight: 700;
+            font-size: 1.25rem;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-icon {
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 4px;
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        .main-container {
+            padding: 2rem;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .section-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--text-main);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .section-title::before {
+            content: '';
+            display: block;
+            width: 4px;
+            height: 16px;
+            background: var(--accent-primary);
+            border-radius: 2px;
+        }
+
+        .grid-dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            background: var(--bg-panel-hover);
+        }
+
+        .card:hover::before {
+            opacity: 1;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .symbol {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .price-container {
+            margin-bottom: 1.5rem;
+        }
+
+        .price {
+            font-size: 2rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            letter-spacing: -0.05em;
+        }
+
+        .change {
+            font-size: 0.875rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .up { color: var(--success); }
+        .down { color: var(--danger); }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .metric {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 0.875rem;
+            font-weight: 600;
+            font-family: var(--font-mono);
+        }
+
+        .btn-analyze {
+            width: 100%;
+            padding: 0.75rem;
+            background: transparent;
+            border: 1px solid var(--accent-primary);
+            color: var(--accent-primary);
+            border-radius: 6px;
+            font-family: var(--font-sans);
+            font-weight: 600;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .btn-analyze:hover {
+            background: rgba(0, 240, 255, 0.1);
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.2);
+        }
+
+        /* Modal styling */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal-content {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            width: 90%;
+            max-width: 600px;
+            padding: 2.5rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            position: relative;
+            transform: scale(0.95);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .modal-overlay.active .modal-content {
+            transform: scale(1);
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 1.5rem;
+            right: 1.5rem;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 1.5rem;
+            transition: color 0.2s;
+        }
+
+        .modal-close:hover {
+            color: var(--text-main);
+        }
+
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--accent-primary);
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-body {
+            line-height: 1.6;
+            color: var(--text-muted);
+        }
+
+        .analysis-box {
+            background: rgba(0, 240, 255, 0.05);
+            border-left: 4px solid var(--accent-primary);
+            padding: 1.5rem;
+            border-radius: 0 8px 8px 0;
+            margin-top: 1.5rem;
+            color: var(--text-main);
+        }
+
+        .loader-text {
+            display: inline-block;
+            animation: pulse-opacity 1.5s infinite;
+        }
+
+        @keyframes pulse-opacity {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        
+        /* Layout per le posizioni aperte */
+        .positions-panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+        
+        th, td {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+        }
+        
+        th {
+            color: var(--text-muted);
+            font-family: var(--font-sans);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">
+            <div class="logo-icon"></div>
+            AlphaQuant SaaS
+        </div>
+        <div class="status-indicator">
+            <div id="connection-dot" class="dot" style="background-color: var(--danger); box-shadow: 0 0 8px var(--danger);"></div>
+            <span id="connection-status">DISCONNECTED</span>
+        </div>
+    </header>
+
+    <div class="main-container">
+        
+        <div>
+            <h2 class="section-title">Market Overview</h2>
+            <div class="grid-dashboard" id="markets-grid">
+                <!-- Market cards dynamically inserted -->
+                <div style="color: var(--text-muted); padding: 2rem;">Waiting for websocket data...</div>
+            </div>
+        </div>
+        
+        <div>
+            <h2 class="section-title">Active Positions</h2>
+            <div class="positions-panel">
+                <table id="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Size</th>
+                            <th>Entry Price</th>
+                            <th>Unrealized PNL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-body">
+                        <tr>
+                            <td colspan="5" style="text-align: center; color: var(--text-muted);">No active positions</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="aiModal" onclick="if(event.target === this) closeModal()">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <h2 class="modal-title" id="modalTitle">LLM Insight Analysis</h2>
+            <div class="modal-body" id="modalBody">
+                <span class="loader-text">Initializing parameters...</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        let wsUrl = `${wsProtocol}//${window.location.hostname}:8000/ws`;
+        if (window.location.hostname === '') { // Running local file
+           wsUrl = 'ws://localhost:8000/ws';
+        }
+        
+        let ws;
+        
+        function connectWebSocket() {
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                document.getElementById('connection-status').innerText = 'SYNDICATED';
+                const dot = document.getElementById('connection-dot');
+                dot.style.backgroundColor = 'var(--success)';
+                dot.style.boxShadow = '0 0 8px var(--success)';
+            };
+            
+            ws.onclose = () => {
+                document.getElementById('connection-status').innerText = 'DISCONNECTED';
+                const dot = document.getElementById('connection-dot');
+                dot.style.backgroundColor = 'var(--danger)';
+                dot.style.boxShadow = '0 0 8px var(--danger)';
+                // Reconnect loop
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            ws.onerror = (err) => {
+                console.error("WS Error:", err);
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    if (payload.type === 'MARKET_UPDATE') {
+                        renderMarkets(payload.data);
+                    } else if (payload.type === 'ACCOUNT_UPDATE') {
+                        renderPositions(payload.data);
+                    }
+                } catch (e) {
+                    console.error("Msg Parse Error", e);
+                }
+            };
+        }
+
+        function formatCurrency(val) {
+            if (val === undefined || val === null || val === "N/A") return "N/A";
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: val < 1 ? 4 : 2 }).format(val);
+        }
+
+        function renderMarkets(data) {
+            const grid = document.getElementById('markets-grid');
+            grid.innerHTML = '';
+            
+            for (const [symbol, stats] of Object.entries(data)) {
+                if(stats.price === 0) continue; // Skip uninitialized
+                
+                const isUp = stats.change >= 0;
+                const changeClass = isUp ? 'up' : 'down';
+                const changeSign = isUp ? '+' : '';
+                
+                const rsiColor = stats.rsi > 70 ? 'var(--danger)' : (stats.rsi < 30 ? 'var(--success)' : 'var(--text-main)');
+                
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.innerHTML = `
+                    <div class="card-header">
+                        <div class="symbol">${symbol}</div>
+                        <div class="change ${changeClass}">${changeSign}${(stats.changePercent).toFixed(2)}%</div>
+                    </div>
+                    <div class="price-container">
+                        <div class="price ${changeClass}">${formatCurrency(stats.price)}</div>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric">
+                            <span class="metric-label">RSI (14)</span>
+                            <span class="metric-value" style="color: ${rsiColor}">${stats.rsi}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Imbalance</span>
+                            <span class="metric-value">${stats.imbalance}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">AI Pred</span>
+                            <span class="metric-value">${stats.prediction}</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">MACD</span>
+                            <span class="metric-value">${stats.macd_hist}</span>
+                        </div>
+                    </div>
+                    <button class="btn-analyze" onclick="requestAnalysis('${symbol}', ${stats.price}, '${stats.rsi}')">
+                        Request AI Insight
+                    </button>
+                `;
+                grid.appendChild(card);
+            }
+        }
+        
+        function renderPositions(data) {
+            const body = document.getElementById('positions-body');
+            const positions = data.positions || [];
+            
+            if (positions.length === 0) {
+                body.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No active positions</td></tr>`;
+                return;
+            }
+            
+            let html = '';
+            positions.forEach(pos => {
+                const pnl = parseFloat(pos.unrealizedPnl || 0);
+                const pnlClass = pnl >= 0 ? 'up' : 'down';
+                html += `
+                    <tr>
+                        <td style="font-weight: 600;">${pos.symbol}</td>
+                        <td class="${pos.side === 'long' ? 'up' : 'down'}">${(pos.side || '').toUpperCase()}</td>
+                        <td>${pos.contracts || pos.amount}</td>
+                        <td>${formatCurrency(pos.entryPrice)}</td>
+                        <td class="${pnlClass}">${formatCurrency(pnl)}</td>
+                    </tr>
+                `;
+            });
+            body.innerHTML = html;
+        }
+
+        async function requestAnalysis(symbol, price, rsi) {
+            const modal = document.getElementById('aiModal');
+            document.getElementById('modalTitle').innerText = `${symbol} Deep Analysis`;
+            document.getElementById('modalBody').innerHTML = `<span class="loader-text">Querying Quantum Nodes...</span>`;
+            modal.classList.add('active');
+            
+            try {
+                // Determine API endpoint
+                const host = window.location.hostname === '' ? 'http://localhost:8000' : '';
+                const response = await fetch(`${host}/api/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker: symbol, price: price, rsi: parseFloat(rsi) })
+                });
+                const res = await response.json();
+                
+                document.getElementById('modalBody').innerHTML = `
+                    <p style="margin-bottom: 1rem;"><strong>Target:</strong> ${symbol} @ ${formatCurrency(price)}</p>
+                    <div class="analysis-box">
+                        <p style="margin-bottom:0.5rem; font-weight:600; font-family:var(--font-mono); color:var(--accent-primary);">[ ${res.status.toUpperCase()} ]</p>
+                        ${res.analysis.replace(/\\n/g, '<br>')}
+                    </div>
+                `;
+            } catch (err) {
+                document.getElementById('modalBody').innerHTML = `
+                    <div class="analysis-box" style="border-color: var(--danger); background: rgba(239, 68, 68, 0.05);">
+                        Request failed. Ensure backend API is accessible. 
+                        Error: ${err.message}
+                    </div>
+                `;
+            }
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('aiModal');
+            modal.classList.remove('active');
+        }
+
+        // Initialize App
+        connectWebSocket();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Environment Variables (CRITICAL)
+.env
+
+# Database
+backend/bot_state.db
+*.db
+*.sqlite3
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+backend/bot.log
+*.log
+
+# Temp
+/tmp/
+/tmp/**
