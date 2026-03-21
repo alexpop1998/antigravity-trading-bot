@@ -40,7 +40,7 @@ class MLPredictor:
                 
                 # The features we feed the AI matrix: 
                 # We use the mathematical formulas already extracted by the bot (avoiding re-computations)
-                features = ['close', 'rsi', 'macd_hist', 'bb_upper', 'bb_lower']
+                features = ['close', 'rsi', 'macd_hist', 'bb_upper', 'bb_lower', 'volume', 'atr']
                 
                 # Drop NaN rows (created by rolling averages and shifts)
                 df_clean = data.dropna(subset=features + ['target'])

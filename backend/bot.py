@@ -11,6 +11,7 @@ from ml_predictor import MLPredictor
 from database import BotDatabase
 from telegram_notifier import TelegramNotifier
 from signal_manager import SignalManager
+from typing import Any, Dict, List, Optional
 
 load_dotenv(override=True)
 
@@ -27,10 +28,13 @@ class CryptoBot:
         self.timeframe = params.get("timeframe", "15m")
         self.rsi_period = params.get("rsi_period", 14)
         self.leverage = params.get("leverage", 10)
-        self.usdt_per_trade = params.get("usdt_per_trade", 50)
+        self.usdt_per_trade = params.get("usdt_per_trade", 100)
+        self.percent_per_trade = params.get("percent_per_trade", 2.5) # % of equity per trade
         self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
-        self.max_concurrent_positions = params.get("max_concurrent_positions", 10)
+        self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
+        self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
+        self.current_margin_ratio = 0.0
         
         api_key = os.getenv("EXCHANGE_API_KEY")
         api_secret = os.getenv("EXCHANGE_API_SECRET")
@@ -58,17 +62,14 @@ class CryptoBot:
             logger.error("EXCHANGE_API_KEY IS EMPTY!")
         
         # Active symbols data
-        self.latest_data: dict[str, dict] = {}
-        for symbol in self.symbols:
-            self.latest_data[symbol] = {
-                'price': 0.0,
-                'change': 0.0,
-                'changePercent': 0.0,
-                'rsi': 0.0,
-                'imbalance': 1.0
-            }
+        self.latest_data: Dict[str, Dict[str, Any]] = {symbol: {
+            'price': 0.0, 'change': 0.0, 'changePercent': 0.0, 'rsi': 0.0, 
+            'macd': 0.0, 'macd_hist': 0.0, 'bb_upper': 0.0, 'bb_lower': 0.0,
+            'imbalance': 1.0, 'atr': 0.0, 'ema200': 0.0, 'volume24h': 0.0,
+            'prediction': "Syncing..."
+        } for symbol in self.symbols}
             
-        self.latest_account_data = {
+        self.latest_account_data: Dict[str, Any] = {
             'positions': [],
             'trades': [],
             'balance': 0.0,
@@ -77,15 +78,19 @@ class CryptoBot:
             'alerts': []
         }
         
+        # Track locally how many positions are being opened (before account update cycle confirms)
+        self.pending_orders_count = 0
+        self.order_lock = asyncio.Lock()
+        
         # Keep track of active positions (LONG/SHORT/None)
-        self.active_positions: dict[str, str | None] = {symbol: None for symbol in self.symbols}
+        self.active_positions: Dict[str, Optional[str]] = {symbol: None for symbol in self.symbols}
         # Keep track of soft stop-loss levels and trade info
-        self.trade_levels: dict[str, dict | None] = {symbol: None for symbol in self.symbols}
+        self.trade_levels: Dict[str, Optional[Dict[str, Any]]] = {symbol: None for symbol in self.symbols}
         self.is_macro_paused = False
         
         # Initialize Machine Learning Prophet
         self.predictor = MLPredictor()
-        self.ml_cooldowns: dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
+        self.ml_cooldowns: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
         
         # Institutional Alert History for Frontend
         self.alert_history = []
@@ -97,19 +102,29 @@ class CryptoBot:
         self.signal_manager = SignalManager(self)
         
         # Resource management
-        self.ml_semaphore = asyncio.Semaphore(1) # Concurrent ML training limit
-        self.api_semaphore = asyncio.Semaphore(5) # Concurrent API call limit
+        self.ml_semaphore = asyncio.Semaphore(1) 
+        self.api_semaphore = asyncio.Semaphore(5) 
         
         # Risk Management & Guards
         self.circuit_breaker_active = False
         self.symbol_blacklist = set()
         self.initial_wallet_balance = None
+        self.panic_drawdown_threshold = 0.10 # 10% Total Equity Drawdown
+        self.min_leverage = 2
+        self.max_leverage = 10
+        self.sector_caps = {"MEME": 3, "L1": 3, "ALTS": 4} # Limit per sector
+        self.sector_mapping = {
+            "BTC/USDT": "MAJOR", "ETH/USDT": "MAJOR", "SOL/USDT": "L1", 
+            "BNB/USDT": "L1", "SXP/USDT": "ALTS", "RIVER/USDT": "ALTS", 
+            "APR/USDT": "ALTS", "WAXP/USDT": "ALTS", "DEGO/USDT": "ALTS", 
+            "PHA/USDT": "ALTS", "PIPPIN/USDT": "MEME", "BAN/USDT": "MEME"
+        }
         
         # Recupero stato persistente
         saved_levels = self.db.load_state("trade_levels")
         if saved_levels:
             self.trade_levels = saved_levels
-            logger.info("📦 Stato trade_levels recuperato correttamente dal database.")
+            logger.info("📦 Stato trade_levels recuperato correttamente.")
         
         # Exchange instance will be initialized with load_markets in initialize()
         self.initialized = False
@@ -225,6 +240,10 @@ class CryptoBot:
             df['atr'] = df['tr'].rolling(window=14).mean()
             current_atr = df['atr'].iloc[-1]
             
+            # --- EMA 200 Calculation (Trend Filter) ---
+            df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+            current_ema200 = df['ema200'].iloc[-1]
+            
             # --- Order Book Imbalance Calculation ---
             orderbook = await self.exchange.fetch_order_book(symbol, limit=100)
             bids = sum(float(bid[1]) for bid in orderbook['bids'])
@@ -232,6 +251,8 @@ class CryptoBot:
             imbalance = bids / asks if asks > 0 else 1.0
             
             ticker = await self.exchange.fetch_ticker(symbol)
+            # 24h Volume Guard (USD or Quote Currency)
+            quote_volume = float(ticker.get('quoteVolume', 0))
             
             # Optimize: Only re-train/predict every 30 minutes to save CPU, and only one at a time
             import time
@@ -260,92 +281,132 @@ class CryptoBot:
                 'bb_lower': round(current_bb_lower, 4) if not pd.isna(current_bb_lower) else "N/A",
                 'imbalance': round(imbalance, 2),
                 'atr': round(current_atr, 6) if not pd.isna(current_atr) else "N/A",
+                'ema200': round(current_ema200, 4) if not pd.isna(current_ema200) else "N/A",
+                'volume24h': quote_volume,
                 'prediction': predicted_price if predicted_price else "Syncing ML..."
             }
             
             self._check_soft_stop_loss(symbol, current_close)
-            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance)
+            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr)
             
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
 
-    def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance):
-        if pd.isna(rsi) or pd.isna(macd_hist) or pd.isna(bb_lower):
+    def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance, ema200, volume24h, atr):
+        if pd.isna(rsi) or pd.isna(macd_hist) or pd.isna(bb_lower) or pd.isna(ema200):
             return
             
         if self.is_macro_paused:
-            # We skip creating new positions due to explosive un-predictable volatility
             return
 
-        # Check absolute account-wide position limit (including manual or old trades)
-        current_open_positions = len(self.latest_account_data.get('positions', []))
-        if current_open_positions >= self.max_concurrent_positions:
-            # We are at capacity, no new entries allowed
+        # --- TREND GUARD: BTC Correlation Check ---
+        # If BTC is dumping, don't open LONGs on alts
+        if "BTC/USDT" in self.latest_data and symbol != "BTC/USDT":
+            btc_data = self.latest_data["BTC/USDT"]
+            btc_change = float(btc_data.get('changePercent', 0))
+            if btc_change < -1.5: # Market-wide dump protection
+                return
+
+        # --- SECTOR CAP CHECK ---
+        sector = self.sector_mapping.get(symbol, "ALTS")
+        current_sector_count = sum(1 for s, side in self.active_positions.items() if side is not None and self.sector_mapping.get(s) == sector)
+        if current_sector_count >= self.sector_caps.get(sector, 3):
             return
 
-        # 1. Order Book Imbalance Strategy (The Invisible Wall) - DISABLED DUE TO FAKE WALLS (SPOOFING)
-        # if imbalance > 3.0 and self.active_positions[symbol] != 'LONG':
-        #     logger.info(f"🧱 WALL DETECTED: Massive Buy Wall for {symbol}. Bids {imbalance:.1f}x Asks. LONG signal.")
-        #     self.active_positions[symbol] = 'LONG'
-        #     asyncio.create_task(self.execute_order(symbol, 'buy', price))
-        #     return
-        #     
-        # elif imbalance < 0.33 and self.active_positions[symbol] != 'SHORT':
-        #     logger.info(f"🧱 WALL DETECTED: Massive Sell Wall for {symbol}. Asks {1/imbalance:.1f}x Bids. SHORT signal.")
-        #     self.active_positions[symbol] = 'SHORT'
-        #     asyncio.create_task(self.execute_order(symbol, 'sell', price))
-        #     return
-            
+        # STRENGTHENED LIMIT CHECK (before task creation)
+        current_open_count = len(self.latest_account_data.get('positions', []))
+        if current_open_count + self.pending_orders_count >= self.max_concurrent_positions:
+            return
+
+        # --- LOGIC GUARD 1: Volume ---
+        # Require minimum $5M 24h volume for institutional stability (avoid shitcoin pumps)
+        if volume24h < 5000000:
+            return
+
+        # --- LOGIC GUARD 2: Trend Filter (200 EMA) ---
+        price_above_ema = price > ema200
+        
         # 2. Classic Technical Strategy (RSI + MACD + Bollinger)
         is_technical_signal = False
-        if rsi < 30 and macd_hist > 0 and price <= (bb_lower * 1.01) and self.active_positions[symbol] != 'LONG':
-            logger.info(f"[{symbol}] OVERSOLD CONFIRMED: RSI={rsi:.2f}, MACD_Hist>0, Price near BB_Lower. LONG signal at {price}.")
-            self.active_positions[symbol] = 'LONG'
-            asyncio.create_task(self.execute_order(symbol, 'buy', price))
-            is_technical_signal = True
+        tech_side = None
+        
+        if rsi < 30 and macd_hist > 0 and price <= (bb_lower * 1.01):
+            if price_above_ema: # Trend-following LONG
+                tech_side = 'buy'
+                is_technical_signal = True
             
-        elif rsi > 70 and macd_hist < 0 and price >= (bb_upper * 0.99) and self.active_positions[symbol] != 'SHORT':
-            logger.info(f"[{symbol}] OVERBOUGHT CONFIRMED: RSI={rsi:.2f}, MACD_Hist<0, Price near BB_Upper. SHORT signal at {price}.")
-            self.active_positions[symbol] = 'SHORT'
-            asyncio.create_task(self.execute_order(symbol, 'sell', price))
-            is_technical_signal = True
+        elif rsi > 70 and macd_hist < 0 and price >= (bb_upper * 0.99):
+            if not price_above_ema: # Trend-following SHORT
+                tech_side = 'sell'
+                is_technical_signal = True
+
+        # --- CONSENSUS ENGINE: Routing signals to SignalManager ---
+        if is_technical_signal:
+             asyncio.create_task(self.handle_signal(symbol, "TECH", tech_side, weight_modifier=1.0))
+
+        # --- LOGIC GUARD 3: Volatility (ATR-based skip) ---
+        # Skip if ATR is less than 0.2% of price (stagnant) or more than 5% (extreme volatility)
+        atr_pct = (atr / price) if price > 0 else 0
+        if atr_pct < 0.002 or atr_pct > 0.05:
+            return
 
         # 3. AI Predictive Alpha (Machine Learning Prophet)
-        # If technical indicators are neutral (not OVERSOLD/OVERBOUGHT), consult the AI Prophet
-        if not is_technical_signal and self.active_positions[symbol] is None:
-            prediction = self.latest_data[symbol].get('prediction')
-            if isinstance(prediction, (int, float)) and prediction > 0:
-                price_diff_pct = (prediction - price) / price
-                
-                # Confidence Threshold: 0.5% expected move in the NEXT 15m candle
-                if price_diff_pct > 0.005:
-                    logger.critical(f"🧠 AI ALPHA: Machine Learning predicts a +{price_diff_pct*100:.2f}% move for {symbol}. LONG signal.")
-                    self.active_positions[symbol] = 'LONG'
-                    asyncio.create_task(self.execute_order(symbol, 'buy', price))
-                elif price_diff_pct < -0.005:
-                    logger.critical(f"🧠 AI ALPHA: Machine Learning predicts a {price_diff_pct*100:.2f}% move for {symbol}. SHORT signal.")
-                    self.active_positions[symbol] = 'SHORT'
-                    asyncio.create_task(self.execute_order(symbol, 'sell', price))
+        prediction = self.latest_data[symbol].get('prediction')
+        if isinstance(prediction, (int, float)) and prediction > 0:
+            price_diff_pct = (prediction - price) / price
+            # Confidence Threshold: 1.0% expected move
+            if price_diff_pct > 0.01 and price_above_ema:
+                asyncio.create_task(self.handle_signal(symbol, "AI", "buy", weight_modifier=1.2))
+            elif price_diff_pct < -0.01 and not price_above_ema:
+                asyncio.create_task(self.handle_signal(symbol, "AI", "sell", weight_modifier=1.2))
 
-    def _check_soft_stop_loss(self, symbol, current_price):
-        if not self.trade_levels.get(symbol):
+    async def handle_signal(self, symbol, type, side, weight_modifier=1.0, is_black_swan=False):
+        """
+        Receives signals from various sources (TECH, AI, NEWS, etc.) and forwards them 
+        to the SignalManager for consensus aggregation.
+        """
+        if not self.signal_manager:
             return
             
-        trade = self.trade_levels[symbol]
+        approved, consensus_score = await self.signal_manager.add_signal(symbol, type, side, weight_modifier)
+        
+        if approved:
+            # Check global margin ratio instead of fixed position count
+            if self.current_margin_ratio < self.max_global_margin_ratio or is_black_swan:
+                    self.active_positions[symbol] = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
+                    self.pending_orders_count += 1
+                    
+                    await self.execute_order(symbol, side.lower(), self.latest_data[symbol]['price'], is_black_swan=is_black_swan, consensus_score=consensus_score)
+
+    def _check_soft_stop_loss(self, symbol, current_price):
+        trade = self.trade_levels.get(symbol)
+        if not trade:
+            return
+            
         # Normalize side (handle both 'buy'/'long' and 'sell'/'short')
         side = str(trade.get('side', 'buy')).lower()
         is_long = side in ['buy', 'long']
-        sl = trade.get('sl', 0)
-        tp_old = trade.get('tp', 0)
-        tp1 = trade.get('tp1', tp_old)
-        tp2 = trade.get('tp2', tp_old)
+        sl = float(trade.get('sl', 0))
+        tp_old = float(trade.get('tp', 0))
+        tp1 = float(trade.get('tp1', tp_old))
+        tp2 = float(trade.get('tp2', tp_old))
         
         # Use dynamic CURRENT ATR for trailing Stop-Loss distance
-        current_atr = self.latest_data.get(symbol, {}).get('atr')
-        if current_atr and current_atr != "N/A":
-            sl_distance = current_atr * 2.0
+        # Black Swans need more breathing room (5x ATR vs 2x ATR)
+        multiplier = 5.0 if trade.get('is_black_swan') else 2.0
+        latest = self.latest_data.get(symbol, {})
+        current_atr = latest.get('atr')
+        
+        if isinstance(current_atr, (float, int)) and current_atr > 0:
+            sl_distance = float(current_atr) * multiplier
         else:
-            sl_distance = trade.get('sl_distance', current_price * self.stop_loss_pct)
+            sl_distance = float(trade.get('sl_distance', current_price * self.stop_loss_pct))
+            
+        # Floor for Black Swans (at least 1.2% away to avoid noise)
+        if trade.get('is_black_swan'):
+            min_dist = current_price * 0.012
+            if sl_distance < min_dist:
+                sl_distance = min_dist
         
         # --- Trailing Stop-Loss Logic ---
         if 'highest_price' not in trade and is_long:
@@ -358,7 +419,8 @@ class CryptoBot:
         
         if is_long:
             # Update trailing high and move SL up
-            if current_price > trade.get('highest_price', 0):
+            highest = float(trade.get('highest_price', 0))
+            if current_price > highest:
                 trade['highest_price'] = current_price
                 # Move SL up if price has moved significantly (trailing gap)
                 new_sl = current_price - sl_distance
@@ -383,17 +445,19 @@ class CryptoBot:
                     trade['sl'] = max(trade.get('entry_price', current_price), trade.get('sl', 0))
                     
         else: # SHORT
-            # Update trailing low and move SL down
+            # FIX #2: Update trailing low and move SL DOWN (not up) as price falls
             if current_price < trade.get('lowest_price', 999999):
                 trade['lowest_price'] = current_price
                 new_sl = current_price + sl_distance
+                # For SHORT: new_sl must be LOWER than the current sl to advance the trailing stop
                 if new_sl < sl:
                     trade['sl'] = new_sl
+                    sl = new_sl  # update local var too
                     logger.info(f"📉 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
                     
             if current_price >= trade.get('sl', 999999):
                 should_close = True
-                reason = "STOP-LOSS (TRAILING)" if 'lowest_price' in trade else "STOP-LOSS"
+                reason = "STOP-LOSS (TRAILING)" if trade.get('lowest_price', 999999) < trade.get('entry_price', 999999) else "STOP-LOSS"
             elif current_price <= tp2:
                 # Final TP
                 should_close = True
@@ -403,6 +467,7 @@ class CryptoBot:
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
                     trade['tp1_hit'] = True
+                    # Move SL to break-even (entry price) to protect remaining 50%
                     trade['sl'] = min(trade.get('entry_price', current_price), trade.get('sl', 999999))
                 
         if should_close:
@@ -459,14 +524,20 @@ class CryptoBot:
                 self.db.log_trade(symbol, "CLOSE_PARTIAL", exit_price, amount, pnl, "PARTIAL_EXIT")
                 
         except Exception as e:
-            logger.error(f"Failed to close position for {symbol}: {e}")
-            logger.error(traceback.format_exc())
-
-    # Calculate dynamic order amount based on risk capital and volatility
-    def _calculate_order_amount(self, symbol, current_price, custom_leverage=None):
+            logger.error(f"Failed to close position for {symbol}: {e}")    # Calculate dynamic order amount based on risk capital, equity, and confidence
+    def _calculate_order_amount(self, symbol, current_price, custom_leverage=None, confidence_modifier=1.0):
         leverage = custom_leverage if custom_leverage else self.leverage
         
-        # Volatility-based capital allocation (Kelly Criterion proxy)
+        # 1. Base Capital Calculation (Equity % vs Fixed USDT)
+        current_equity = self.latest_account_data.get('equity', 0)
+        if current_equity > 0:
+            base_usdt = current_equity * (self.percent_per_trade / 100)
+            logger.info(f"[{symbol}] Equity Sizing: {self.percent_per_trade}% of {current_equity:.2f} USDT = {base_usdt:.2f} USDT")
+        else:
+            base_usdt = self.usdt_per_trade
+            logger.warning(f"[{symbol}] Equity not available, falling back to fixed {base_usdt} USDT sizing.")
+            
+        # 2. Volatility-based capital allocation (ATR modifier)
         current_atr = self.latest_data[symbol].get('atr', current_price * 0.01)
         if current_atr == "N/A" or not current_atr:
             current_atr = current_price * 0.01
@@ -474,15 +545,22 @@ class CryptoBot:
         atr_pct = (current_atr / current_price) if current_price > 0 else 0.01
         baseline_atr_pct = 0.01  # Baseline expected volatility per candle
         
-        # High volatility -> lower modifier -> less capital risked
-        # Low volatility -> higher modifier -> more capital risked
         volatility_modifier = baseline_atr_pct / atr_pct if atr_pct > 0 else 1.0
-        volatility_modifier = max(0.2, min(3.0, volatility_modifier))
+        volatility_modifier = max(0.2, min(2.0, volatility_modifier))
         
-        adjusted_usdt = self.usdt_per_trade * volatility_modifier
+        # 3. Final Allocation with Confidence Scaling
+        adjusted_usdt = base_usdt * volatility_modifier * confidence_modifier
+        
+        # Global Cap: Never risk more than 15% of equity per trade even with modifiers
+        if current_equity > 0:
+            max_limit = current_equity * 0.15
+            if adjusted_usdt > max_limit:
+                logger.warning(f"[{symbol}] Capping order size to 15% of equity: {adjusted_usdt:.2f} -> {max_limit:.2f}")
+                adjusted_usdt = max_limit
+
         purchasing_power = adjusted_usdt * leverage
         
-        logger.info(f"[{symbol}] ATR Allocation: Modifier {volatility_modifier:.2f}x (Base: {self.usdt_per_trade} USDT -> Adjusted: {adjusted_usdt:.2f} USDT)")
+        logger.info(f"[{symbol}] Sizing Summary: Base={base_usdt:.2f}, VolMod={volatility_modifier:.2f}, ConfMod={confidence_modifier:.2f} -> Adjusted={adjusted_usdt:.2f} USDT")
         
         market = self.exchange.market(symbol)
         # Contract size calculation
@@ -492,84 +570,127 @@ class CryptoBot:
         amount = self.exchange.amount_to_precision(symbol, amount)
         return float(amount)
 
-    async def handle_signal(self, symbol, type, side, weight_modifier=1.0, is_black_swan=True):
-        """Routing centralizzato dei segnali attraverso il SignalManager"""
-        # Verifica se abbiamo già una posizione per evitare raddoppi indesiderati
-        if self.active_positions.get(symbol) is not None:
-             # Se il segnale è opposto alla posizione attuale e la convinzione è alta, potremmo chiudere e girarci
-             # Per ora, semplicemente evitiamo sovrapposizioni
-             return
-
-        should_execute = await self.signal_manager.add_signal(symbol, type, side, weight_modifier)
+    def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price):
+        """Calculates leverage based on consensus score, volatility, and trend safety."""
+        latest = self.latest_data.get(symbol, {})
+        atr = latest.get('atr', current_price * 0.01)
+        if not atr or atr == "N/A": atr = current_price * 0.01
         
-        if should_execute:
-            current_price = self.latest_data.get(symbol, {}).get('price', 0)
-            if current_price > 0:
-                self.active_positions[symbol] = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
-                asyncio.create_task(self.execute_order(symbol, side, current_price, is_black_swan=is_black_swan))
-                # Notifica il consenso raggiunto
-                self.notifier.notify_alert("CONSENSUS", f"Segnale Confermato: {type}", f"{symbol} {side.upper()}")
+        # 1. Base leverage 7x (Aggressive Default)
+        base_lev = 7
+        
+        # 2. Consensus Scaling (Aggressive Scaling: +2 lev per 1.0 score above 5)
+        score_bonus = (consensus_score - 5.0) * 2.0 
+        
+        # 3. Volatility Penalty
+        vol_pct = (atr / current_price) * 100 if current_price > 0 else 0
+        vol_penalty = vol_pct * 1.5 # 2% vol = -3 leverage
+        
+        # 4. Trend Safety Bonus (+2 if opening in trend direction)
+        trend_bonus = 0
+        ema200 = latest.get('ema200')
+        if isinstance(ema200, (int, float)):
+            is_long = side.lower() in ['buy', 'long']
+            if (is_long and current_price > ema200) or (not is_long and current_price < ema200):
+                trend_bonus = 2
+                logger.info(f"🛡️ [Leverage] Trend Safety Bonus applied for {symbol} (+2)")
+        
+        lev = base_lev + score_bonus - vol_penalty + trend_bonus
+        
+        # 5. Sector Dynamic Caps
+        sector = self.sector_mapping.get(symbol, "ALTS")
+        # Base Caps: MAJOR=20, ALTS=15
+        max_cap = 20 if sector == "MAJOR" else 15
+        
+        # High Conviction "Ultra" Bonus
+        if consensus_score >= 8.0:
+            max_cap += 5 # Push to 25x for Major, 20x for Alts
+            logger.warning(f"🔥 [Leverage] High Conviction Bonus applied for {symbol} (Max Cap: {max_cap})")
+        
+        final_lev = max(self.min_leverage, min(max_cap, round(lev)))
+        logger.info(f"📐 [Leverage] {symbol} Calculation: Base={base_lev}, ScoreBonus={score_bonus:.1f}, VolPenalty={vol_penalty:.1f}, TrendBonus={trend_bonus} -> Final={final_lev}x")
+        
+        return final_lev
 
-    async def execute_order(self, symbol, side, current_price, is_black_swan=False):
+    async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0):
         # --- GLOBAL RISK CHECKS ---
         if symbol in self.symbol_blacklist:
-            logger.warning(f"🚫 Skipping {symbol}: In blacklist (requires manual agreement).")
+            logger.warning(f"🚫 Skipping {symbol}: In blacklist.")
             return
             
         if self.circuit_breaker_active:
-            logger.error("🛑 CIRCUIT BREAKER ACTIVE: Skipping all new entries due to high daily loss.")
-            return
-        current_positions_count = len([p for p in self.latest_account_data.get('positions', []) if float(p.get('positionAmt', 0)) != 0])
-        if current_positions_count >= self.max_concurrent_positions and not is_black_swan:
-            logger.warning(f"⚠️ Max positions ({self.max_concurrent_positions}) reached. Skipping entry for {symbol}.")
+            logger.error("🛑 CIRCUIT BREAKER ACTIVE: Skipping entries.")
             return
 
         try:
-            active_leverage = 50 if is_black_swan else self.leverage
-            if is_black_swan:
+            # FIX #1: Acquire lock to serialize order execution and prevent position count race condition
+            async with self.order_lock:
+                # Re-check limit inside the lock with latest confirmed info
+                confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('contracts', 0) or 0) != 0]
+                current_total_count = len(confirmed_positions)
+                
+                # Switch to margin ratio guard
+                if self.current_margin_ratio >= self.max_global_margin_ratio and not is_black_swan:
+                    logger.warning(f"🚫 [ORDER] Global Margin Limit Reached ({self.current_margin_ratio*100:.1f}% >= {self.max_global_margin_ratio*100:.1f}%). Skipping {symbol}.")
+                    self.active_positions[symbol] = None
+                    self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                    return
+
+                # Dynamic leverage calculation
+                active_leverage = 50 if is_black_swan else self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price)
+                
                 try:
-                    await self.exchange.set_leverage(active_leverage, self.exchange.market(symbol)['id'])
-                    logger.warning(f"🦢 BLACK SWAN LEVERAGE: Increased to {active_leverage}x for {symbol}")
+                    market = self.exchange.market(symbol)
+                    await self.exchange.set_leverage(active_leverage, market['id'])
                 except Exception as e:
-                    logger.error(f"Failed to set aggressive leverage for {symbol}: {e}")
-                    active_leverage = self.leverage
-            
-            amount_to_buy = self._calculate_order_amount(symbol, current_price, custom_leverage=active_leverage)
-            logger.info(f"Executing {side} order for {amount_to_buy} {symbol} @ {current_price} USDT (Leverage {active_leverage}x)")
-            
-            # 1. Place Main Market Order
-            order = await self.exchange.create_market_order(symbol, side, amount_to_buy)
-            logger.info(f"Main order success: {order['id']}")
-            
-            # 2. Calculate Risk Levels based on ATR (Institutional Standard)
-            current_atr = self.latest_data[symbol].get('atr', current_price * 0.01)
-            if current_atr == "N/A" or not current_atr:
-                current_atr = current_price * 0.01
+                    logger.error(f"Failed to set leverage for {symbol}: {e}")
                 
-            # Dynamic SL is usually 2x ATR
-            sl_distance = current_atr * 2.0
-            # Dynamic TP1 is usually 1.5x ATR, TP2 is 3x ATR
-            tp1_distance = current_atr * 1.5
+                amount_to_buy = self._calculate_order_amount(symbol, current_price, custom_leverage=active_leverage)
+                logger.warning(f"🚀 [ORDER] {side.upper()} {amount_to_buy} {symbol} @ {current_price} (Consensus Order)")
+                
+                # 1. Place Main Market Order
+                order = await self.exchange.create_market_order(symbol, side.lower(), amount_to_buy)
+                logger.info(f"✅ Main order success for {symbol}: {order['id']}")
             
-            if side.lower() == 'buy':
-                sl_price = current_price - sl_distance
+            # --- Continue with Risk Level calculation OUTSIDE the order lock ---
+            # 2. Risk Levels based on ATR
+            current_atr = self.latest_data[symbol].get('atr')
+            if not current_atr or current_atr == "N/A":
+                current_atr = current_price * 0.01 # Fallback 1%
+                
+            # Optimized R:R (SL 1.5x, TP1 2.0x, TP2 4.0x)
+            # Black Swans get wider stops (5x ATR) to avoid noise
+            sl_mult = 5.0 if is_black_swan else 1.5
+            tp1_mult = 6.0 if is_black_swan else 2.5
+            tp2_mult = 12.0 if is_black_swan else 5.0
+            
+            sl_distance  = current_atr * sl_mult
+            # Floor for Black Swans (1.2% as per user safety requirement)
+            if is_black_swan:
+                min_sl = current_price * 0.012
+                sl_distance = max(sl_distance, min_sl)
+                
+            tp1_distance = current_atr * tp1_mult
+            tp2_distance = current_atr * tp2_mult
+            
+            is_long = side.lower() in ['buy', 'long']
+            if is_long:
+                sl_price  = current_price - sl_distance
                 tp1_price = current_price + tp1_distance
-                tp2_price = current_price + (tp1_distance * 2.0)
-                close_side = 'sell'
+                tp2_price = current_price + tp2_distance
             else:
-                sl_price = current_price + sl_distance
+                sl_price  = current_price + sl_distance
                 tp1_price = current_price - tp1_distance
-                tp2_price = current_price - (tp1_distance * 2.0)
-                close_side = 'buy'
+                tp2_price = current_price - tp2_distance
                 
-            sl_price = float(self.exchange.price_to_precision(symbol, sl_price))
+            sl_price  = float(self.exchange.price_to_precision(symbol, sl_price))
             tp1_price = float(self.exchange.price_to_precision(symbol, tp1_price))
             tp2_price = float(self.exchange.price_to_precision(symbol, tp2_price))
             
-            logger.info(f"📊 ATR Risk Levels for {symbol}: SL @ {sl_price} (2xATR), TP1 @ {tp1_price} (1.5xATR), TP2 @ {tp2_price} (3xATR)")
+            logger.info(f"📊 {symbol} Risk: SL={sl_price}, TP1={tp1_price}, TP2={tp2_price}")
             
             self.trade_levels[symbol] = {
-                'side': side.lower(),
+                'side': 'buy' if is_long else 'sell',
                 'entry_price': current_price,
                 'sl': sl_price,
                 'sl_distance': sl_distance,
@@ -577,22 +698,30 @@ class CryptoBot:
                 'tp2': tp2_price,
                 'amount': amount_to_buy,
                 'tp1_hit': False,
-                'highest_price': current_price if side.lower() == 'buy' else 0,
-                'lowest_price': current_price if side.lower() != 'buy' else 0
+                'is_black_swan': is_black_swan,
+                'highest_price': current_price if is_long else 0,
+                'lowest_price': current_price if not is_long else 0
             }
-            # Salva stato nel DB
+            # Save and Log
             self.db.save_state("trade_levels", self.trade_levels)
-            # Log nel DB storico
-            self.db.log_trade(symbol, side, current_price, amount_to_buy, 0, "INIT")
-            # Notifica Telegram
-            self.notifier.notify_trade(symbol, side, current_price, amount_to_buy, "SIGNAL")
+            self.db.log_trade(symbol, side.upper(), current_price, amount_to_buy, 0, "INIT_CONSENSUS")
+            self.notifier.notify_trade(symbol, side.upper(), current_price, amount_to_buy, "CONSENSUS_HIT")
+            
+            # Decrement pending count
+            self.pending_orders_count = max(0, self.pending_orders_count - 1)
+
         except Exception as e:
+            # Cleanup on failure
+            self.pending_orders_count = max(0, self.pending_orders_count - 1)
+            self.active_positions[symbol] = None
+            
             error_msg = str(e)
             if "-4411" in error_msg or "agreement" in error_msg.lower():
                 logger.error(f"❌ Blacklisting {symbol}: Agreement not signed.")
                 self.symbol_blacklist.add(symbol)
-            
-            logger.error(f"Order sequence failed for {symbol}: {e}")
+                
+            logger.error(f"❌ Order failed for {symbol}: {e}")
+            logger.error(traceback.format_exc())
 
     def add_alert(self, type, title, value=None):
         alert = {
@@ -624,28 +753,31 @@ class CryptoBot:
                         
                         params = self.risk_profile.get("trading_parameters", {})
                         if isinstance(params, dict):
-                            new_symbols: list[str] = params.get("symbols", self.symbols)
-                            self.timeframe = params.get("timeframe", self.timeframe)
-                            self.rsi_period = params.get("rsi_period", self.rsi_period)
-                            self.leverage = params.get("leverage", self.leverage)
-                            self.usdt_per_trade = params.get("usdt_per_trade", self.usdt_per_trade)
-                            self.stop_loss_pct = params.get("stop_loss_pct", self.stop_loss_pct)
-                            self.take_profit_pct = params.get("take_profit_pct", self.take_profit_pct)
-                            self.max_concurrent_positions = params.get("max_concurrent_positions", self.max_concurrent_positions)
+                            new_symbols_raw = params.get("symbols", self.symbols)
+                            new_symbols: List[str] = [str(s) for s in new_symbols_raw] if isinstance(new_symbols_raw, list) else self.symbols
+                            
+                            self.timeframe = str(params.get("timeframe", self.timeframe))
+                            self.rsi_period = int(params.get("rsi_period", self.rsi_period) or self.rsi_period)
+                            self.leverage = int(params.get("leverage", self.leverage) or self.leverage)
+                            self.usdt_per_trade = float(params.get("usdt_per_trade", self.usdt_per_trade) or self.usdt_per_trade)
+                            self.percent_per_trade = float(params.get("percent_per_trade", self.percent_per_trade) or self.percent_per_trade)
+                            self.stop_loss_pct = float(params.get("stop_loss_pct", self.stop_loss_pct) or self.stop_loss_pct)
+                            self.take_profit_pct = float(params.get("take_profit_pct", self.take_profit_pct) or self.take_profit_pct)
+                            self.max_concurrent_positions = int(params.get("max_concurrent_positions", self.max_concurrent_positions) or self.max_concurrent_positions)
+                            self.max_global_margin_ratio = float(params.get("max_global_margin_ratio", self.max_global_margin_ratio) or self.max_global_margin_ratio)
                             
                             # Filter new symbols too
-                            validated_symbols = []
+                            validated_symbols: List[str] = []
                             for symbol in new_symbols:
                                 if symbol in self.exchange.markets:
                                     validated_symbols.append(symbol)
                                     
                                     if symbol not in self.latest_data:
                                         self.latest_data[symbol] = {
-                                            'price': 0,
-                                            'change': 0,
-                                            'changePercent': 0,
-                                            'rsi': 0,
-                                            'imbalance': 1.0
+                                            'price': 0.0, 'change': 0.0, 'changePercent': 0.0, 'rsi': 0.0, 
+                                            'macd': 0.0, 'macd_hist': 0.0, 'bb_upper': 0.0, 'bb_lower': 0.0,
+                                            'imbalance': 1.0, 'atr': 0.0, 'ema200': 0.0, 'volume24h': 0.0,
+                                            'prediction': "Syncing..."
                                         }
                                     if symbol not in self.active_positions:
                                         self.active_positions[symbol] = None
@@ -687,49 +819,55 @@ class CryptoBot:
                     active_pos = []
 
                 # 2. Fetch Balance and check Margin
-                balance_data = await self.exchange.fetch_balance()
+                # --- UNIFIED BALANCE: USDT + USDC ---
+                balances = await self.exchange.fetch_balance()
+                usdt_bal = float(balances.get('USDT', {}).get('total', 0))
+                usdc_bal = float(balances.get('USDC', {}).get('total', 0))
+                wallet_balance = usdt_bal + usdc_bal
                 
-                # --- RECENT CHANGE: Use unified CCXT balance structure ---
-                wallet_balance = float(balance_data.get('total', {}).get('USDT', 0))
-                if wallet_balance == 0 and 'info' in balance_data:
-                    # Fallback to Binance specific if unified fails
-                    wallet_balance = float(balance_data['info'].get('totalWalletBalance', 0))
+                # Fetch actual positions for precise PnL and Margin
+                pos_data = await self.exchange.fetch_positions()
+                unrealized_pnl = sum(float(p.get('unrealizedPnL', 0) or 0) for p in pos_data)
+                equity = wallet_balance + unrealized_pnl
 
-                margin_balance = float(balance_data.get('total', {}).get('USDT', 0)) # Approximate for futures
-                if 'totalMarginBalance' in balance_data.get('info', {}):
-                    margin_balance = float(balance_data['info']['totalMarginBalance'])
-
-                equity = margin_balance
-                
-                # Use unrealized PnL from the unified balance if available
-                unrealized_pnl = 0
-                if 'info' in balance_data and 'positions' in balance_data['info']:
-                    positions_info = balance_data['info']['positions']
-                    unrealized_pnl = sum(float(p.get('unrealizedProfit', 0)) for p in positions_info)
-                
                 if self.initial_wallet_balance is None:
                     self.initial_wallet_balance = wallet_balance
-                    logger.info(f"🏦 Initial Wallet Balance set: {self.initial_wallet_balance} USDT")
+                    logger.info(f"🏦 Unified Balance Initialized: Balance={self.initial_wallet_balance} (USDT: {usdt_bal}, USDC: {usdc_bal})")
                 
-                pnl_pct = (wallet_balance - self.initial_wallet_balance) / self.initial_wallet_balance if self.initial_wallet_balance > 0 else 0
+                # --- OVERHAUL: Circuit Breaker now also considers EQUITY DRAWDOWN (Unrealized) ---
+                # This stops the "mess" by reacting to bleeding positions before they are closed.
+                wallet_pnl_pct = (wallet_balance - self.initial_wallet_balance) / self.initial_wallet_balance if self.initial_wallet_balance > 0 else 0
+                equity_pnl_pct = (equity - self.initial_wallet_balance) / self.initial_wallet_balance if self.initial_wallet_balance > 0 else 0
                 
-                if pnl_pct <= -0.05: # 5% Daily Loss
-                    if not self.circuit_breaker_active:
-                        logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({pnl_pct:.2%}). Activating Circuit Breaker.")
-                        self.circuit_breaker_active = True
-                elif pnl_pct > -0.03: # Reset if we recover or restart with better balance
-                    self.circuit_breaker_active = False
+                # Use the worse of the two for the circuit breaker
+                effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
-                logger.info(f"Account Update: Wallet={wallet_balance:.4f}, Equity={equity:.4f}, PnL={unrealized_pnl:.4f} ({pnl_pct:.2%})")
+                if effective_pnl_pct <= -0.05: # 5% Daily Equity/Wallet Loss
+                    if not self.circuit_breaker_active:
+                        logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({effective_pnl_pct:.2%}). Activating Circuit Breaker.")
+                        self.circuit_breaker_active = True
                 
-                # --- EMERGENCY MARGIN GUARD ---
-                margin_ratio = 0.0
-                if 'info' in balance_data:
-                    info = balance_data['info']
-                    margin_ratio = float(info.get('marginRatio', 0)) or (float(info.get('totalMaintMargin', 0)) / margin_balance if margin_balance > 0 else 0)
+                # --- NEW: GLOBAL PANIC SELL ---
+                if effective_pnl_pct <= -self.panic_drawdown_threshold:
+                    logger.critical(f"🆘 GLOBAL PANIC: Drawdown at {effective_pnl_pct:.2%}. CLOSING ALL POSITIONS.")
+                    asyncio.create_task(self.emergency_cleanup_all())
+                    self.circuit_breaker_active = True
                 
-                if margin_ratio > 0.8: # 80% Margin Usage is DANGEROUS
-                    logger.critical(f"⚠️ DANGER: Margin Ratio at {margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
+                elif effective_pnl_pct > -0.03: # Reset if we recover or restart with better balance
+                    if self.circuit_breaker_active:
+                        logger.warning(f"🟢 Circuit Breaker Reset: Current loss at {effective_pnl_pct:.2%}")
+                        self.circuit_breaker_active = False
+
+                logger.info(f"Account Update: Wallet={wallet_balance:.4f}, Equity={equity:.4f}, PnL={unrealized_pnl:.4f} (Eff: {effective_pnl_pct:.2%})")
+                
+                if 'info' in balances:
+                    info = balances['info']
+                    # Attempt to get margin ratio from info or calculate it
+                    total_maint_margin = float(info.get('totalMaintMargin', 0))
+                    self.current_margin_ratio = float(info.get('marginRatio', 0)) or (total_maint_margin / equity if equity > 0 else 0)
+                
+                if self.current_margin_ratio > 0.8: # 80% Margin Usage is DANGEROUS
+                    logger.critical(f"⚠️ DANGER: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
                     worst_symbol = None
                     worst_pnl = 0
                     if active_pos:
@@ -754,7 +892,7 @@ class CryptoBot:
                             asyncio.create_task(self.close_position(worst_symbol, trade_to_close))
                 
                 self.latest_account_data['balance'] = wallet_balance
-                self.latest_account_data['equity'] = margin_balance
+                self.latest_account_data['equity'] = equity
                 self.latest_account_data['unrealized_pnl'] = unrealized_pnl
                 self.latest_account_data['alerts'] = self.alert_history
                 self.latest_account_data['positions'] = active_pos
@@ -885,3 +1023,28 @@ class CryptoBot:
         
     def get_account_data(self):
         return self.latest_account_data
+
+    async def emergency_cleanup_all(self):
+        """Emergency function to close every single open position immediately."""
+        try:
+            logger.warning("🛡️ Starting Emergency Cleanup of ALL positions...")
+            positions = await self.exchange.fetch_positions()
+            active_pos = [p for p in positions if float(p.get('contracts', 0) or 0) != 0]
+            
+            for pos in active_pos:
+                symbol = pos['symbol']
+                side = pos['side'].lower()
+                close_side = 'sell' if side == 'long' else 'buy'
+                amount = float(pos['contracts'])
+                
+                logger.warning(f"🆘 Emergency closing {symbol} ({amount} {side})")
+                await self.exchange.create_order(symbol, 'market', close_side, amount, None, {'reduceOnly': True})
+                
+                self.active_positions[symbol] = None
+                self.trade_levels[symbol] = None
+            
+            self.db.save_state("trade_levels", self.trade_levels)
+            logger.info("✅ All positions closed successfully.")
+            self.notifier.notify_alert("CRITICAL", "GLOBAL PANIC SELL EXECUTED", "All positions closed due to excess drawdown.")
+        except Exception as e:
+            logger.error(f"Failed to execute emergency cleanup: {e}")

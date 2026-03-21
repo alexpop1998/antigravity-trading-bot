@@ -7,27 +7,42 @@ logger = logging.getLogger("SignalManager")
 class SignalManager:
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        self.signals = {} # symbol -> list of current signals
-        self.min_conviction = 1.5 # Soglia minima per eseguire un ordine
+        self.signals = {} # symbol -> { 'side': 'buy'/'sell', 'score': 0.0, 'last_update': timestamp }
+        self.min_conviction = 5.0 # Even higher threshold for consensus (Overhaul requirement)
+        self.window_seconds = 300 # 5 minute window for signal aggregation
         
-        # Pesi per i diversi strumenti istituzionali
         self.weights = {
-            "NEWS": 1.0,
-            "WHALE": 1.5,
-            "LIQUIDATION": 0.8,
-            "DEX_ARBITRAGE": 2.0,
-            "GATEKEEPER": 1.2
+            "TECH": 1.0,     # Basic Technicals
+            "AI": 1.2,       # ML Prophet
+            "NEWS": 1.5,     # Sentiment (Social Scraper)
+            "GATEKEEPER": 2.0, # High impact news (AI Filtered)
+            "WHALE": 2.5,    # Massive on-chain moves
+            "LIQUIDATION": 1.5 # Exchange cascades
         }
 
     async def add_signal(self, symbol, type, side, weight_modifier=1.0):
+        now = time.time()
         weight = self.weights.get(type, 0.5) * weight_modifier
-        score = weight if side.lower() in ['buy', 'long'] else -weight
+        score_diff = weight if side.lower() in ['buy', 'long'] else -weight
         
-        logger.info(f"🚦 [Signal] {type} per {symbol}: {side.upper()} (Peso: {weight})")
+        if symbol not in self.signals or (now - self.signals[symbol]['last_update']) > self.window_seconds:
+            # New signal window
+            self.signals[symbol] = {'side': side, 'score': score_diff, 'last_update': now}
+        else:
+            # Aggregate within window
+            self.signals[symbol]['score'] += score_diff
+            self.signals[symbol]['last_update'] = now
+            # Update side based on total score polarity
+            self.signals[symbol]['side'] = 'buy' if self.signals[symbol]['score'] > 0 else 'sell'
+
+        current_total_score = self.signals[symbol]['score']
+        logger.info(f"🚦 [Consensus] {symbol} Total Score: {current_total_score:.2f} (Added {type}: {side})")
         
-        # In una versione Pro, qui aggreghiamo segnali multipli in una finestra temporale
-        # Per ora, se il segnale è molto forte (Whale o DEX), eseguiamo subito.
-        if abs(score) >= self.min_conviction:
-            logger.warning(f"🔥 CONVIZIONE ALTA raggiunta per {symbol} via {type}. Esecuzione immediata.")
-            return True
-        return False
+        if abs(current_total_score) >= self.min_conviction:
+            logger.warning(f"🔥 CONSENSUS REACHED for {symbol} (Score: {current_total_score:.2f}). Approving execution.")
+            final_score = abs(current_total_score)
+            # Reset score after approval to prevent double-firing in the same window
+            self.signals[symbol]['score'] = 0 
+            return True, final_score
+            
+        return False, 0

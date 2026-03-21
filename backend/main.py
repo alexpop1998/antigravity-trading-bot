@@ -173,18 +173,19 @@ async def test_news(req: TestNewsRequest):
 
 class TestWhaleRequest(BaseModel):
     btc_amount: float
+    ticker: str = "BTC/USDT:USDT"
 
 @app.post("/api/test-whale")
 async def test_whale(req: TestWhaleRequest):
-    logger.info(f"TEST: Simulating Whale Alert for {req.btc_amount} BTC")
-    # Triggering the logic directly
-    if trading_bot.active_positions.get('BTC/USDT:USDT') != 'SHORT':
-        current_price = trading_bot.latest_data.get('BTC/USDT:USDT', {}).get('price', 0)
+    ticker = req.ticker
+    logger.info(f"TEST: Simulating Whale Alert for {req.btc_amount} BTC on {ticker}. Current Data: {trading_bot.latest_data.get(ticker)}")
+    if trading_bot.active_positions.get(ticker) != 'SHORT':
+        current_price = trading_bot.latest_data.get(ticker, {}).get('price', 0)
         if current_price > 0:
-            trading_bot.active_positions['BTC/USDT:USDT'] = 'SHORT'
-            asyncio.create_task(trading_bot.execute_order('BTC/USDT:USDT', 'sell', current_price, is_black_swan=True))
-            return {"status": "success", "message": f"Whale signal triggered for {req.btc_amount} BTC"}
-    return {"status": "ignored", "message": "Symbol not ready or already in SHORT"}
+            trading_bot.active_positions[ticker] = 'SHORT'
+            asyncio.create_task(trading_bot.execute_order(ticker, 'sell', current_price, is_black_swan=True, confidence_modifier=5.0))
+            return {"status": "success", "message": f"Whale signal triggered for {req.btc_amount} BTC on {ticker}"}
+    return {"status": "ignored", "message": f"Symbol {ticker} not ready or already in SHORT"}
 
 @app.post("/api/test-liquidation")
 async def test_liquidation():
