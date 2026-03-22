@@ -413,9 +413,9 @@ class CryptoBot:
         # Don't open LONGs if the funding rate is extreme (>0.05%)
         current_funding = self.latest_data.get(symbol, {}).get('funding_rate', 0)
         if tech_side == 'buy' and current_funding > 0.0005: # 0.05%
-             logger.warning(f"🚫 [FUNDING GUARD] Skipping LONG on {symbol} due to high funding rate: {current_funding*100:.3f}%")
-             is_technical_signal = False
-             tech_side = None
+            logger.warning(f"🚫 [FUNDING GUARD] Skipping LONG on {symbol} due to high funding rate: {current_funding*100:.3f}%")
+            is_technical_signal = False
+            tech_side = None
 
         # --- CONSENSUS ENGINE: Routing signals to SignalManager ---
         if is_technical_signal:
@@ -604,49 +604,60 @@ class CryptoBot:
             close_side = 'sell' if is_long else 'buy'
             
             # --- BUG FIX: Ensure amount is formatted as a clean string for ccxt/decimal ---
-            amount = float(trade.get('amount', 0)) * partial_pct
+            total_amount = float(trade.get('amount', 0))
+            amount_to_close = total_amount * partial_pct
+            
             # Precision adjustment using ccxt helper
-            amount_str = self.exchange.amount_to_precision(symbol, amount)
-            amount = float(amount_str)
+            amount_str = self.exchange.amount_to_precision(symbol, amount_to_close)
+            amount_to_close = float(amount_str)
             
-            logger.info(f"🔄 Closing position for {symbol}: side={close_side}, amount_str='{amount_str}', amount_float={amount}")
-            
-            if amount <= 0:
+            if amount_to_close <= 0:
                 logger.warning(f"Skipping closure for {symbol}: amount too small.")
                 return
 
-            # --- BUG FIX: Use a clean float or string to avoid decimal issues in some ccxt versions ---
-            logger.info(f"Closing position for {symbol} ({'PARTIAL' if partial_pct < 1 else 'FULL'}): {close_side} {amount}")
-            # --- BUG FIX: Pass price=current_price even for Market orders to avoid CCXT 4.2.53 bug with None conversion ---
-            # Binance ignores the price for MARKET orders anyway.
-            current_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
-            await self.exchange.create_order(symbol, 'market', close_side, amount, current_price, {'reduceOnly': True})
+            logger.info(f"🔄 Closing position for {symbol} ({'PARTIAL' if partial_pct < 1 else 'FULL'}): {close_side} {amount_to_close}")
+            
+            # --- IMPROVEMENT: Capture actual execution price from order response ---
+            # Binance MARKET orders return fill information in the 'fills' property of the response
+            # or 'average' price if unified by CCXT.
+            order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, {'reduceOnly': True})
+            
+            # Extract execution details
+            order_id = order_response.get('id')
+            execution_price = float(order_response.get('average') or order_response.get('price', 0))
+            
+            # Fallback for execution price if not in response
+            if execution_price <= 0:
+                execution_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
+                logger.warning(f"⚠️ Could not get execution price from order response for {symbol}. Using last known price: {execution_price}")
             
             if partial_pct >= 1.0:
-                logger.info(f"Position closed successfully for {symbol}.")
+                logger.info(f"Position closed successfully for {symbol} @ {execution_price}.")
                 self.active_positions[symbol] = None
-                
-                # Calculate PnL for logging
-                exit_price = current_price
-                entry_price = float(trade.get('entry_price', exit_price))
-                pnl = (exit_price - entry_price) * amount if is_long else (entry_price - exit_price) * amount
-                self.db.log_trade(symbol, "CLOSE", exit_price, amount, pnl, f"EXIT")
-                
-                self.notifier.notify_trade(symbol, "CLOSE", exit_price, amount, "EXIT", pnl=pnl)
+                # Mark for deletion in trade_levels to avoid re-sync race
+                self.trade_levels[symbol] = None
             else:
                 # Update remaining amount in state
-                trade['amount'] = float(trade['amount']) - amount
-                logger.info(f"Partial closure successful for {symbol}. Remaining: {trade['amount']}")
-                
-                # Log partial closure too
-                exit_price = current_price
-                entry_price = float(trade.get('entry_price', exit_price))
-                pnl = (exit_price - entry_price) * amount if is_long else (entry_price - exit_price) * amount
-                self.db.log_trade(symbol, "CLOSE_PARTIAL", exit_price, amount, pnl, "PARTIAL_EXIT")
-                self.notifier.notify_trade(symbol, "CLOSE", exit_price, amount, "PARTIAL_EXIT", pnl=pnl)
+                trade['amount'] = total_amount - amount_to_close
+                logger.info(f"Partial closure successful for {symbol}. Remaining: {trade['amount']} @ {execution_price}")
+            
+            # Calculate PnL for logging using ACTUAL execution price
+            entry_price = float(trade.get('entry_price', execution_price))
+            pnl = (execution_price - entry_price) * amount_to_close if is_long else (entry_price - execution_price) * amount_to_close
+            
+            # Log with exchange_trade_id to prevent duplicates in sync_binance_trades
+            reason = "EXIT" if partial_pct >= 1.0 else "PARTIAL_EXIT"
+            self.db.log_trade(symbol, "CLOSE" if partial_pct >= 1.0 else "CLOSE_PARTIAL", execution_price, amount_to_close, pnl, reason, exchange_trade_id=order_id)
+            
+            self.notifier.notify_trade(symbol, "CLOSE", execution_price, amount_to_close, reason, pnl=pnl)
+            
+            # Save state immediately to persist closure
+            self.db.save_state("trade_levels", self.trade_levels)
                 
         except Exception as e:
-            logger.error(f"Failed to close position for {symbol}: {e}")    # Calculate dynamic order amount based on risk capital, equity, and confidence
+            logger.error(f"Failed to close position for {symbol}: {e}")
+            logger.error(traceback.format_exc())
+    # Calculate dynamic order amount based on risk capital, equity, and confidence
     def _calculate_order_amount(self, symbol, current_price, custom_leverage=None, confidence_modifier=1.0):
         leverage = custom_leverage if custom_leverage else self.leverage
         
@@ -1102,47 +1113,54 @@ class CryptoBot:
                             side = pos.get('side', '').lower()
                             self.active_positions[symbol] = side.upper()
                             
+                            # --- IMPROVED RE-SYNC: Only sync if not already in state ---
                             if self.trade_levels.get(symbol) is None:
-                                entry_price = float(pos.get('entryPrice', 0))
-                                amount = float(pos.get('contracts', 0))
-                                if entry_price > 0:
-                                    logger.info(f"🔄 Re-syncing trade levels for {symbol} from existing position @ {entry_price}")
-                                    current_atr = self.latest_data[symbol].get('atr', entry_price * 0.01) if symbol in self.latest_data else entry_price * 0.01
-                                    if current_atr == "N/A" or not current_atr:
-                                        current_atr = entry_price * 0.01
+                                # Double check active_positions to avoid re-syncing something currently being closed
+                                if self.active_positions.get(symbol) is not None:
+                                    entry_price = float(pos.get('entryPrice', 0))
+                                    amount = float(pos.get('contracts', 0))
+                                    if entry_price > 0:
+                                        logger.info(f"🔄 Re-syncing trade levels for {symbol} from existing position @ {entry_price}")
+                                        current_atr = self.latest_data[symbol].get('atr', entry_price * 0.01) if symbol in self.latest_data else entry_price * 0.01
+                                        if current_atr == "N/A" or not current_atr:
+                                            current_atr = entry_price * 0.01
 
-                                    # --- TIGHTER RISK MANAGEMENT ---
-                                    # Relax SL/TP constraints to avoid premature closures
-                                    sl_distance = current_atr * 2.2
-                                    tp1_distance = current_atr * 3.0
-                                    tp2_distance = current_atr * 6.0
-                                    
-                                    if side == 'long':
-                                        sl = entry_price - sl_distance
-                                        tp1 = entry_price + tp1_distance
-                                        tp2 = entry_price + tp2_distance
-                                    else:
-                                        sl = entry_price + sl_distance
-                                        tp1 = entry_price - tp1_distance
-                                        tp2 = entry_price - tp2_distance
-                                    
-                                    self.trade_levels[symbol] = {
-                                        'side': side,
-                                        'entry_price': entry_price,
-                                        'sl': float(self.exchange.price_to_precision(symbol, sl)),
-                                        'sl_distance': sl_distance,
-                                        'tp1': float(self.exchange.price_to_precision(symbol, tp1)),
-                                        'tp2': float(self.exchange.price_to_precision(symbol, tp2)),
-                                        'amount': amount,
-                                        'tp1_hit': False,
-                                        'highest_price': entry_price if side == 'long' else 0,
-                                        'lowest_price': entry_price if side != 'long' else 0
-                                    }
+                                        # --- TIGHTER RISK MANAGEMENT ---
+                                        # Relax SL/TP constraints to avoid premature closures
+                                        sl_distance = current_atr * 2.2
+                                        tp1_distance = current_atr * 3.0
+                                        tp2_distance = current_atr * 6.0
+                                        
+                                        if side == 'long':
+                                            sl = entry_price - sl_distance
+                                            tp1 = entry_price + tp1_distance
+                                            tp2 = entry_price + tp2_distance
+                                        else:
+                                            sl = entry_price + sl_distance
+                                            tp1 = entry_price - tp1_distance
+                                            tp2 = entry_price - tp2_distance
+                                        
+                                        self.trade_levels[symbol] = {
+                                            'side': side,
+                                            'entry_price': entry_price,
+                                            'sl': float(self.exchange.price_to_precision(symbol, sl)),
+                                            'sl_distance': sl_distance,
+                                            'tp1': float(self.exchange.price_to_precision(symbol, tp1)),
+                                            'tp2': float(self.exchange.price_to_precision(symbol, tp2)),
+                                            'amount': amount,
+                                            'tp1_hit': False,
+                                            'highest_price': entry_price if side == 'long' else 0,
+                                            'lowest_price': entry_price if side != 'long' else 0
+                                        }
                         else:
-                            self.active_positions[symbol] = None
-                            self.trade_levels[symbol] = None
+                            # Only clear if we not currently in a pending closure
+                            if symbol not in self.active_positions or self.active_positions[symbol] is not None:
+                                self.active_positions[symbol] = None
+                                self.trade_levels[symbol] = None
                 else:
                     for symbol in self.symbols:
+                        # Only clear if we are not currently trying to open or close something for this symbol
+                        # (Checking positions directly from Binance is the source of truth)
                         self.active_positions[symbol] = None
                         self.trade_levels[symbol] = None
                 
@@ -1237,7 +1255,8 @@ class CryptoBot:
                 amount = float(pos['contracts'])
                 
                 logger.warning(f"🆘 Emergency closing {symbol} ({amount} {side})")
-                await self.exchange.create_order(symbol, 'market', close_side, amount, None, {'reduceOnly': True})
+                current_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
+                await self.exchange.create_order(symbol, 'market', close_side, amount, current_price, {'reduceOnly': True})
                 
                 self.active_positions[symbol] = None
                 self.trade_levels[symbol] = None

@@ -148,6 +148,3 @@ class NewsRadar:
                                 
         except Exception as e:
             logger.error(f"Failed to reach MiroFish: {e}")
-                                
-        except Exception as e:
-            logger.error(f"Failed to reach MiroFish: {e}")

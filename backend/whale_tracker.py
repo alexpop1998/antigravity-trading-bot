@@ -51,7 +51,7 @@ class WhaleTracker:
                                         logger.warning(f"Whale Tracker triggering emergency SHORT on {symbol} @ ${current_price} (Confirmed by Exchange Volume ${vol24h:,.0f})")
                                         self.bot.add_alert("WHALE", f"Large Movement Detected: {btc_value:.2f} BTC", f"${current_price}")
                                         # Use handle_signal to route via consensus
-                                        asyncio.create_task(self.bot.handle_signal(symbol, "WHALE", "sell", is_black_swan=True))
+                                        asyncio.create_task(self.bot.handle_signal(symbol, "WHALE", "sell", is_black_swan=True, current_price=current_price))
                                     else:
                                         logger.info(f"Whale Tracker: Large On-Chain Movement {btc_value:.2f} BTC detected, but {symbol} exchange volume is low (${vol24h:,.0f}). No signal sent.")
                                 

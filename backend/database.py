@@ -116,9 +116,10 @@ class BotDatabase:
                     continue # Skip trades without time
                 
                 try:
-                    # Usiamo INSERT OR IGNORE sfruttando il vincolo UNIQUE su exchange_trade_id
+                    # Usiamo INSERT OR REPLACE per assicurarci che i dati di Binance (il "fatto") 
+                    # sovrascrivano eventuali log manuali del bot (l'"intento") per lo stesso trade_id.
                     cursor.execute('''
-                        INSERT OR IGNORE INTO trade_history 
+                        INSERT OR REPLACE INTO trade_history 
                         (timestamp, symbol, side, price, amount, pnl, reason, exchange_trade_id)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (dt_str, symbol, side, price, amount, pnl, "BINANCE", exchange_trade_id))

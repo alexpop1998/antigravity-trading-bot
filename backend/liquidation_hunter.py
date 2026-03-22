@@ -45,7 +45,7 @@ class LiquidationHunter:
                                 if self.bot and formatted_symbol in self.bot.symbols:
                                     self.bot.add_alert("LIQUIDATION", f"{cascade_type} {symbol}", f"${price}")
                                     side_signal = 'buy' if side == 'SELL' else 'sell'
-                                    asyncio.create_task(self.bot.handle_signal(formatted_symbol, "LIQUIDATION", side_signal, is_black_swan=True))
+                                    asyncio.create_task(self.bot.handle_signal(formatted_symbol, "LIQUIDATION", side_signal, is_black_swan=True, current_price=price))
 
             except Exception as e:
                 logger.error(f"SqueezeHunter disconnected: {e}. Reconnecting in 5s...")
