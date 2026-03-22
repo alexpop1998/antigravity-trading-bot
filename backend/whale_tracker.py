@@ -40,11 +40,20 @@ class WhaleTracker:
                                 # Send signal to trading bot for extreme defensive SHORT (Anticipating a dump)
                                 if self.bot:
                                     symbol = 'BTC/USDT:USDT'
-                                    current_price = self.bot.latest_data.get(symbol, {}).get('price', 0)
-                                    logger.warning(f"Whale Tracker triggering emergency SHORT on {symbol} @ ${current_price}")
-                                    self.bot.add_alert("WHALE", f"Large Movement Detected: {btc_value:.2f} BTC", f"${current_price}")
-                                    # Usa handle_signal invece di execute_order diretto
-                                    asyncio.create_task(self.bot.handle_signal(symbol, "WHALE", "sell", is_black_swan=True))
+                                    
+                                    # Volume Confirmation Requirement: Only act if exchange volume is substantial
+                                    latest_data = self.bot.latest_data.get(symbol, {})
+                                    current_price = latest_data.get('price', 0)
+                                    vol24h = latest_data.get('volume24h', 0)
+                                    
+                                    # If volume is extremely low, this might be internal shuffling or cold storage, wait for exchange confirmation
+                                    if vol24h > 15000000: # Example threshold: $15M 24h volume to qualify
+                                        logger.warning(f"Whale Tracker triggering emergency SHORT on {symbol} @ ${current_price} (Confirmed by Exchange Volume ${vol24h:,.0f})")
+                                        self.bot.add_alert("WHALE", f"Large Movement Detected: {btc_value:.2f} BTC", f"${current_price}")
+                                        # Use handle_signal to route via consensus
+                                        asyncio.create_task(self.bot.handle_signal(symbol, "WHALE", "sell", is_black_swan=True))
+                                    else:
+                                        logger.info(f"Whale Tracker: Large On-Chain Movement {btc_value:.2f} BTC detected, but {symbol} exchange volume is low (${vol24h:,.0f}). No signal sent.")
                                 
             except Exception as e:
                 logger.error(f"WhaleTracker disconnect: {e}. Reconnecting in 5s...")

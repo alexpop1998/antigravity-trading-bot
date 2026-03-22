@@ -256,6 +256,16 @@ from typing import Optional
 async def ping():
     return {"status": "ok", "message": "pong"}
 
+@app.post("/api/reset-circuit-breaker")
+async def reset_circuit_breaker():
+    if not trading_bot:
+        return {"status": "error", "message": "Bot non inizializzato"}
+    success = await trading_bot.reset_circuit_breaker()
+    if success:
+        return {"status": "success", "message": "Circuit Breaker resettato correttamente"}
+    else:
+        return {"status": "error", "message": "Errore durante il reset del Circuit Breaker"}
+
 @app.get("/api/history")
 async def get_history(start: Optional[str] = None, end: Optional[str] = None):
     if not trading_bot or not trading_bot.db:

@@ -33,13 +33,30 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Errore connessione Telegram: {e}")
 
-    def notify_trade(self, symbol, side, price, amount, reason=""):
-        emoji = "🚀" if side.lower() in ['buy', 'long'] else "🩸"
-        msg = f"{emoji} *TRADE EXECUTED*\n\n" \
+    def notify_trade(self, symbol, side, price, amount, reason="", pnl=None):
+        if side.upper() == "CLOSE":
+            if pnl is not None:
+                emoji = "💰" if pnl >= 0 else "💀"
+                pnl_str = f"PnL: `{pnl:+.2f} USDT`"
+            else:
+                emoji = "🏁"
+                pnl_str = ""
+        else:
+            emoji = "🚀" if side.lower() in ['buy', 'long'] else "🩸"
+            pnl_str = ""
+
+        msg = f"{emoji} *TRADE {'EXECUTED' if side.upper() != 'CLOSE' else 'CLOSED'}*\n\n" \
               f"Instrument: `{symbol}`\n" \
               f"Side: `{side.upper()}`\n" \
               f"Price: `{price}`\n" \
-              f"Reason: `{reason}`"
+              f"Amount: `{amount}`\n"
+        
+        if pnl_str:
+            msg += f"{pnl_str}\n"
+            
+        if reason:
+            msg += f"Reason: `{reason}`"
+            
         asyncio.create_task(self.send_message(msg))
 
     def notify_alert(self, type, title, value=""):

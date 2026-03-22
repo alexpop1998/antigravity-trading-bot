@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 import os
 import json
 import time
+from datetime import datetime
+from collections import deque
 from ml_predictor import MLPredictor
 from database import BotDatabase
 from telegram_notifier import TelegramNotifier
@@ -108,10 +110,13 @@ class CryptoBot:
         # Risk Management & Guards
         self.circuit_breaker_active = False
         self.symbol_blacklist = set()
-        self.initial_wallet_balance = None
+        self.initial_wallet_balance: Optional[float] = None
+        self.previous_prices: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
+        # 5-minute rolling window (10 updates of 30s)
+        self.price_windows: Dict[str, deque] = {symbol: deque(maxlen=10) for symbol in self.symbols}
         self.panic_drawdown_threshold = 0.10 # 10% Total Equity Drawdown
         self.min_leverage = 2
-        self.max_leverage = 10
+        self.max_leverage = 25
         self.sector_caps = {"MEME": 3, "L1": 3, "ALTS": 4} # Limit per sector
         self.sector_mapping = {
             "BTC/USDT": "MAJOR", "ETH/USDT": "MAJOR", "SOL/USDT": "L1", 
@@ -243,6 +248,24 @@ class CryptoBot:
             # --- EMA 200 Calculation (Trend Filter) ---
             df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
             current_ema200 = df['ema200'].iloc[-1]
+
+            # --- ADX (Average Directional Index) Calculation ---
+            plus_dm = df['high'].diff()
+            minus_dm = df['low'].diff().multiply(-1)
+            plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
+            minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+            
+            # Smoothing TR, +DM, -DM (Wilder's Smoothing)
+            period = 14
+            smoothed_tr = df['tr'].rolling(window=period).mean() # Simple mean for now
+            smoothed_plus_dm = plus_dm.rolling(window=period).mean()
+            smoothed_minus_dm = minus_dm.rolling(window=period).mean()
+            
+            plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
+            minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
+            dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di))
+            df['adx'] = dx.rolling(window=period).mean()
+            current_adx = df['adx'].iloc[-1]
             
             # --- Order Book Imbalance Calculation ---
             orderbook = await self.exchange.fetch_order_book(symbol, limit=100)
@@ -250,6 +273,48 @@ class CryptoBot:
             asks = sum(float(ask[1]) for ask in orderbook['asks'])
             imbalance = bids / asks if asks > 0 else 1.0
             
+            # --- FLASH & RECOVERY DETECTION (5m Rolling Window) ---
+            prev_price = self.previous_prices.get(symbol, current_close)
+            window = self.price_windows[symbol]
+            window.append(current_close)
+            
+            # Compare current price to the start of the 5-minute window
+            if len(window) >= 2:
+                reference_price = window[0]
+                change_5m_pct = (current_close - reference_price) / reference_price
+                
+                # --- VOL CONFIRMATION CHECK ---
+                current_candle_vol = float(df['volume'].iloc[-1])
+                avg_recent_vol = float(df['volume'].rolling(window=10).mean().iloc[-2]) if len(df) > 10 else 1.0
+                is_high_volume = current_candle_vol > (avg_recent_vol * 1.5)
+                
+                # 1. Detect Flash Event (Dump or Pump) - 1.2% threshold for 5 mins
+                is_event_dump = change_5m_pct < -0.012
+                is_event_pump = change_5m_pct > 0.012
+                
+                if is_event_dump:
+                    logger.info(f"⚠️ [FLASH] Potential DUMP detected for {symbol} ({change_5m_pct:.2%} in 5m)")
+                    asyncio.create_task(self.handle_signal(symbol, "EVENT_DUMP", "sell", weight_modifier=1.0))
+                if is_event_pump:
+                    logger.info(f"⚠️ [FLASH] Potential PUMP detected for {symbol} ({change_5m_pct:.2%} in 5m)")
+                    asyncio.create_task(self.handle_signal(symbol, "EVENT_PUMP", "buy", weight_modifier=1.0))
+                    
+                # 2. Detect V-Shape Recovery (Absorption)
+                if is_event_dump and current_rsi < 28: # Slightly relaxed RSI for recovery
+                    # Price is starting to tick up from the bottom of the move with Volume Confirmation
+                    if current_close > prev_price and is_high_volume:
+                        logger.warning(f"🛡️ [RE-ABSORPTION] RECOVERY LONG for {symbol} after {change_5m_pct:.2%} drop!")
+                        asyncio.create_task(self.handle_signal(symbol, "RECOVERY", "buy", weight_modifier=1.0, is_black_swan=True, current_price=current_close, ema200=current_ema200))
+                
+                elif is_event_pump and current_rsi > 72:
+                    # Price is starting to tick down from the top of the pump with Volume Confirmation
+                    if current_close < prev_price and is_high_volume:
+                        logger.warning(f"🛡️ [REJECTION] REJECTION SHORT for {symbol} after {change_5m_pct:.2%} pump!")
+                        asyncio.create_task(self.handle_signal(symbol, "REJECTION", "sell", weight_modifier=1.0, is_black_swan=True, current_price=current_close, ema200=current_ema200))
+
+            # Store current price for next cycle velocity tracking
+            self.previous_prices[symbol] = current_close
+
             ticker = await self.exchange.fetch_ticker(symbol)
             # 24h Volume Guard (USD or Quote Currency)
             quote_volume = float(ticker.get('quoteVolume', 0))
@@ -287,12 +352,12 @@ class CryptoBot:
             }
             
             self._check_soft_stop_loss(symbol, current_close)
-            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr)
+            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx)
             
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
 
-    def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance, ema200, volume24h, atr):
+    def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance, ema200, volume24h, atr, adx):
         if pd.isna(rsi) or pd.isna(macd_hist) or pd.isna(bb_lower) or pd.isna(ema200):
             return
             
@@ -330,19 +395,31 @@ class CryptoBot:
         is_technical_signal = False
         tech_side = None
         
+        # --- ADX TREND FILTER ---
+        # Don't take trend-following signals if we're in a sideways range (ADX < 25)
+        is_trending = adx > 25 if not pd.isna(adx) else True
+        
         if rsi < 30 and macd_hist > 0 and price <= (bb_lower * 1.01):
-            if price_above_ema: # Trend-following LONG
+            if price_above_ema and is_trending: # Trend-following LONG
                 tech_side = 'buy'
                 is_technical_signal = True
             
         elif rsi > 70 and macd_hist < 0 and price >= (bb_upper * 0.99):
-            if not price_above_ema: # Trend-following SHORT
+            if not price_above_ema and is_trending: # Trend-following SHORT
                 tech_side = 'sell'
                 is_technical_signal = True
 
+        # --- FUNDING RATE FILTER (DEEPSEEK REFACTOR) ---
+        # Don't open LONGs if the funding rate is extreme (>0.05%)
+        current_funding = self.latest_data.get(symbol, {}).get('funding_rate', 0)
+        if tech_side == 'buy' and current_funding > 0.0005: # 0.05%
+             logger.warning(f"🚫 [FUNDING GUARD] Skipping LONG on {symbol} due to high funding rate: {current_funding*100:.3f}%")
+             is_technical_signal = False
+             tech_side = None
+
         # --- CONSENSUS ENGINE: Routing signals to SignalManager ---
         if is_technical_signal:
-             asyncio.create_task(self.handle_signal(symbol, "TECH", tech_side, weight_modifier=1.0))
+             asyncio.create_task(self.handle_signal(symbol, "TECH", tech_side, weight_modifier=1.0, current_price=price, ema200=ema200))
 
         # --- LOGIC GUARD 3: Volatility (ATR-based skip) ---
         # Skip if ATR is less than 0.2% of price (stagnant) or more than 5% (extreme volatility)
@@ -350,17 +427,18 @@ class CryptoBot:
         if atr_pct < 0.002 or atr_pct > 0.05:
             return
 
-        # 3. AI Predictive Alpha (Machine Learning Prophet)
+        # 3. AI Predictive Alpha (Machine Learning Classifier)
         prediction = self.latest_data[symbol].get('prediction')
-        if isinstance(prediction, (int, float)) and prediction > 0:
-            price_diff_pct = (prediction - price) / price
-            # Confidence Threshold: 1.0% expected move
-            if price_diff_pct > 0.01 and price_above_ema:
-                asyncio.create_task(self.handle_signal(symbol, "AI", "buy", weight_modifier=1.2))
-            elif price_diff_pct < -0.01 and not price_above_ema:
-                asyncio.create_task(self.handle_signal(symbol, "AI", "sell", weight_modifier=1.2))
+        if isinstance(prediction, dict) and 'direction' in prediction:
+            direction = prediction['direction']
+            confidence = prediction['confidence']
+            # Confidence Threshold: 0.55
+            if direction == 1 and confidence > 0.55 and price_above_ema:
+                asyncio.create_task(self.handle_signal(symbol, "AI", "buy", weight_modifier=1.2, current_price=price, ema200=ema200))
+            elif direction == 0 and confidence > 0.55 and not price_above_ema:
+                asyncio.create_task(self.handle_signal(symbol, "AI", "sell", weight_modifier=1.2, current_price=price, ema200=ema200))
 
-    async def handle_signal(self, symbol, type, side, weight_modifier=1.0, is_black_swan=False):
+    async def handle_signal(self, symbol, type, side, weight_modifier=1.0, is_black_swan=False, current_price=None, ema200=None):
         """
         Receives signals from various sources (TECH, AI, NEWS, etc.) and forwards them 
         to the SignalManager for consensus aggregation.
@@ -368,15 +446,33 @@ class CryptoBot:
         if not self.signal_manager:
             return
             
-        approved, consensus_score = await self.signal_manager.add_signal(symbol, type, side, weight_modifier)
+        approved, consensus_score = await self.signal_manager.add_signal(symbol, type, side, weight_modifier, current_price=current_price, ema200=ema200)
         
         if approved:
+            # --- MASTER CONTROLLER: NET EXPOSURE & PRIORITY ---
+            existing_pos = self.active_positions.get(symbol)
+            if existing_pos:
+                # 1. Prevent conflicting positions (Long vs Short)
+                existing_side = 'buy' if existing_pos == 'LONG' else 'sell'
+                if existing_side != side.lower():
+                    logger.warning(f"🚫 [MASTER CONTROLLER] Conflicting signal for {symbol}: Already in {existing_pos}. Skipping {side.upper()} {type}.")
+                    return
+
+            # 2. Pause Standard Signals during High-Impact Events (HIE)
+            # Check if current trade is HIE and we are trying a standard signal
+            current_trade = self.trade_levels.get(symbol)
+            if current_trade:
+                is_hie_running = current_trade.get('signal_type') in ["WHALE", "LIQUIDATION", "RECOVERY", "REJECTION"]
+                if is_hie_running and type in ["TECH", "AI"]:
+                    logger.info(f"⏳ [MASTER CONTROLLER] Standard {type} signal paused for {symbol} due to active HIE scalp.")
+                    return
+
             # Check global margin ratio instead of fixed position count
             if self.current_margin_ratio < self.max_global_margin_ratio or is_black_swan:
                     self.active_positions[symbol] = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
                     self.pending_orders_count += 1
                     
-                    await self.execute_order(symbol, side.lower(), self.latest_data[symbol]['price'], is_black_swan=is_black_swan, consensus_score=consensus_score)
+                    await self.execute_order(symbol, side.lower(), self.latest_data[symbol]['price'], is_black_swan=is_black_swan, consensus_score=consensus_score, signal_type=type)
 
     def _check_soft_stop_loss(self, symbol, current_price):
         trade = self.trade_levels.get(symbol)
@@ -408,67 +504,92 @@ class CryptoBot:
             if sl_distance < min_dist:
                 sl_distance = min_dist
         
-        # --- Trailing Stop-Loss Logic ---
-        if 'highest_price' not in trade and is_long:
-            trade['highest_price'] = current_price
-        if 'lowest_price' not in trade and not is_long:
-            trade['lowest_price'] = current_price
+        # --- RECOVERY EARLY EXIT: Mean Reversion Complete ---
+        sig_type = trade.get('signal_type')
+        current_rsi = self.latest_data.get(symbol, {}).get('rsi')
+        
+        if sig_type in ["RECOVERY", "REJECTION"] and isinstance(current_rsi, (int, float)):
+            entry_price = float(trade.get('entry_price', current_price))
+            pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
             
+            # Logic: Require RSI to cross 55/45 (stronger neutral) AND have at least 0.5% profit to cover fees
+            if (is_long and current_rsi > 55 and pnl_pct > 0.005) or (not is_long and current_rsi < 45 and pnl_pct > 0.005):
+                logger.warning(f"🏁 [{sig_type}] Closing {symbol} - RSI {current_rsi} reached exit threshold with profit {pnl_pct:.2%}")
+                asyncio.create_task(self.close_position(symbol, trade))
+                return
+        
+        # --- Trailing Stop-Loss Logic ---
+        # DEEPSEEK REFACTOR: Disable trailing stop for News (GATEKEEPER) for the first 15m
+        if trade.get('trailing_delayed'):
+            elapsed = time.time() - float(trade.get('opened_at', 0))
+            if elapsed < 900: # 15 minutes
+                logger.debug(f"⏳ [NEWS TRAILING DELAY] Waiting for volatility to settle for {symbol}...")
+            else:
+                trade['trailing_delayed'] = False
+                logger.info(f"✅ [NEWS TRAILING ACTIVE] Normal trailing stop enabled for {symbol}.")
+        
         should_close = False
         reason = ""
+        entry_price = float(trade.get('entry_price', current_price))
+        sl = float(trade.get('sl', 0))
         
         if is_long:
-            # Update trailing high and move SL up
-            highest = float(trade.get('highest_price', 0))
-            if current_price > highest:
+            # 1. Update Trailing High
+            if current_price > trade.get('highest_price', 0):
                 trade['highest_price'] = current_price
-                # Move SL up if price has moved significantly (trailing gap)
-                new_sl = current_price - sl_distance
-                if new_sl > sl:
-                    trade['sl'] = new_sl
-                    logger.info(f"📈 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
+                # Update Trailing SL if not delayed
+                if not trade.get('trailing_delayed'):
+                    new_sl = current_price - sl_distance
+                    if new_sl > sl:
+                        trade['sl'] = new_sl
+                        sl = new_sl
+                        logger.info(f"📈 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
             
-            if current_price <= trade.get('sl', 0):
+            # 2. Check Exit Conditions
+            if current_price <= sl:
                 should_close = True
-                reason = "STOP-LOSS (TRAILING)" if 'highest_price' in trade else "STOP-LOSS"
+                reason = "STOP-LOSS (TRAILING)" if trade.get('highest_price', 0) > entry_price else "STOP-LOSS"
             elif current_price >= tp2:
-                # Final TP
                 should_close = True
                 reason = "TAKE-PROFIT 2 (FINAL)"
             elif current_price >= tp1:
-                # PARTIAL TAKE PROFIT (PTP)
+                # Partial Take Profit (TP1)
                 if not trade.get('tp1_hit', False):
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
                     trade['tp1_hit'] = True
-                    # Move SL to break-even to protect remaining 50%
-                    trade['sl'] = max(trade.get('entry_price', current_price), trade.get('sl', 0))
+                    # Move SL to fee-covering break-even (Entry + 0.15% profit)
+                    offset = entry_price * 0.0015
+                    trade['sl'] = max(entry_price + offset, trade.get('sl', 0))
                     
         else: # SHORT
-            # FIX #2: Update trailing low and move SL DOWN (not up) as price falls
+            # 1. Update Trailing Low
             if current_price < trade.get('lowest_price', 999999):
                 trade['lowest_price'] = current_price
-                new_sl = current_price + sl_distance
-                # For SHORT: new_sl must be LOWER than the current sl to advance the trailing stop
-                if new_sl < sl:
-                    trade['sl'] = new_sl
-                    sl = new_sl  # update local var too
-                    logger.info(f"📉 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
-                    
-            if current_price >= trade.get('sl', 999999):
+                # Update Trailing SL if not delayed
+                if not trade.get('trailing_delayed'):
+                    new_sl = current_price + sl_distance
+                    if sl == 0 or new_sl < sl: # sl == 0 should not happen but for safety
+                        trade['sl'] = new_sl
+                        sl = new_sl
+                        logger.info(f"📉 TRAILING STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
+            
+            # 2. Check Exit Conditions
+            if current_price >= sl:
                 should_close = True
-                reason = "STOP-LOSS (TRAILING)" if trade.get('lowest_price', 999999) < trade.get('entry_price', 999999) else "STOP-LOSS"
+                reason = "STOP-LOSS (TRAILING)" if trade.get('lowest_price', 999999) < entry_price else "STOP-LOSS"
             elif current_price <= tp2:
-                # Final TP
                 should_close = True
                 reason = "TAKE-PROFIT 2 (FINAL)"
             elif current_price <= tp1:
+                # Partial Take Profit (TP1)
                 if not trade.get('tp1_hit', False):
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
                     trade['tp1_hit'] = True
-                    # Move SL to break-even (entry price) to protect remaining 50%
-                    trade['sl'] = min(trade.get('entry_price', current_price), trade.get('sl', 999999))
+                    # Move SL to fee-covering break-even (Entry - 0.15% profit)
+                    offset = entry_price * 0.0015
+                    trade['sl'] = min(entry_price - offset, trade.get('sl', 999999))
                 
         if should_close:
             logger.warning(f"🔔 SOFT {reason} HIT for {symbol} at {current_price}!")
@@ -511,7 +632,7 @@ class CryptoBot:
                 pnl = (exit_price - entry_price) * amount if is_long else (entry_price - exit_price) * amount
                 self.db.log_trade(symbol, "CLOSE", exit_price, amount, pnl, f"EXIT")
                 
-                self.notifier.notify_trade(symbol, "CLOSE", entry_price, amount, "EXIT")
+                self.notifier.notify_trade(symbol, "CLOSE", exit_price, amount, "EXIT", pnl=pnl)
             else:
                 # Update remaining amount in state
                 trade['amount'] = float(trade['amount']) - amount
@@ -522,6 +643,7 @@ class CryptoBot:
                 entry_price = float(trade.get('entry_price', exit_price))
                 pnl = (exit_price - entry_price) * amount if is_long else (entry_price - exit_price) * amount
                 self.db.log_trade(symbol, "CLOSE_PARTIAL", exit_price, amount, pnl, "PARTIAL_EXIT")
+                self.notifier.notify_trade(symbol, "CLOSE", exit_price, amount, "PARTIAL_EXIT", pnl=pnl)
                 
         except Exception as e:
             logger.error(f"Failed to close position for {symbol}: {e}")    # Calculate dynamic order amount based on risk capital, equity, and confidence
@@ -576,8 +698,8 @@ class CryptoBot:
         atr = latest.get('atr', current_price * 0.01)
         if not atr or atr == "N/A": atr = current_price * 0.01
         
-        # 1. Base leverage 7x (Aggressive Default)
-        base_lev = 7
+        # 1. Base leverage 10x (Aggressive Default)
+        base_lev = 10
         
         # 2. Consensus Scaling (Aggressive Scaling: +2 lev per 1.0 score above 5)
         score_bonus = (consensus_score - 5.0) * 2.0 
@@ -595,12 +717,24 @@ class CryptoBot:
                 trend_bonus = 2
                 logger.info(f"🛡️ [Leverage] Trend Safety Bonus applied for {symbol} (+2)")
         
+        # --- ATR-BASED VOLATILITY CAP (DEEPSEEK REFACTOR) ---
+        # Riduciamo drasticamente la leva automatica se la volatilità è estrema
+        vol_limit = 25 # Default max
+        if vol_pct > 4.5:
+             vol_limit = 5
+             logger.warning(f"⚠️ [VOLATILITY LIMIT] Extreme Volatility ({vol_pct:.2f}%) on {symbol}. Capping leverage to 5x.")
+        elif vol_pct > 3.0:
+             vol_limit = 10
+        elif vol_pct > 1.5:
+             vol_limit = 20
+        
         lev = base_lev + score_bonus - vol_penalty + trend_bonus
+        lev = min(lev, vol_limit)
         
         # 5. Sector Dynamic Caps
         sector = self.sector_mapping.get(symbol, "ALTS")
-        # Base Caps: MAJOR=20, ALTS=15
-        max_cap = 20 if sector == "MAJOR" else 15
+        # Base Caps: MAJOR=25, ALTS=20
+        max_cap = 25 if sector == "MAJOR" else 20
         
         # High Conviction "Ultra" Bonus
         if consensus_score >= 8.0:
@@ -612,7 +746,7 @@ class CryptoBot:
         
         return final_lev
 
-    async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0):
+    async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH"):
         # --- GLOBAL RISK CHECKS ---
         if symbol in self.symbol_blacklist:
             logger.warning(f"🚫 Skipping {symbol}: In blacklist.")
@@ -627,8 +761,21 @@ class CryptoBot:
             async with self.order_lock:
                 # Re-check limit inside the lock with latest confirmed info
                 confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('contracts', 0) or 0) != 0]
-                current_total_count = len(confirmed_positions)
                 
+                # --- NEW SAFETY GUARD: Total Symbol Exposure Cap ---
+                current_equity = self.latest_account_data.get('equity', 0)
+                if current_equity > 0:
+                    matching_position = next((p for p in confirmed_positions if p.get('symbol') == symbol or p.get('symbol') == symbol.replace('/', '').split(':')[0]), None)
+                    if matching_position:
+                        # Estimate total value in USD
+                        pos_value = abs(float(matching_position.get('notional', 0)))
+                        # If already more than 25% of equity, don't add more
+                        if pos_value > (current_equity * 0.25):
+                            logger.warning(f"🚫 [SAFETY] Symbol {symbol} already at max allowed exposure ({pos_value:.2f} > 25% of {current_equity:.2f}). Skipping.")
+                            self.active_positions[symbol] = None
+                            self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                            return
+
                 # Switch to margin ratio guard
                 if self.current_margin_ratio >= self.max_global_margin_ratio and not is_black_swan:
                     logger.warning(f"🚫 [ORDER] Global Margin Limit Reached ({self.current_margin_ratio*100:.1f}% >= {self.max_global_margin_ratio*100:.1f}%). Skipping {symbol}.")
@@ -637,7 +784,14 @@ class CryptoBot:
                     return
 
                 # Dynamic leverage calculation
-                active_leverage = 50 if is_black_swan else self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price)
+                if signal_type == "GATEKEEPER":
+                    active_leverage = 5 # News trades use low leverage
+                    logger.info(f"🛡️ [NEWS LEVERAGE] Using safe 5x for {symbol} News Trade.")
+                elif is_black_swan:
+                    base_leverage = self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price)
+                    active_leverage = min(20, base_leverage) # Hard cap at 20x for High Impact Events
+                else:
+                    active_leverage = self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price)
                 
                 try:
                     market = self.exchange.market(symbol)
@@ -646,11 +800,34 @@ class CryptoBot:
                     logger.error(f"Failed to set leverage for {symbol}: {e}")
                 
                 amount_to_buy = self._calculate_order_amount(symbol, current_price, custom_leverage=active_leverage)
+                
+                # --- SPREAD PROTECTOR ---
+                ticker = await self.exchange.fetch_ticker(symbol)
+                ask_val = ticker.get('ask')
+                bid_val = ticker.get('bid')
+                ask = float(ask_val) if ask_val is not None else 0.0
+                bid = float(bid_val) if bid_val is not None else 0.0
+                
+                if bid > 0 and ask > 0:
+                    spread_pct = (ask - bid) / bid
+                    if spread_pct > 0.003: # 0.3%
+                        logger.warning(f"🚫 [SPREAD PROTECTOR] Spread for {symbol} is too high ({spread_pct * 100:.2f}%). Skipping trade.")
+                        self.active_positions[symbol] = None
+                        self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                        return
+                        
                 logger.warning(f"🚀 [ORDER] {side.upper()} {amount_to_buy} {symbol} @ {current_price} (Consensus Order)")
                 
                 # 1. Place Main Market Order
                 order = await self.exchange.create_market_order(symbol, side.lower(), amount_to_buy)
                 logger.info(f"✅ Main order success for {symbol}: {order['id']}")
+                
+                # --- NEW: Enhanced Alert for Gatekeeper (Black Swan) ---
+                if signal_type == "GATEKEEPER":
+                    msg = f"☢️ *URGENT: GATEKEEPER ALERT*\n\n" \
+                          f"Bot has EXECUTED an emergency `{side.upper()}` on `{symbol}` @ `{current_price}`.\n\n" \
+                          f"⚠️ This is a fundamental 'Black Swan' event. Manual monitoring/intervention is highly recommended."
+                    asyncio.create_task(self.notifier.send_message(msg))
             
             # --- Continue with Risk Level calculation OUTSIDE the order lock ---
             # 2. Risk Levels based on ATR
@@ -659,19 +836,35 @@ class CryptoBot:
                 current_atr = current_price * 0.01 # Fallback 1%
                 
             # Optimized R:R (SL 1.5x, TP1 2.0x, TP2 4.0x)
-            # Black Swans get wider stops (5x ATR) to avoid noise
-            sl_mult = 5.0 if is_black_swan else 1.5
-            tp1_mult = 6.0 if is_black_swan else 2.5
-            tp2_mult = 12.0 if is_black_swan else 5.0
-            
-            sl_distance  = current_atr * sl_mult
-            # Floor for Black Swans (1.2% as per user safety requirement)
-            if is_black_swan:
-                min_sl = current_price * 0.012
-                sl_distance = max(sl_distance, min_sl)
+            # --- WHALE SCALPING LOGIC ---
+            if signal_type == "WHALE":
+                logger.warning(f"🐋 WHALE SCALPING MODE ACTIVE for {symbol}: Using tight Take Profit.")
+                sl_mult = 1.5
+                tp1_mult = 0.5 # 0.5% profit target (approx)
+                tp2_mult = 1.0 # 1.0% profit target (approx)
                 
-            tp1_distance = current_atr * tp1_mult
-            tp2_distance = current_atr * tp2_mult
+                sl_distance  = current_price * 0.015 # 1.5% SL
+                tp1_distance = current_price * 0.008 # 0.8% TP1 (Increased from 0.5% to ensure profitability)
+                tp2_distance = current_price * 0.016 # 1.6% TP2 (Increased from 1.0%)
+            elif signal_type in ["RECOVERY", "REJECTION"]:
+                logger.warning(f"🛡️ RECOVERY SCALPING ACTIVE for {symbol}: 1.2% Partial TP Target.")
+                sl_distance = current_price * 0.015 # 1.5% SL
+                tp1_distance = current_price * 0.012 # 1.2% TP1 (Take profit on bounce)
+                tp2_distance = current_price * 0.030 # 3.0% TP2
+            else:
+                # Black Swans get wider stops (5x ATR) to avoid noise
+                sl_mult = 5.0 if is_black_swan else 2.2
+                tp1_mult = 6.0 if is_black_swan else 3.0
+                tp2_mult = 12.0 if is_black_swan else 6.0
+                
+                sl_distance  = current_atr * sl_mult
+                # Floor for Black Swans (1.2% as per user safety requirement)
+                if is_black_swan:
+                    min_sl = current_price * 0.012
+                    sl_distance = max(sl_distance, min_sl)
+                    
+                tp1_distance = current_atr * tp1_mult
+                tp2_distance = current_atr * tp2_mult
             
             is_long = side.lower() in ['buy', 'long']
             if is_long:
@@ -699,6 +892,9 @@ class CryptoBot:
                 'amount': amount_to_buy,
                 'tp1_hit': False,
                 'is_black_swan': is_black_swan,
+                'signal_type': signal_type,
+                'opened_at': time.time(),
+                'trailing_delayed': True if signal_type == "GATEKEEPER" else False,
                 'highest_price': current_price if is_long else 0,
                 'lowest_price': current_price if not is_long else 0
             }
@@ -827,7 +1023,7 @@ class CryptoBot:
                 
                 # Fetch actual positions for precise PnL and Margin
                 pos_data = await self.exchange.fetch_positions()
-                unrealized_pnl = sum(float(p.get('unrealizedPnL', 0) or 0) for p in pos_data)
+                unrealized_pnl = sum(float(p.get('unrealizedPnl', 0) or 0) for p in pos_data)
                 equity = wallet_balance + unrealized_pnl
 
                 if self.initial_wallet_balance is None:
@@ -916,10 +1112,10 @@ class CryptoBot:
                                         current_atr = entry_price * 0.01
 
                                     # --- TIGHTER RISK MANAGEMENT ---
-                                    # Reduce ATR multiplier from 2.0 to 1.5 to cut losses faster
-                                    sl_distance = current_atr * 1.5
-                                    tp1_distance = current_atr * 1.5
-                                    tp2_distance = current_atr * 3.0
+                                    # Relax SL/TP constraints to avoid premature closures
+                                    sl_distance = current_atr * 2.2
+                                    tp1_distance = current_atr * 3.0
+                                    tp2_distance = current_atr * 6.0
                                     
                                     if side == 'long':
                                         sl = entry_price - sl_distance
@@ -996,6 +1192,9 @@ class CryptoBot:
                     rate_raw = data.get('fundingRate', 0)
                     if rate_raw is not None:
                         rate_pct = float(rate_raw) * 100
+                        # Store in latest_data for the entry filter to use
+                        if symbol in self.latest_data:
+                            self.latest_data[symbol]['funding_rate'] = float(rate_raw)
                         
                         # -- DISABLED: Entering naked directional trades just for funding is too dangerous --
                         # if rate_pct > 0.1 and self.active_positions[symbol] != 'SHORT':
@@ -1048,3 +1247,18 @@ class CryptoBot:
             self.notifier.notify_alert("CRITICAL", "GLOBAL PANIC SELL EXECUTED", "All positions closed due to excess drawdown.")
         except Exception as e:
             logger.error(f"Failed to execute emergency cleanup: {e}")
+    async def reset_circuit_breaker(self):
+        """Resets the initial wallet balance to current balance, clearing the circuit breaker."""
+        try:
+            balances = await self.exchange.fetch_balance()
+            usdt_bal = float(balances.get('USDT', {}).get('total', 0))
+            usdc_bal = float(balances.get('USDC', {}).get('total', 0))
+            wallet_balance = usdt_bal + usdc_bal
+            
+            self.initial_wallet_balance = wallet_balance
+            self.circuit_breaker_active = False
+            logger.warning(f"🟢 MANUAL RESET: Circuit Breaker cleared. New base balance: {wallet_balance:.2f} USDT")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reset circuit breaker: {e}")
+            return False

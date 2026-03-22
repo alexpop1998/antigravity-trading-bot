@@ -1,5 +1,6 @@
 {
     "python.defaultInterpreterPath": "/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/venv/bin/python3",
+    "python.condaPath": "",
     "python.terminal.activateEnvInCurrentTerminal": true,
     "python.analysis.extraPaths": [
         "${workspaceFolder}/backend"

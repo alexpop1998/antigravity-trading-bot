@@ -41,10 +41,10 @@ class LiquidationHunter:
                                 cascade_type = "🩸 LONG LIQUIDATION (DUMP)" if side == 'SELL' else "🚀 SHORT SQUEEZE (PUMP)"
                                 logger.critical(f"💥 MASSIVE LIQUIDATION DETECTED: {cascade_type} {qty} {symbol} @ ${price} (Value: ${value_usd:,.0f})")
                                 
-                                # HFT Squeeze Logic: Ride the mechanical cascade
+                                # Fade the Liquidation: Buy the blood on dumps, sell the top on pumps
                                 if self.bot and formatted_symbol in self.bot.symbols:
                                     self.bot.add_alert("LIQUIDATION", f"{cascade_type} {symbol}", f"${price}")
-                                    side_signal = 'sell' if side == 'SELL' else 'buy'
+                                    side_signal = 'buy' if side == 'SELL' else 'sell'
                                     asyncio.create_task(self.bot.handle_signal(formatted_symbol, "LIQUIDATION", side_signal, is_black_swan=True))
 
             except Exception as e:

@@ -4,7 +4,7 @@ import logging
 import warnings
 
 # Use sklearn's high-speed random forest to avoid huge memory footprint of deep learning libs for now
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
 
 # Suppress harmless sklearn warnings
 warnings.filterwarnings('ignore')
@@ -24,19 +24,22 @@ class MLPredictor:
     def train_and_predict(self, symbol, df):
         """
         Takes the freshly downloaded DataFrame for the symbol, extracts technical features,
-        trains a Random Forest Regressor on the spot, and predicts the NEXT candle's closing price.
+        trains a Random Forest Classifier on the spot, and predicts the direction of the NEXT candle.
         """
         with self._training_lock:
             try:
                 # We need sufficient data points
                 if len(df) < 50:
+                    logger.warning(f"[{symbol}] Insufficient data for AI training: {len(df)} candles.")
                     return None
+                    
+                logger.info(f"🧠 [AI ENGINE] Training and predicting for {symbol}...")
                     
                 # Copy to avoid modifying the original running bot dataframe
                 data = df.copy()
                 
-                # THE TARGET: Predicting the actual close of the next period (t+1)
-                data['target'] = data['close'].shift(-1)
+                # THE TARGET: Predicting the direction of the next period (1 = UP, 0 = DOWN)
+                data['target'] = (data['close'].shift(-1) > data['close']).astype(int)
                 
                 # The features we feed the AI matrix: 
                 # We use the mathematical formulas already extracted by the bot (avoiding re-computations)
@@ -52,8 +55,8 @@ class MLPredictor:
                 X = df_clean[features].values
                 y = df_clean['target'].values
                 
-                # Initialize a stable Random Forest (50 trees, single job to prevent CPU saturation)
-                model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=1)
+                # Initialize a stable Random Forest Classifier (50 trees, single job to prevent CPU saturation)
+                model = RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=1)
                 
                 # Execute Neural Engine Training Memory
                 model.fit(X, y)
@@ -68,11 +71,17 @@ class MLPredictor:
                 if last_row[features].isnull().any():
                     return None
                     
-                # Ask the AI to predict based on the absolute current state
+                # Ask the AI to predict direction probability based on the absolute current state
                 current_state = last_row[features].values.reshape(1, -1)
-                predicted_future_price = model.predict(current_state)[0]
                 
-                return round(predicted_future_price, 4)
+                # Predict direction and confidence
+                predicted_class = int(model.predict(current_state)[0])
+                confidence = float(model.predict_proba(current_state)[0][predicted_class])
+                
+                return {
+                    'direction': predicted_class,
+                    'confidence': confidence
+                }
                 
             except Exception as e:
                 logger.error(f"Failed ML prediction for {symbol}: {e}")
