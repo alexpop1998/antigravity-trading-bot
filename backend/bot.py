@@ -120,10 +120,15 @@ class CryptoBot:
         self.max_leverage = 25
         self.sector_caps = {"MEME": 3, "L1": 3, "ALTS": 4} # Limit per sector
         self.sector_mapping = {
-            "BTC/USDT": "MAJOR", "ETH/USDT": "MAJOR", "SOL/USDT": "L1", 
-            "BNB/USDT": "L1", "SXP/USDT": "ALTS", "RIVER/USDT": "ALTS", 
-            "APR/USDT": "ALTS", "WAXP/USDT": "ALTS", "DEGO/USDT": "ALTS", 
-            "PHA/USDT": "ALTS", "PIPPIN/USDT": "MEME", "BAN/USDT": "MEME"
+            "BTC/USDT:USDT": "MAJOR", "ETH/USDT:USDT": "MAJOR", "SOL/USDT:USDT": "L1", 
+            "BNB/USDT:USDT": "L1", "LTC/USDT:USDT": "MAJOR", "MATIC/USDT:USDT": "L1",
+            "ARB/USDT:USDT": "ALTS", "OP/USDT:USDT": "ALTS", "APT/USDT:USDT": "L1",
+            "TIA/USDT:USDT": "ALTS", "INJ/USDT:USDT": "ALTS", "SEI/USDT:USDT": "ALTS",
+            "PEPE/USDT:USDT": "MEME", "SHIB/USDT:USDT": "MEME", "RENDER/USDT:USDT": "ALTS",
+            "FET/USDT:USDT": "ALTS", "STX/USDT:USDT": "ALTS", "ORDI/USDT:USDT": "ALTS",
+            "JUP/USDT:USDT": "ALTS", "SXP/USDT:USDT": "ALTS", "RIVER/USDT:USDT": "ALTS", 
+            "APR/USDT:USDT": "ALTS", "WAXP/USDT:USDT": "ALTS", "DEGO/USDT:USDT": "ALTS", 
+            "PHA/USDT:USDT": "ALTS", "PIPPIN/USDT:USDT": "MEME", "BAN/USDT:USDT": "MEME"
         }
         
         # Recupero stato persistente
