@@ -313,16 +313,47 @@ class CryptoBot:
                     ref_2m = history_2m[0]
                     change_2m_pct = (current_close - ref_2m) / ref_2m
                     
+                    # --- DYNAMIC SOS THRESHOLD (ATR-based) ---
+                    # We use ATR/Price as a proxy for 'normal' volatility.
+                    # Threshold is 1x the 15m ATR, capped between 0.6% and 3.5%
+                    atr_val = current_atr if isinstance(current_atr, (int, float)) else (current_close * 0.015)
+                    atr_pct = (atr_val / current_close) if current_close > 0 else 0.015
+                    sos_threshold = max(0.006, min(0.035, atr_pct * 1.0))
+                    
                     active_pos = self.active_positions.get(symbol)
                     if active_pos:
-                        # If LONG and price drops > 1.5% in 2m
-                        if active_pos == 'LONG' and change_2m_pct < -0.015:
-                            logger.critical(f"🆘 [VELOCITY EXIT] Closing LONG {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%})")
+                        # If LONG and price drops > sos_threshold in 2m
+                        if active_pos == 'LONG' and change_2m_pct < -sos_threshold:
+                            logger.critical(f"🆘 [VELOCITY EXIT] Closing LONG {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%} < -{sos_threshold:.2%})")
                             asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
-                        # If SHORT and price pumps > 1.5% in 2m
-                        elif active_pos == 'SHORT' and change_2m_pct > 0.015:
-                            logger.critical(f"🆘 [VELOCITY EXIT] Closing SHORT {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%})")
+                        # If SHORT and price pumps > sos_threshold in 2m
+                        elif active_pos == 'SHORT' and change_2m_pct > sos_threshold:
+                            logger.critical(f"🆘 [VELOCITY EXIT] Closing SHORT {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%} > {sos_threshold:.2%})")
                             asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
+                    else:
+                        # --- PROACTIVE VELOCITY ENTRIES ---
+                        # 1. Momentum Entry: Ride the wave if move > 1.2 * SOS threshold
+                        if change_2m_pct > (sos_threshold * 1.2):
+                            logger.warning(f"🚀 [VELOCITY MOMENTUM] Potential breakout detected for {symbol} (+{change_2m_pct:.2%})")
+                            asyncio.create_task(self.handle_signal(symbol, "VELOCITY_MOMENTUM", "buy", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
+                        elif change_2m_pct < -(sos_threshold * 1.2):
+                            logger.warning(f"🚀 [VELOCITY MOMENTUM] Potential breakdown detected for {symbol} (-{change_2m_pct:.2%})")
+                            asyncio.create_task(self.handle_signal(symbol, "VELOCITY_MOMENTUM", "sell", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
+                        
+                        # 2. Reversal Entry: Catch the rubber band if extreme overextension + exhaustion
+                        # Requires very high RSI AND a small price reversal in the last few periods
+                        if len(history_2m) >= 4:
+                            prev_move = (history_2m[-2] - history_2m[0]) / history_2m[0]
+                            # Check if current close is starting to reverse from the peak of the move
+                            is_reversing = (current_close < history_2m[-2]) if prev_move > sos_threshold else (current_close > history_2m[-2] if prev_move < -sos_threshold else False)
+                            
+                            if is_reversing and isinstance(current_rsi, (int, float)):
+                                if prev_move > (sos_threshold * 1.5) and current_rsi > 82:
+                                    logger.warning(f"🪃 [VELOCITY REVERSAL] Overextended PUMP detected for {symbol}. RSI={current_rsi}. Shorting rebound.")
+                                    asyncio.create_task(self.handle_signal(symbol, "VELOCITY_REVERSAL", "sell", weight_modifier=1.1, current_price=current_close, ema200=current_ema200))
+                                elif prev_move < -(sos_threshold * 1.5) and current_rsi < 18:
+                                    logger.warning(f"🪃 [VELOCITY REVERSAL] Overextended DUMP detected for {symbol}. RSI={current_rsi}. Longing rebound.")
+                                    asyncio.create_task(self.handle_signal(symbol, "VELOCITY_REVERSAL", "buy", weight_modifier=1.1, current_price=current_close, ema200=current_ema200))
                     
                 # 2. Detect V-Shape Recovery (Absorption)
                 if is_event_dump and current_rsi < 28: # Slightly relaxed RSI for recovery
@@ -882,13 +913,11 @@ class CryptoBot:
                 current_atr = current_price * 0.01 # Fallback 1%
                 
             # Optimized R:R (SL 1.5x, TP1 2.0x, TP2 4.0x)
-            # --- WHALE SCALPING LOGIC ---
-                tp1_mult = 0.5 # 0.5% profit target (approx)
-                tp2_mult = 1.0 # 1.0% profit target (approx)
-                
-                sl_distance  = current_price * 0.015 # 1.5% SL
-                tp1_distance = current_price * 0.008 # 0.8% TP1
-                tp2_distance = current_price * 0.016 # 1.6% TP2
+            # --- WHALE & VELOCITY SCALPING LOGIC ---
+            if signal_type in ["WHALE", "VELOCITY_MOMENTUM", "VELOCITY_REVERSAL"]:
+                sl_distance = current_price * 0.012 # 1.2% SL
+                tp1_distance = current_price * 0.010 # 1.0% TP1
+                tp2_distance = current_price * 0.025 # 2.5% TP2
             elif signal_type in ["RECOVERY", "REJECTION"]:
                 logger.warning(f"🛡️ RECOVERY SCALPING ACTIVE for {symbol}: 1.2% Partial TP Target.")
                 sl_distance = current_price * 0.015 # 1.5% SL

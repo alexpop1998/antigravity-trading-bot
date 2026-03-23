@@ -20,7 +20,9 @@ class SignalManager:
             "EVENT_DUMP": 2.5, # Major 15m drop
             "EVENT_PUMP": 2.5, # Major 15m pump
             "RECOVERY": 3.0,   # V-Shape recovery start
-            "REJECTION": 3.0   # Rejection after pump start
+            "REJECTION": 3.0,  # Rejection after pump start
+            "VELOCITY_MOMENTUM": 2.5, # Rapid 2m breakout/breakdown
+            "VELOCITY_REVERSAL": 3.0  # Overextension + exhaustion signal
         }
 
     async def add_signal(self, symbol, type, side, weight_modifier=1.0, current_price=None, ema200=None):
