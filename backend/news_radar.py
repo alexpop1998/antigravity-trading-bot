@@ -53,8 +53,8 @@ class NewsRadar:
                 except Exception as e:
                     logger.error(f"Error polling {url}: {e}")
                     
-            # Poll all feeds every 60 seconds
-            await asyncio.sleep(60)
+            # Poll all feeds every 20 seconds for faster Black Swan interception
+            await asyncio.sleep(20)
 
     async def process_article(self, title, link):
         try:
@@ -96,7 +96,7 @@ class NewsRadar:
                 """
                 
                 ai_response = await self.ai_client.chat.completions.create(
-                    model=os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash"),
+                    model=os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash"),
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.1
                 )
@@ -116,16 +116,34 @@ class NewsRadar:
     async def trigger_mirofish(self, title, article_content):
         logger.info(f"Deep Seed sent to MiroFish: {title}")
         try:
-            # Use the shared client
-            client = self.http_client if self.http_client else httpx.AsyncClient()
-            
-            payload = {
-                "seed": title,
-                "content": article_content,
-                "agents": 5, 
-                "timeout": 30
-            }
-            
+            prompt = f"Analyze the following news for crypto market impact: {title}. Focus on the content: {article_content[:500]}..."
+            if not self.http_client:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {os.getenv('LLM_API_KEY')}"
+                        },
+                        json={
+                            "model": os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash"),
+                            "messages": [{"role": "user", "content": prompt}],
+                            "response_format": {"type": "json_object"}
+                        }
+                    )
+            else:
+                await self.http_client.post(
+                    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {os.getenv('LLM_API_KEY')}"
+                    },
+                    json={
+                        "model": os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash"),
+                        "messages": [{"role": "user", "content": prompt}],
+                        "response_format": {"type": "json_object"}
+                    }
+                )
             # Mocking MiroFish logic assuming the real API processes `content` as reality seed
             # In a real scenario we'd do a POST to MiroFish and await the score
             sentiment_score = 50

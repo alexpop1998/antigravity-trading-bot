@@ -1,13 +1,12 @@
+import logging
+import os
+from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import asyncio
 import httpx
-import json
-import os
-from dotenv import load_dotenv
-load_dotenv(override=True)
-
 from bot import CryptoBot
 from openai import AsyncOpenAI
 from news_radar import NewsRadar
@@ -17,8 +16,10 @@ from liquidation_hunter import LiquidationHunter
 from macro_calendar import MacroCalendar
 from rl_tuner import RLTuner
 from dex_sniper import DEXSniper
-from fastapi.responses import FileResponse
-import logging
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
 print("🚀 DEBUG: LOADING MAIN.PY FROM " + __file__)
 
 # Configure Logging
@@ -152,7 +153,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             # Keep connection alive, can handle client messages here if needed
-            data = await websocket.receive_text()
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
@@ -250,7 +251,6 @@ async def analyze_ticker(req: AnalyzeRequest):
             "analysis": f"Si è verificato un errore: {str(e)}"
         }
 
-from typing import Optional
 
 @app.get("/api/ping")
 async def ping():
@@ -281,6 +281,17 @@ async def get_history(start: Optional[str] = None, end: Optional[str] = None):
         "total_pnl": round(total_pnl, 2),
         "trades": trades
     }
+
+@app.get("/api/report")
+async def get_report():
+    try:
+        import generate_report
+        import importlib
+        importlib.reload(generate_report)
+        await generate_report.async_generate()
+        return FileResponse("/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/investor_report.html")
+    except Exception as e:
+        return {"status": "error", "message": f"Errore generazione report: {str(e)}"}
 
 frontend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 

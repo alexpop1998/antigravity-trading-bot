@@ -24,7 +24,7 @@ def diagnostic_check():
     print(f"DEBUG: Sandbox mode: {sandbox_mode}")
     
     try:
-        spot_balance = spot_exchange.fetch_balance()
+        spot_exchange.fetch_balance()
         print("✅ SPOT Connection OK.")
     except Exception as e:
         print(f"❌ SPOT Error: {e}")
@@ -40,7 +40,7 @@ def diagnostic_check():
     futures_exchange.set_sandbox_mode(sandbox_mode)
     
     try:
-        futures_balance = futures_exchange.fetch_balance()
+        futures_exchange.fetch_balance()
         print("✅ FUTURES Connection OK.")
     except Exception as e:
         print(f"❌ FUTURES Error: {e}")

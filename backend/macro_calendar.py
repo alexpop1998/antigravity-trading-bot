@@ -2,7 +2,7 @@ import asyncio
 import logging
 import httpx
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from dateutil import parser
 import pytz
 

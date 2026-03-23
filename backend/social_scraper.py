@@ -1,7 +1,8 @@
-import aiohttp
 import asyncio
 import logging
 import os
+import httpx
+import json
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
@@ -72,7 +73,6 @@ class SocialScraper:
                 temperature=0.1,
                 response_format={ "type": "json_object" }
             )
-            import json
             return json.loads(response.choices[0].message.content)
         except Exception as e:
             logger.error(f"Sentiment analysis error: {e}")
@@ -107,6 +107,5 @@ class SocialScraper:
                 
                 if item_id:
                     self.last_news_id = item_id
-                    break # Only process the single top news per loop to be safe in testing
             
-            await asyncio.sleep(60) # Poll every minute
+            await asyncio.sleep(20) # Poll every 20 seconds

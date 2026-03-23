@@ -1,9 +1,6 @@
 import asyncio
-import os
-import json
 import logging
 from bot import CryptoBot
-from dotenv import load_dotenv
 
 # Configure logging to be less verbose for the report
 logging.basicConfig(level=logging.WARNING)

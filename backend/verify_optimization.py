@@ -14,7 +14,7 @@ async def test_logic():
     bot = CryptoBot()
     # Bypass exchange calls with more robust mocks
     bot.exchange.load_markets = asyncio.coroutine(lambda: None)
-    bot.exchange.set_leverage = asyncio.coroutine(lambda l, s: None)
+    bot.exchange.set_leverage = asyncio.coroutine(lambda leverage, s: None)
     bot.exchange.create_market_order = asyncio.coroutine(lambda s, si, a: {'id': 'mock_id'})
     bot.exchange.create_order = asyncio.coroutine(lambda s, t, si, a, p, ex: {'id': 'mock_id'})
     bot.exchange.price_to_precision = lambda s, p: round(float(p), 2)
@@ -35,7 +35,7 @@ async def test_logic():
     levels = bot.trade_levels.get('BTC/USDT:USDT')
     if levels:
         tp1_diff = ((levels['tp1'] - 70000) / 70000) * 100
-        print(f"Signal Type: WHALE")
+        print("Signal Type: WHALE")
         print(f"Entry: {levels['entry_price']}")
         print(f"TP1: {levels['tp1']} ({tp1_diff:.2f}%) - Expecting 0.50%")
     else:
@@ -48,7 +48,7 @@ async def test_logic():
     levels = bot.trade_levels.get('BTC/USDT:USDT')
     if levels:
         tp1_diff = ((levels['tp1'] - 70000) / 70000) * 100
-        print(f"Signal Type: TECH")
+        print("Signal Type: TECH")
         print(f"TP1: {levels['tp1']} ({tp1_diff:.2f}%) - Expecting 2.50% (700*2.5 = 1750)")
     else:
         print("TECH order execution failed.")

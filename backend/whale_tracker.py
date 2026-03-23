@@ -2,7 +2,6 @@ import websockets
 import asyncio
 import json
 import logging
-import time
 
 logger = logging.getLogger("WhaleTracker")
 logger.setLevel(logging.INFO)

@@ -40,7 +40,7 @@ class DEXSniper:
                     
                     if spread_pct >= self.target_spread_pct and not self.is_sniping:
                         logger.warning(f"🔫 DEX SNIPER SPREAD DETECTED [{symbol}]: CEX ${cex_price:.2f} | DEX ${dex_price:.2f} (Spread {spread_pct:.2f}%)")
-                        logger.warning(f"🔫 EXECUTING DELTA-NEUTRAL ARBITRAGE: BUY on DEX, SHORT on CEX")
+                        logger.warning("🔫 EXECUTING DELTA-NEUTRAL ARBITRAGE: BUY on DEX, SHORT on CEX")
                         self.is_sniping = True
                         
                         # Usa handle_signal per l'arbitraggio (peso massimo)
@@ -48,11 +48,11 @@ class DEXSniper:
                         
                         # Simulate DEX trade confirmation time on Ethereum mainnet
                         await asyncio.sleep(2)
-                        logger.info(f"✅ ARBITRAGE LOCKED. Waiting for spread convergence.")
+                        logger.info("✅ ARBITRAGE LOCKED. Waiting for spread convergence.")
                     
                     elif spread_pct < 0.1 and self.is_sniping:
                         # Spread converged naturally, lock profits
-                        logger.info(f"🔫 SPREAD CONVERGED. Closing Arbitrage positions.")
+                        logger.info("🔫 SPREAD CONVERGED. Closing Arbitrage positions.")
                         self.is_sniping = False
             except Exception as e:
                 logger.error(f"DEX Sniper error: {e}")

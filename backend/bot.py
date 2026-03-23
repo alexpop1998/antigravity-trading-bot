@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import os
 import json
 import time
-from datetime import datetime
 from collections import deque
 from ml_predictor import MLPredictor
 from database import BotDatabase
@@ -112,8 +111,10 @@ class CryptoBot:
         self.symbol_blacklist = set()
         self.initial_wallet_balance: Optional[float] = None
         self.previous_prices: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
-        # 5-minute rolling window (10 updates of 30s)
-        self.price_windows: Dict[str, deque] = {symbol: deque(maxlen=10) for symbol in self.symbols}
+        # 5-minute rolling window (10 updates of 30s) - DEPRECATED for VeloCity
+        self.price_windows: Dict[str, deque] = {symbol: deque(maxlen=30) for symbol in self.symbols}
+        # 2-minute rolling window for VeloCity Emergency Exit (12 updates of 10s)
+        self.price_history_2m: Dict[str, deque] = {symbol: deque(maxlen=12) for symbol in self.symbols}
         self.panic_drawdown_threshold = 0.10 # 10% Total Equity Drawdown
         self.min_leverage = 2
         self.max_leverage = 25
@@ -134,7 +135,7 @@ class CryptoBot:
         # Exchange instance will be initialized with load_markets in initialize()
         self.initialized = False
 
-    async def initialize(self):
+    async def initialize(self, skip_leverage=False):
         if self.initialized:
             return
             
@@ -157,9 +158,11 @@ class CryptoBot:
             logger.info(f"🎯 Validated {len(available_symbols)} symbols.")
             self.symbols = available_symbols
             
-            logger.info("⚙️ Setting leverage for all symbols...")
-            await self._set_leverage_for_all()
-            logger.info("✅ Leverage set successfully.")
+            # Imposta leva solo se richiesto
+            if not skip_leverage:
+                logger.info("⚙️ Setting leverage for all symbols...")
+                await self._set_leverage_for_all()
+                logger.info("✅ Leverage set successfully.")
             
             self.initialized = True
         except Exception as e:
@@ -222,7 +225,6 @@ class CryptoBot:
             df['macd_hist'] = df['macd'] - df['macd_signal']
             
             current_macd = df['macd'].iloc[-1]
-            current_macd_signal = df['macd_signal'].iloc[-1]
             current_macd_hist = df['macd_hist'].iloc[-1]
             
             # --- Bollinger Bands Calculation ---
@@ -298,6 +300,24 @@ class CryptoBot:
                 if is_event_pump:
                     logger.info(f"⚠️ [FLASH] Potential PUMP detected for {symbol} ({change_5m_pct:.2%} in 5m)")
                     asyncio.create_task(self.handle_signal(symbol, "EVENT_PUMP", "buy", weight_modifier=1.0))
+                    
+                # --- VELOCITY EMERGENCY EXIT (2m Anti-Ruin) ---
+                history_2m = self.price_history_2m[symbol]
+                history_2m.append(current_close)
+                if len(history_2m) >= 6: # At least 1 minute of data
+                    ref_2m = history_2m[0]
+                    change_2m_pct = (current_close - ref_2m) / ref_2m
+                    
+                    active_pos = self.active_positions.get(symbol)
+                    if active_pos:
+                        # If LONG and price drops > 1.5% in 2m
+                        if active_pos == 'LONG' and change_2m_pct < -0.015:
+                            logger.critical(f"🆘 [VELOCITY EXIT] Closing LONG {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%})")
+                            asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
+                        # If SHORT and price pumps > 1.5% in 2m
+                        elif active_pos == 'SHORT' and change_2m_pct > 0.015:
+                            logger.critical(f"🆘 [VELOCITY EXIT] Closing SHORT {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%})")
+                            asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
                     
                 # 2. Detect V-Shape Recovery (Absorption)
                 if is_event_dump and current_rsi < 28: # Slightly relaxed RSI for recovery
@@ -405,7 +425,11 @@ class CryptoBot:
                 is_technical_signal = True
             
         elif rsi > 70 and macd_hist < 0 and price >= (bb_upper * 0.99):
-            if not price_above_ema and is_trending: # Trend-following SHORT
+            # --- SHORTING MOMENTUM GUARD ---
+            # Don't short if there is strong bullish momentum in the last 5 minutes
+            if change_5m_pct > 0.008: # 0.8% in 5m is too strong to short technically
+                logger.info(f"🛡️ [SHORT GUARD] Skipping technical SHORT on {symbol}: Momentum too bullish ({change_5m_pct:.2%})")
+            elif not price_above_ema and is_trending: # Trend-following SHORT
                 tech_side = 'sell'
                 is_technical_signal = True
 
@@ -455,8 +479,14 @@ class CryptoBot:
                 # 1. Prevent conflicting positions (Long vs Short)
                 existing_side = 'buy' if existing_pos == 'LONG' else 'sell'
                 if existing_side != side.lower():
-                    logger.warning(f"🚫 [MASTER CONTROLLER] Conflicting signal for {symbol}: Already in {existing_pos}. Skipping {side.upper()} {type}.")
-                    return
+                    # --- REVERSAL PRIORITY ---
+                    # If it's a Black Swan or Gatekeeper news, we MUST flip the position
+                    if is_black_swan or type in ["GATEKEEPER", "NEWS"]:
+                        logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
+                        await self.close_position(symbol, self.trade_levels[symbol])
+                    else:
+                        logger.warning(f"🚫 [MASTER CONTROLLER] Conflicting signal for {symbol}: Already in {existing_pos}. Skipping {side.upper()} {type}.")
+                        return
 
             # 2. Pause Standard Signals during High-Impact Events (HIE)
             # Check if current trade is HIE and we are trying a standard signal
@@ -553,7 +583,7 @@ class CryptoBot:
                 should_close = True
                 reason = "TAKE-PROFIT 2 (FINAL)"
             elif current_price >= tp1:
-                # Partial Take Profit (TP1)
+                # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
@@ -582,7 +612,7 @@ class CryptoBot:
                 should_close = True
                 reason = "TAKE-PROFIT 2 (FINAL)"
             elif current_price <= tp1:
-                # Partial Take Profit (TP1)
+                # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
                     logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
                     asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5))
@@ -695,7 +725,6 @@ class CryptoBot:
         
         logger.info(f"[{symbol}] Sizing Summary: Base={base_usdt:.2f}, VolMod={volatility_modifier:.2f}, ConfMod={confidence_modifier:.2f} -> Adjusted={adjusted_usdt:.2f} USDT")
         
-        market = self.exchange.market(symbol)
         # Contract size calculation
         amount = purchasing_power / current_price
         
@@ -707,7 +736,8 @@ class CryptoBot:
         """Calculates leverage based on consensus score, volatility, and trend safety."""
         latest = self.latest_data.get(symbol, {})
         atr = latest.get('atr', current_price * 0.01)
-        if not atr or atr == "N/A": atr = current_price * 0.01
+        if not atr or atr == "N/A":
+            atr = current_price * 0.01
         
         # 1. Base leverage 10x (Aggressive Default)
         base_lev = 10
@@ -848,19 +878,16 @@ class CryptoBot:
                 
             # Optimized R:R (SL 1.5x, TP1 2.0x, TP2 4.0x)
             # --- WHALE SCALPING LOGIC ---
-            if signal_type == "WHALE":
-                logger.warning(f"🐋 WHALE SCALPING MODE ACTIVE for {symbol}: Using tight Take Profit.")
-                sl_mult = 1.5
                 tp1_mult = 0.5 # 0.5% profit target (approx)
                 tp2_mult = 1.0 # 1.0% profit target (approx)
                 
                 sl_distance  = current_price * 0.015 # 1.5% SL
-                tp1_distance = current_price * 0.008 # 0.8% TP1 (Increased from 0.5% to ensure profitability)
-                tp2_distance = current_price * 0.016 # 1.6% TP2 (Increased from 1.0%)
+                tp1_distance = current_price * 0.008 # 0.8% TP1
+                tp2_distance = current_price * 0.016 # 1.6% TP2
             elif signal_type in ["RECOVERY", "REJECTION"]:
                 logger.warning(f"🛡️ RECOVERY SCALPING ACTIVE for {symbol}: 1.2% Partial TP Target.")
                 sl_distance = current_price * 0.015 # 1.5% SL
-                tp1_distance = current_price * 0.012 # 1.2% TP1 (Take profit on bounce)
+                tp1_distance = current_price * 0.012 # 1.2% TP1
                 tp2_distance = current_price * 0.030 # 3.0% TP2
             else:
                 # Black Swans get wider stops (5x ATR) to avoid noise
@@ -1026,20 +1053,46 @@ class CryptoBot:
                     active_pos = []
 
                 # 2. Fetch Balance and check Margin
-                # --- UNIFIED BALANCE: USDT + USDC ---
+                # --- ACCURATE BALANCE & EQUITY: Using Binance Native Fields if available ---
                 balances = await self.exchange.fetch_balance()
+                
+                # Default fallbacks
                 usdt_bal = float(balances.get('USDT', {}).get('total', 0))
                 usdc_bal = float(balances.get('USDC', {}).get('total', 0))
-                wallet_balance = usdt_bal + usdc_bal
+                wallet_balance = usdt_bal + usdc_bal # Simplistic fallback
+                unrealized_pnl = 0.0
+                equity = wallet_balance
                 
-                # Fetch actual positions for precise PnL and Margin
-                pos_data = await self.exchange.fetch_positions()
-                unrealized_pnl = sum(float(p.get('unrealizedPnl', 0) or 0) for p in pos_data)
-                equity = wallet_balance + unrealized_pnl
+                # --- SOURCE OF TRUTH: Binance API Info Fields ---
+                # These fields are the most accurate as they account for multi-asset collateral,
+                # haircuts, fees, and all concurrent positions automatically.
+                if 'info' in balances:
+                    info = balances['info']
+                    #Wallet Balance (Net collateral across all assets)
+                    raw_wallet = info.get('totalWalletBalance')
+                    if raw_wallet is not None:
+                        wallet_balance = float(raw_wallet)
+                    
+                    # Margin Balance (Equity = Wallet + Unrealized PnL)
+                    raw_margin = info.get('totalMarginBalance')
+                    if raw_margin is not None:
+                        equity = float(raw_margin)
+                    
+                    # Total Unrealized PnL
+                    raw_upnl = info.get('totalUnrealizedProfit')
+                    if raw_upnl is not None:
+                        unrealized_pnl = float(raw_upnl)
+                else:
+                    # Fallback for other exchanges: sum up position PnLs manually
+                    # Note: We must be careful NOT to use balances['USDT']['total'] here
+                    # as it might already include PnL on some exchanges depending on CCXT implementation.
+                    pos_data = await self.exchange.fetch_positions()
+                    unrealized_pnl = sum(float(p.get('unrealizedPnl', 0) or 0) for p in pos_data)
+                    equity = wallet_balance + unrealized_pnl
 
                 if self.initial_wallet_balance is None:
                     self.initial_wallet_balance = wallet_balance
-                    logger.info(f"🏦 Unified Balance Initialized: Balance={self.initial_wallet_balance} (USDT: {usdt_bal}, USDC: {usdc_bal})")
+                    logger.info(f"🏦 Account Balance Initialized: Balance={self.initial_wallet_balance}")
                 
                 # --- OVERHAUL: Circuit Breaker now also considers EQUITY DRAWDOWN (Unrealized) ---
                 # This stops the "mess" by reacting to bleeding positions before they are closed.
@@ -1209,7 +1262,6 @@ class CryptoBot:
                     # High funding > 0.1% means longs pay shorts. Protect by shorting to collect fee.
                     rate_raw = data.get('fundingRate', 0)
                     if rate_raw is not None:
-                        rate_pct = float(rate_raw) * 100
                         # Store in latest_data for the entry filter to use
                         if symbol in self.latest_data:
                             self.latest_data[symbol]['funding_rate'] = float(rate_raw)

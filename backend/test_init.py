@@ -1,7 +1,5 @@
 import asyncio
 from bot import CryptoBot
-from database import BotDatabase
-from telegram_notifier import TelegramNotifier
 import logging
 
 # Configure Logging

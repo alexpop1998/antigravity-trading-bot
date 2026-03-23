@@ -1,18 +1,10 @@
-import pandas as pd
-import numpy as np
 import logging
-import warnings
+import threading
 
 # Use sklearn's high-speed random forest to avoid huge memory footprint of deep learning libs for now
 from sklearn.ensemble import RandomForestClassifier
 
-# Suppress harmless sklearn warnings
-warnings.filterwarnings('ignore')
-
 logger = logging.getLogger("MLPredictor")
-logger.setLevel(logging.INFO)
-
-import threading
 
 class MLPredictor:
     def __init__(self):

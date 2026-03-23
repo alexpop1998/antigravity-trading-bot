@@ -1,5 +1,4 @@
 import logging
-import asyncio
 import time
 
 logger = logging.getLogger("SignalManager")
@@ -8,7 +7,7 @@ class SignalManager:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.signals = {} # symbol -> { 'side': 'buy'/'sell', 'score': 0.0, 'last_update': timestamp }
-        self.min_conviction = 3.5 # Increased from 2.5 for better trade quality
+        self.min_conviction = 2.5 # Reduced from 3.5 for faster entries in news-driven markets
         self.window_seconds = 300 # 5 minute window for signal aggregation
         
         self.weights = {
@@ -18,8 +17,8 @@ class SignalManager:
             "GATEKEEPER": 2.0, # High impact news (AI Filtered)
             "WHALE": 2.5,    # Massive on-chain moves
             "LIQUIDATION": 1.5, # Exchange cascades
-            "EVENT_DUMP": 1.5, # Major 15m drop
-            "EVENT_PUMP": 1.5, # Major 15m pump
+            "EVENT_DUMP": 2.5, # Major 15m drop
+            "EVENT_PUMP": 2.5, # Major 15m pump
             "RECOVERY": 3.0,   # V-Shape recovery start
             "REJECTION": 3.0   # Rejection after pump start
         }
