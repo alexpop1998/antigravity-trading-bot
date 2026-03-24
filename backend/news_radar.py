@@ -53,12 +53,20 @@ class NewsRadar:
                 except Exception as e:
                     logger.error(f"Error polling {url}: {e}")
                     
-            # Poll all feeds every 20 seconds for faster Black Swan interception
-            await asyncio.sleep(20)
+            # Poll all feeds every 120 seconds for cost optimization (reduced from 20s)
+            await asyncio.sleep(120)
 
     async def process_article(self, title, link):
         try:
+            # 0. Local Filter (Pre-Gatekeeper)
+            # Only use LLM for extremely high-priority subjects to save tokens
+            high_priority_kws = ["sec", "fed", "hack", "etf", "lawsuit", "bnb", "binance", "cz", "usdt"]
+            if not any(kw in title.lower() for kw in high_priority_kws):
+                logger.info(f"⏭️ Skipping Gatekeeper (Non-critical): {title}")
+                return
+
             logger.info(f"🕷️ Scraping article text from: {link}")
+            # ... rest of the function ...
             # 1. Scrape the article text
             # Use the shared client if available, otherwise fallback (to avoid total failure)
             client = self.http_client if self.http_client else httpx.AsyncClient(timeout=15.0)
@@ -104,65 +112,26 @@ class NewsRadar:
                 verdict = ai_response.choices[0].message.content.strip().upper()
                 
                 if "YES" in verdict:
-                    logger.info(f"🟢 Gatekeeper APPROVED: {title}. Forwarding to MiroFish...")
+                    logger.info(f"🟢 Gatekeeper APPROVED: {title}. Executing high-priority signal analysis.")
                     self.bot.add_alert("GATEKEEPER", f"Approved: {title[:30]}...", "High Impact")
-                    await self.trigger_mirofish(title, article_content)
+                    
+                    # Logic formerly sent to MiroFish, now handled directly for speed/simplicity
+                    sentiment_score = 50
+                    if any(kw in title.lower() for kw in ["hack", "bankrupt", "sec", "crash"]):
+                        sentiment_score = 20
+                    elif any(kw in title.lower() for kw in ["etf", "partnership", "upgrade"]):
+                        sentiment_score = 80
+                    
+                    if sentiment_score < 30:
+                        logger.error("🛑 SENTIMENT IS DEADLY. EXECUTING EMERGENCY SHORT ON ALL ASSETS.")
+                        for symbol in self.bot.symbols:
+                            asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "sell", is_black_swan=True))
+                    elif sentiment_score > 70:
+                        logger.info("🚀 SENTIMENT IS EUPHORIC. EXECUTING EMERGENCY LONG ON ALL ASSETS.")
+                        for symbol in self.bot.symbols:
+                            asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "buy", is_black_swan=True))
                 else:
                     logger.info(f"🔴 Gatekeeper REJECTED (Not market-moving): {title}")
 
         except Exception as e:
             logger.error(f"Failed to process article {link}: {e}")
-
-    async def trigger_mirofish(self, title, article_content):
-        logger.info(f"Deep Seed sent to MiroFish: {title}")
-        try:
-            prompt = f"Analyze the following news for crypto market impact: {title}. Focus on the content: {article_content[:500]}..."
-            if not self.http_client:
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": f"Bearer {os.getenv('LLM_API_KEY')}"
-                        },
-                        json={
-                            "model": os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash"),
-                            "messages": [{"role": "user", "content": prompt}],
-                            "response_format": {"type": "json_object"}
-                        }
-                    )
-            else:
-                await self.http_client.post(
-                    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {os.getenv('LLM_API_KEY')}"
-                    },
-                    json={
-                        "model": os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash"),
-                        "messages": [{"role": "user", "content": prompt}],
-                        "response_format": {"type": "json_object"}
-                    }
-                )
-            # Mocking MiroFish logic assuming the real API processes `content` as reality seed
-            # In a real scenario we'd do a POST to MiroFish and await the score
-            sentiment_score = 50
-            if "hack" in title.lower() or "bankrupt" in title.lower() or "sec" in title.lower() or "crash" in title.lower():
-                sentiment_score = 20
-            elif "etf" in title.lower() or "partnership" in title.lower() or "upgrade" in title.lower():
-                sentiment_score = 80
-                
-            logger.info(f"MiroFish Verdict: Sentiment Score = {sentiment_score}")
-            
-            if sentiment_score < 30:
-                logger.error("🛑 SENTIMENT IS DEADLY. EXECUTING EMERGENCY SHORT ON ALL ASSETS.")
-                for symbol in self.bot.symbols:
-                    asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "sell", is_black_swan=True))
-                            
-            elif sentiment_score > 70:
-                logger.info("🚀 SENTIMENT IS EUPHORIC. EXECUTING EMERGENCY LONG ON ALL ASSETS.")
-                for symbol in self.bot.symbols:
-                    asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "buy", is_black_swan=True))
-                                
-        except Exception as e:
-            logger.error(f"Failed to reach MiroFish: {e}")

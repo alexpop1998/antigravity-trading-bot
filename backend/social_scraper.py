@@ -108,4 +108,4 @@ class SocialScraper:
                 if item_id:
                     self.last_news_id = item_id
             
-            await asyncio.sleep(20) # Poll every 20 seconds
+            await asyncio.sleep(120) # Poll every 120 seconds (optimized from 20s for costs)

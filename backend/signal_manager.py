@@ -7,7 +7,7 @@ class SignalManager:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.signals = {} # symbol -> { 'side': 'buy'/'sell', 'score': 0.0, 'last_update': timestamp }
-        self.min_conviction = 2.5 # Reduced from 3.5 for faster entries in news-driven markets
+        self.min_conviction = 3.5 # Increased from 2.5 to filter noise after high drawdown period
         self.window_seconds = 300 # 5 minute window for signal aggregation
         
         self.weights = {
@@ -35,11 +35,11 @@ class SignalManager:
             is_uptrend = current_price > ema200
             
             if (is_long and is_uptrend) or (not is_long and not is_uptrend):
-                weight += 0.5
-                logger.info(f"🛡️ [Trend Bonus] +0.5 added to {type} for {symbol} (Trend Aligned)")
+                weight += 1.5
+                logger.info(f"🛡️ [Trend Bonus] +1.5 added to {type} for {symbol} (Trend Aligned)")
             else:
-                weight -= 0.3 # Small penalty for counter-trend
-                logger.info(f"⚠️ [Counter Trend] -0.3 penalty to {type} for {symbol}")
+                weight -= 1.0 # Significant penalty for counter-trend
+                logger.info(f"⚠️ [Counter Trend] -1.0 penalty to {type} for {symbol}")
 
         score_diff = weight if side.lower() in ['buy', 'long'] else -weight
         

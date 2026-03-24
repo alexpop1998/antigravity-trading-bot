@@ -54,12 +54,13 @@
             "JUP/USDT:USDT"
         ],
         "timeframe": "15m",
-        "rsi_period": 13,
-        "leverage": 12,
+        "rsi_period": 11,
+        "leverage": 10,
         "usdt_per_trade": 500,
         "percent_per_trade": 5.0,
-        "max_concurrent_positions": 12,
-        "max_global_margin_ratio": 0.85,
+        "max_concurrent_positions": 100,
+        "max_global_margin_ratio": 0.8,
+        "daily_loss_limit": 0.1,
         "stop_loss_pct": 0.05,
         "take_profit_pct": 0.02
     }

@@ -9,6 +9,9 @@ DB_PATH = "/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/bot_
 REPORT_PATH = "/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/investor_report.html"
 LOGO_PATH = "/Users/alex/.gemini/antigravity/brain/0b75080c-71a0-40b4-8486-2c83a099fc0e/antigravity_trading_logo_gold_1774209871944.png"
 
+# Filter for "starting fresh" - Change this to the date of your last reset
+START_DATE = "2026-03-23 21:20:00" 
+
 def get_base64_image(path):
     if not os.path.exists(path):
         return ""
@@ -31,17 +34,17 @@ async def async_generate():
                     ORDER BY CASE WHEN reason = 'BINANCE' THEN 0 ELSE 1 END, timestamp ASC
                 ) as rn
             FROM trade_history
-            WHERE ABS(pnl) > 0.01
+            WHERE ABS(pnl) > 0.01 AND timestamp >= ?
         )
         SELECT * FROM DedupedTrades 
         WHERE rn = 1
         ORDER BY timestamp ASC
-    """)
+    """, (START_DATE,))
     trades = [dict(row) for row in cursor.fetchall()]
     
     if not trades:
-        print("No trades found in database.")
-        return
+        print("No trades found in database. Generating empty report.")
+        trades = []
 
     total_trades = len(trades)
     winning_trades = [t for t in trades if (t['pnl'] or 0) > 0]

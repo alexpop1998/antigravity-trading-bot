@@ -35,6 +35,8 @@ class CryptoBot:
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
         self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
+        self.daily_loss_limit = params.get("daily_loss_limit", 0.05)
+        self.panic_drawdown_threshold = max(0.15, self.daily_loss_limit + 0.05)
         self.current_margin_ratio = 0.0
         
         api_key = os.getenv("EXCHANGE_API_KEY")
@@ -118,7 +120,7 @@ class CryptoBot:
         self.panic_drawdown_threshold = 0.10 # 10% Total Equity Drawdown
         self.min_leverage = 2
         self.max_leverage = 25
-        self.sector_caps = {"MEME": 3, "L1": 3, "ALTS": 4} # Limit per sector
+        self.sector_caps = {"MEME": 10, "L1": 15, "ALTS": 15, "MAJOR": 15} # Significantly increased per sector
         self.sector_mapping = {
             "BTC/USDT:USDT": "MAJOR", "ETH/USDT:USDT": "MAJOR", "SOL/USDT:USDT": "L1", 
             "BNB/USDT:USDT": "L1", "LTC/USDT:USDT": "MAJOR", "MATIC/USDT:USDT": "L1",
@@ -724,19 +726,26 @@ class CryptoBot:
             logger.error(f"Failed to close position for {symbol}: {e}")
             logger.error(traceback.format_exc())
     # Calculate dynamic order amount based on risk capital, equity, and confidence
-    def _calculate_order_amount(self, symbol, current_price, custom_leverage=None, confidence_modifier=1.0):
+    def _calculate_order_amount(self, symbol, current_price, custom_leverage=None, consensus_score=3.5):
         leverage = custom_leverage if custom_leverage else self.leverage
         
-        # 1. Base Capital Calculation (Equity % vs Fixed USDT)
+        # 1. Dynamic % Sizing based on Consensus (User approved 2% base)
+        # Base: 2.0% at threshold 3.5
+        # Bonus: +0.5% per 1.0 point above 3.5
+        # Cap: 5.0%
+        base_pct = 2.0
+        bonus_pct = max(0, (float(consensus_score) - 3.5) * 0.5)
+        total_pct = min(5.0, base_pct + bonus_pct)
+        
+        # 2. Base Capital Calculation from Equity
         current_equity = self.latest_account_data.get('equity', 0)
-        if current_equity > 0:
-            base_usdt = current_equity * (self.percent_per_trade / 100)
-            logger.info(f"[{symbol}] Equity Sizing: {self.percent_per_trade}% of {current_equity:.2f} USDT = {base_usdt:.2f} USDT")
-        else:
-            base_usdt = self.usdt_per_trade
-            logger.warning(f"[{symbol}] Equity not available, falling back to fixed {base_usdt} USDT sizing.")
-            
-        # 2. Volatility-based capital allocation (ATR modifier)
+        if current_equity <= 0:
+             # Fallback to wallet balance
+             current_equity = self.latest_account_data.get('total_wallet_balance', 1000)
+             
+        base_usdt = current_equity * (total_pct / 100.0)
+        
+        # 3. Volatility-based capital allocation (ATR modifier)
         current_atr = self.latest_data[symbol].get('atr', current_price * 0.01)
         if current_atr == "N/A" or not current_atr:
             current_atr = current_price * 0.01
@@ -747,22 +756,18 @@ class CryptoBot:
         volatility_modifier = baseline_atr_pct / atr_pct if atr_pct > 0 else 1.0
         volatility_modifier = max(0.2, min(2.0, volatility_modifier))
         
-        # 3. Final Allocation with Confidence Scaling
-        adjusted_usdt = base_usdt * volatility_modifier * confidence_modifier
+        # 4. Final Allocation
+        adjusted_usdt = base_usdt * volatility_modifier
         
-        # Global Cap: Never risk more than 15% of equity per trade even with modifiers
-        if current_equity > 0:
-            max_limit = current_equity * 0.15
-            if adjusted_usdt > max_limit:
-                logger.warning(f"[{symbol}] Capping order size to 15% of equity: {adjusted_usdt:.2f} -> {max_limit:.2f}")
-                adjusted_usdt = max_limit
+        # Global Safety Cap: 10% of equity per trade (extra cautious)
+        max_limit = current_equity * 0.10
+        if adjusted_usdt > max_limit:
+            adjusted_usdt = max_limit
 
         purchasing_power = adjusted_usdt * leverage
-        
-        logger.info(f"[{symbol}] Sizing Summary: Base={base_usdt:.2f}, VolMod={volatility_modifier:.2f}, ConfMod={confidence_modifier:.2f} -> Adjusted={adjusted_usdt:.2f} USDT")
-        
-        # Contract size calculation
         amount = purchasing_power / current_price
+        
+        logger.info(f"📐 [{symbol}] Sizing Summary: {total_pct:.1f}% Base, VolMod={volatility_modifier:.2f} -> {adjusted_usdt:.2f} USDT Margin (Score: {consensus_score})")
         
         # Adjust for exchange precision rules
         amount = self.exchange.amount_to_precision(symbol, amount)
@@ -775,8 +780,8 @@ class CryptoBot:
         if not atr or atr == "N/A":
             atr = current_price * 0.01
         
-        # 1. Base leverage 10x (Aggressive Default)
-        base_lev = 10
+        # 1. Base leverage from config (e.g. 10x)
+        base_lev = self.leverage
         
         # 2. Consensus Scaling (Aggressive Scaling: +2 lev per 1.0 score above 5)
         score_bonus = (consensus_score - 5.0) * 2.0 
@@ -839,6 +844,29 @@ class CryptoBot:
                 # Re-check limit inside the lock with latest confirmed info
                 confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('contracts', 0) or 0) != 0]
                 
+                # --- [REMOVED] Global Position Count Limit ---
+                # User requested to trade purely based on margin ratio instead of position count.
+                
+                # --- CRITICAL: Sector Caps Enforcement ---
+                symbol_sector = self.sector_mapping.get(symbol, "ALTS")
+                sector_limit = self.sector_caps.get(symbol_sector, 3) # default 3 for MAJOR/L1/MEME
+                
+                # Count current positions in the same sector
+                sector_count = 0
+                for p in confirmed_positions:
+                    p_symbol = p.get('symbol')
+                    # Match symbol format (Binance uses complex strings)
+                    if p_symbol:
+                        # Extract base symbol to match mapping
+                        clean_p_symbol = p_symbol.split(':')[0]
+                        if self.sector_mapping.get(clean_p_symbol) == symbol_sector or self.sector_mapping.get(p_symbol) == symbol_sector:
+                            sector_count += 1
+                
+                if sector_count >= sector_limit:
+                    logger.warning(f"🚫 [SECTOR LIMIT] Max positions for {symbol_sector} reached ({sector_count} >= {sector_limit}). Skipping {symbol}.")
+                    self.active_positions[symbol] = None
+                    return
+
                 # --- NEW SAFETY GUARD: Total Symbol Exposure Cap ---
                 current_equity = self.latest_account_data.get('equity', 0)
                 if current_equity > 0:
@@ -876,7 +904,7 @@ class CryptoBot:
                 except Exception as e:
                     logger.error(f"Failed to set leverage for {symbol}: {e}")
                 
-                amount_to_buy = self._calculate_order_amount(symbol, current_price, custom_leverage=active_leverage)
+                amount_to_buy = self._calculate_order_amount(symbol, current_price, custom_leverage=active_leverage, consensus_score=consensus_score)
                 
                 # --- SPREAD PROTECTOR ---
                 ticker = await self.exchange.fetch_ticker(symbol)
@@ -924,10 +952,10 @@ class CryptoBot:
                 tp1_distance = current_price * 0.012 # 1.2% TP1
                 tp2_distance = current_price * 0.030 # 3.0% TP2
             else:
-                # Black Swans get wider stops (5x ATR) to avoid noise
-                sl_mult = 5.0 if is_black_swan else 2.2
-                tp1_mult = 6.0 if is_black_swan else 3.0
-                tp2_mult = 12.0 if is_black_swan else 6.0
+                # Optimized Strategy: SL 2.0x, TP1 3.2x, TP2 6.5x (Safe ATR multipliers)
+                sl_mult = 5.0 if is_black_swan else 2.0
+                tp1_mult = 6.0 if is_black_swan else 3.2
+                tp2_mult = 12.0 if is_black_swan else 6.5
                 
                 sl_distance  = current_atr * sl_mult
                 # Floor for Black Swans (1.2% as per user safety requirement)
@@ -1136,7 +1164,7 @@ class CryptoBot:
                 # Use the worse of the two for the circuit breaker
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
-                if effective_pnl_pct <= -0.05: # 5% Daily Equity/Wallet Loss
+                if effective_pnl_pct <= -self.daily_loss_limit:
                     if not self.circuit_breaker_active:
                         logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({effective_pnl_pct:.2%}). Activating Circuit Breaker.")
                         self.circuit_breaker_active = True
@@ -1160,7 +1188,7 @@ class CryptoBot:
                     total_maint_margin = float(info.get('totalMaintMargin', 0))
                     self.current_margin_ratio = float(info.get('marginRatio', 0)) or (total_maint_margin / equity if equity > 0 else 0)
                 
-                if self.current_margin_ratio > 0.8: # 80% Margin Usage is DANGEROUS
+                if self.current_margin_ratio > 0.95: # 95% Margin Usage is DANGEROUS
                     logger.critical(f"⚠️ DANGER: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
                     worst_symbol = None
                     worst_pnl = 0
