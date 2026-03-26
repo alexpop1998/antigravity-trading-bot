@@ -9,22 +9,27 @@ class SectorManager:
             # --- AI / DePIN ---
             "FET/USDT:USDT": "AI", "TAO/USDT:USDT": "AI", "RENDER/USDT:USDT": "AI", "NEAR/USDT:USDT": "AI",
             "AR/USDT:USDT": "DEPIN", "HNT/USDT:USDT": "DEPIN", "FIL/USDT:USDT": "DEPIN",
+            "AGT/USDT:USDT": "AI", # Antigravity (Likely AI)
             
             # --- L1 / L2 ---
             "BTC/USDT:USDT": "MAJOR", "ETH/USDT:USDT": "MAJOR", "SOL/USDT:USDT": "L1", 
             "AVAX/USDT:USDT": "L1", "DOT/USDT:USDT": "L1", "ADA/USDT:USDT": "L1",
-            "ARB/USDT:USDT": "L2", "OP/USDT:USDT": "L2", "MATIC/USDT:USDT": "L2",
+            "ARB/USDT:USDT": "L2", "OP/USDT:USDT": "L2", "MATIC/USDT:USDT": "L2", "SUI/USDT:USDT": "L1", "APT/USDT:USDT": "L1",
+            "THE/USDT:USDT": "L1", # THE Protocol
             
             # --- Meme ---
             "DOGE/USDT:USDT": "MEME", "SHIB/USDT:USDT": "MEME", "PEPE/USDT:USDT": "MEME", 
             "WIF/USDT:USDT": "MEME", "BONK/USDT:USDT": "MEME", "FLOKI/USDT:USDT": "MEME",
+            "PIPPIN/USDT:USDT": "MEME", "FARTCOIN/USDT:USDT": "MEME", "BAN/USDT:USDT": "MEME",
+            "BEAT/USDT:USDT": "MEME", # Just in case it's a meme
             
             # --- DeFi ---
             "UNI/USDT:USDT": "DEFI", "AAVE/USDT:USDT": "DEFI", "LINK/USDT:USDT": "DEFI",
-            "RUNE/USDT:USDT": "DEFI", "JUP/USDT:USDT": "DEFI", "LDO/USDT:USDT": "DEFI"
+            "RUNE/USDT:USDT": "DEFI", "JUP/USDT:USDT": "DEFI", "LDO/USDT:USDT": "DEFI",
+            "PLAY/USDT:USDT": "DEFI"
         }
         self.default_sector = "ALTCOIN"
-        self.max_sector_exposure = 0.20 # 20% Max per sector
+        self.max_sector_exposure = 10.0  # 1000% Max per sector (Effectively disabled for autonomous trading)
 
     def get_sector(self, symbol):
         return self.sector_map.get(symbol, self.default_sector)

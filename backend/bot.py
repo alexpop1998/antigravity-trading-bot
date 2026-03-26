@@ -654,7 +654,9 @@ class CryptoBot:
                     self.active_positions[symbol] = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
                     self.pending_orders_count += 1
                     
-                    await self.execute_order(symbol, side.lower(), self.latest_data[symbol]['price'], is_black_swan=is_black_swan, consensus_score=consensus_score, signal_type=type)
+                    await self.execute_order(symbol, side.lower(), self.latest_data[symbol]['price'], 
+                                           is_black_swan=is_black_swan, consensus_score=consensus_score, 
+                                           signal_type=type, mtf_context=mtf_context)
 
     def _check_soft_stop_loss(self, symbol, current_price):
         trade = self.trade_levels.get(symbol)
@@ -988,7 +990,7 @@ class CryptoBot:
         
         return final_lev
 
-    async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH"):
+    async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
         # --- GLOBAL RISK CHECKS ---
         if symbol in self.symbol_blacklist:
             logger.warning(f"🚫 Skipping {symbol}: In blacklist.")
