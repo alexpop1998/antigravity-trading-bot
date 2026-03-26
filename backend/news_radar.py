@@ -22,7 +22,6 @@ class NewsRadar:
         self.keywords = ["sec", "lawsuit", "hack", "bankrupt", "etf", "banned", "crash", 
                          "partnership", "mainnet", "upgrade", "acquired", "inflation", "rates"]
         self.seen_guids = set()
-        self.mirofish_url = "http://127.0.0.1:5001/api/simulation/quick_run" 
         
         # Gemini setup for the Gatekeeper
         api_key = os.getenv("LLM_API_KEY")
@@ -84,10 +83,8 @@ class NewsRadar:
                 logger.warning(f"Could not extract sufficient text from {link}. Using title only.")
                 article_content = title
                     
-            # 2. The Gatekeeper (AI Filter)
             if not self.ai_client:
-                logger.warning("No LLM_API_KEY. Skipping Gatekeeper. Sending directly to MiroFish.")
-                await self.trigger_mirofish(title, article_content)
+                logger.warning("No LLM_API_KEY. Skipping Gatekeeper analysis.")
                 return
 
             async with self.semaphore:
@@ -115,7 +112,7 @@ class NewsRadar:
                     logger.info(f"🟢 Gatekeeper APPROVED: {title}. Executing high-priority signal analysis.")
                     self.bot.add_alert("GATEKEEPER", f"Approved: {title[:30]}...", "High Impact")
                     
-                    # Logic formerly sent to MiroFish, now handled directly for speed/simplicity
+                    # High-priority signal analysis handled directly for speed/simplicity
                     sentiment_score = 50
                     if any(kw in title.lower() for kw in ["hack", "bankrupt", "sec", "crash"]):
                         sentiment_score = 20
@@ -125,10 +122,22 @@ class NewsRadar:
                     if sentiment_score < 30:
                         logger.error("🛑 SENTIMENT IS DEADLY. EXECUTING EMERGENCY SHORT ON ALL ASSETS.")
                         for symbol in self.bot.symbols:
+                            # --- PRICE SPIKE CHECK (DeepSeek v3) ---
+                            # If it's a SHORT signal but price already dumped > 2% in 2m, skip to avoid "selling bottom"
+                            recent_change = self.bot.latest_data[symbol].get('changePercent', 0)
+                            if recent_change < -2.0:
+                                logger.info(f"⏭️ Skipping SHORT on {symbol}: Price already dumped {recent_change:.2%}")
+                                continue
                             asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "sell", is_black_swan=True))
                     elif sentiment_score > 70:
                         logger.info("🚀 SENTIMENT IS EUPHORIC. EXECUTING EMERGENCY LONG ON ALL ASSETS.")
                         for symbol in self.bot.symbols:
+                            # --- PRICE SPIKE CHECK (DeepSeek v3) ---
+                            # If it's a LONG signal but price already pumped > 2% in 2m, skip to avoid "buying top"
+                            recent_change = self.bot.latest_data[symbol].get('changePercent', 0)
+                            if recent_change > 2.0:
+                                logger.info(f"⏭️ Skipping LONG on {symbol}: Price already pumped {recent_change:.2%}")
+                                continue
                             asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "buy", is_black_swan=True))
                 else:
                     logger.info(f"🔴 Gatekeeper REJECTED (Not market-moving): {title}")

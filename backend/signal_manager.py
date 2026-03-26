@@ -6,67 +6,89 @@ logger = logging.getLogger("SignalManager")
 class SignalManager:
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        self.signals = {} # symbol -> { 'side': 'buy'/'sell', 'score': 0.0, 'last_update': timestamp }
-        self.min_conviction = 3.5 # Increased from 2.5 to filter noise after high drawdown period
-        self.window_seconds = 300 # 5 minute window for signal aggregation
+        self.signals = {} # symbol -> { type: { 'side': 'buy'/'sell', 'weight': 0.0, 'timestamp': ts } }
+        self.min_conviction = 2.5 
         
-        self.weights = {
-            "TECH": 1.0,     # Basic Technicals
-            "AI": 1.2,       # ML Prophet
-            "NEWS": 1.5,     # Sentiment (Social Scraper)
-            "GATEKEEPER": 2.0, # High impact news (AI Filtered)
-            "WHALE": 2.5,    # Massive on-chain moves
-            "LIQUIDATION": 1.5, # Exchange cascades
-            "EVENT_DUMP": 2.5, # Major 15m drop
-            "EVENT_PUMP": 2.5, # Major 15m pump
-            "RECOVERY": 3.0,   # V-Shape recovery start
-            "REJECTION": 3.0,  # Rejection after pump start
-            "VELOCITY_MOMENTUM": 2.5, # Rapid 2m breakout/breakdown
-            "VELOCITY_REVERSAL": 3.0  # Overextension + exhaustion signal
+        # Signal TTL (Time-To-Live in seconds)
+        self.ttls = {
+            "LIQUIDATION": 10,
+            "DEX_ARBITRAGE": 10,
+            "WHALE": 120,
+            "GATEKEEPER": 900,  # 15m
+            "AI": 60,          # ML Prophet (1m)
+            "TECH": 300,        # Technicals (5m)
+            "NEWS": 600,        # Social/Panic (10m)
+            "VELOCITY_MOMENTUM": 30,
+            "RECOVERY": 120,
+            "REJECTION": 120,
+            "SENTIMENT": 600      # 10m
         }
 
-    async def add_signal(self, symbol, type, side, weight_modifier=1.0, current_price=None, ema200=None):
+        self.weights = {
+            "TECH": 1.0, "AI": 1.2, "NEWS": 1.5, "GATEKEEPER": 2.0, "WHALE": 2.5,
+            "LIQUIDATION": 2.5, "DEX_ARBITRAGE": 3.0, "EVENT_DUMP": 2.5, "EVENT_PUMP": 2.5,
+            "RECOVERY": 3.0, "REJECTION": 3.0, "VELOCITY_MOMENTUM": 2.5,
+            "SENTIMENT": 1.5
+        }
+
+    async def add_signal(self, symbol, type, side, weight_modifier=1.0, current_price=None, ema200=None, ai_confidence=0.0):
         now = time.time()
+        
+        if type in ["LIQUIDATION", "DEX_ARBITRAGE"]:
+            logger.warning(f"⚡ [HFT PATH] Immediate execution triggered for {symbol} via {type} ({side})")
+            return True, 5.0 # HFT signals bypass consensus map
+
+        # 2. Strategic Consensus Path (Path B)
         weight = self.weights.get(type, 0.5) * weight_modifier
         
-        # --- TREND BONUS: +0.5 if aligning with 200 EMA ---
+        # Trend Bonus logic remains...
         if current_price and ema200:
             is_long = side.lower() in ['buy', 'long']
             is_uptrend = current_price > ema200
-            
-            if (is_long and is_uptrend) or (not is_long and not is_uptrend):
-                weight += 1.5
-                logger.info(f"🛡️ [Trend Bonus] +1.5 added to {type} for {symbol} (Trend Aligned)")
-            else:
-                weight -= 1.0 # Significant penalty for counter-trend
-                logger.info(f"⚠️ [Counter Trend] -1.0 penalty to {type} for {symbol}")
+            weight += 1.5 if (is_long and is_uptrend) or (not is_long and not is_uptrend) else -1.0
 
-        score_diff = weight if side.lower() in ['buy', 'long'] else -weight
+        if symbol not in self.signals:
+            self.signals[symbol] = {}
         
-        if symbol not in self.signals or (now - self.signals[symbol]['last_update']) > self.window_seconds:
-            # New signal window
-            self.signals[symbol] = {'side': side, 'score': score_diff, 'last_update': now}
-        else:
-            # Aggregate within window
-            self.signals[symbol]['score'] += score_diff
-            self.signals[symbol]['last_update'] = now
-            # Update side based on total score polarity
-            self.signals[symbol]['side'] = 'buy' if self.signals[symbol]['score'] > 0 else 'sell'
+        # Store signal with timestamp
+        self.signals[symbol][type] = {
+            'side': side.lower(),
+            'weight': weight,
+            'timestamp': now
+        }
 
-        current_total_score = self.signals[symbol]['score']
+        # Calculate Consensus with TTL Decay
+        total_score = 0.0
+        active_side = None
         
-        # --- DYNAMIC THRESHOLD: Lower for High Impact signals ---
-        dynamic_threshold = self.min_conviction
-        if type in ["WHALE", "GATEKEEPER"]:
-            dynamic_threshold = 2.0
+        # Clean expired signals and calculate sum
+        expired_types = []
+        for s_type, s_data in self.signals[symbol].items():
+            ttl = self.ttls.get(s_type, 300)
+            if (now - s_data['timestamp']) > ttl:
+                expired_types.append(s_type)
+                continue
             
-        logger.info(f"🚦 [Consensus] {symbol} Total Score: {current_total_score:.2f} / {dynamic_threshold} (Added {type}: {side})")
+            # Use polarity for scoring
+            score_diff = s_data['weight'] if s_data['side'] in ['buy', 'long'] else -s_data['weight']
+            total_score += score_diff
         
-        if abs(current_total_score) >= dynamic_threshold:
-            logger.warning(f"🔥 CONSENSUS REACHED for {symbol} (Score: {current_total_score:.2f}). Approving execution.")
-            final_score = abs(current_total_score)
-            # Reset score after approval to prevent double-firing in the same window
-            self.signals[symbol]['score'] = 0 
+        # Remove expired
+        for t in expired_types:
+            del self.signals[symbol][t]
+
+        # --- NEW: AI SPECULATIVE THRESHOLD (v3.5) ---
+        # Lower the threshold to 1.5 if an AI signal has extreme confidence (>90%)
+        effective_threshold = self.min_conviction
+        if type == "AI" and ai_confidence > 0.90:
+            effective_threshold = 1.5
+            logger.warning(f"🚀 [AI SPECULATION] High Confidence AI Signal ({ai_confidence:.2f}) - Lowering threshold to {effective_threshold}")
+
+        if abs(total_score) >= effective_threshold:
+            logger.warning(f"🔥 STRATEGIC CONSENSUS REACHED for {symbol} (Score: {total_score:.2f} >= {effective_threshold})")
+            final_score = abs(total_score)
+            # Reset signals for this symbol after execution to avoid double-fire
+            self.signals[symbol] = {}
             return True, final_score
             
         return False, 0

@@ -10,7 +10,7 @@ REPORT_PATH = "/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/
 LOGO_PATH = "/Users/alex/.gemini/antigravity/brain/0b75080c-71a0-40b4-8486-2c83a099fc0e/antigravity_trading_logo_gold_1774209871944.png"
 
 # Filter for "starting fresh" - Change this to the date of your last reset
-START_DATE = "2026-03-23 21:20:00" 
+START_DATE = "2026-03-26 00:00:00" 
 
 def get_base64_image(path):
     if not os.path.exists(path):

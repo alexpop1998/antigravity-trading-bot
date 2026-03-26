@@ -35,6 +35,23 @@ class BotDatabase:
                 exchange_trade_id TEXT UNIQUE
             )
         ''')
+
+        # Nuova Tabella: AI Memory (per addestramento LLM in-context)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                symbol TEXT,
+                signal_type TEXT,
+                side TEXT,
+                indicators_json TEXT,
+                entry_price REAL,
+                exit_price REAL,
+                pnl REAL,
+                outcome TEXT, -- 'WIN', 'LOSS', 'PARTIAL'
+                trade_id TEXT
+            )
+        ''')
         
         # Add exchange_trade_id column to existing table if it doesn't exist
         try:
@@ -77,6 +94,52 @@ class BotDatabase:
             pass # Ignoriamo duplicati basati su exchange_trade_id
         except Exception as e:
             logger.error(f"Errore log trade: {e}")
+
+    def save_trade_snapshot(self, symbol, signal_type, side, entry_price, indicators):
+        """Salva uno snapshot dello stato del mercato al momento dell'ingresso."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO ai_memory (symbol, signal_type, side, entry_price, indicators_json)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (symbol, signal_type, side, entry_price, json.dumps(indicators)))
+            snapshot_id = cursor.lastrowid
+            self.conn.commit()
+            return snapshot_id
+        except Exception as e:
+            logger.error(f"Errore salvataggio snapshot AI: {e}")
+            return None
+
+    def update_trade_outcome(self, snapshot_id, exit_price, pnl):
+        """Aggiorna lo snapshot con l'esito finale del trade."""
+        if snapshot_id is None: return
+        try:
+            outcome = 'WIN' if pnl > 0 else 'LOSS'
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                UPDATE ai_memory 
+                SET exit_price = ?, pnl = ?, outcome = ?
+                WHERE id = ?
+            ''', (exit_price, pnl, outcome, snapshot_id))
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"Errore aggiornamento esito AI: {e}")
+
+    def get_similar_memories(self, symbol, limit=5):
+        """Recupera gli ultimi trade simili per fornire contesto all'LLM."""
+        try:
+            cursor = self.conn.cursor()
+            # Priorità ai trade dello stesso simbolo, poi agli altri
+            cursor.execute('''
+                SELECT * FROM ai_memory 
+                WHERE outcome IS NOT NULL 
+                ORDER BY CASE WHEN symbol = ? THEN 0 ELSE 1 END, timestamp DESC 
+                LIMIT ?
+            ''', (symbol, limit))
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Errore recupero memorie AI: {e}")
+            return []
             
     def sync_binance_trades(self, trades_list):
         """Syncs an array of CCXT trade objects to the local SQLite database"""

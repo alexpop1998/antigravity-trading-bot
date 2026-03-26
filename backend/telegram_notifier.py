@@ -34,33 +34,70 @@ class TelegramNotifier:
             logger.error(f"Errore connessione Telegram: {e}")
 
     def notify_trade(self, symbol, side, price, amount, reason="", pnl=None):
-        if side.upper() == "CLOSE":
+        # Mappa delle ragioni in italiano
+        reasons_it = {
+            "EXIT": "Chiusura Posizione",
+            "PARTIAL_EXIT": "Chiusura Parziale TP1",
+            "STOP-LOSS": "Stop-Loss Colpito",
+            "TAKE-PROFIT": "Take-Profit Colpito",
+            "STOP-LOSS (TRAILING)": "Trailing Stop Colpito",
+            "TAKE-PROFIT 2 (FINAL)": "Take-Profit 2 (Finale)",
+            "INIT_CONSENSUS": "Segnale Approvato",
+            "CONSENSUS_HIT": "Obiettivo Consenso Raggiunto",
+            "CASCADE": "Cascata Liquidazioni",
+            "VELOCITY EXIT": "Uscita d'Emergenza (Volatilità)",
+            "RECOVERY": "Recupero Rapido",
+            "REJECTION": "Rifiuto ad Alta Volatilità",
+            "VELOCITY MOMENTUM": "Breakout di Velocità",
+            "MANUAL": "Chiusura Manuale",
+            "CIRCUIT BREAKER": "Intervento Circuit Breaker",
+            "DEX_ARBITRAGE": "Arbitraggio DEX",
+            "LIQUIDATION": "Liquidazione Rilevata"
+        }
+        
+        reason_it = reasons_it.get(reason, reason)
+
+        if side.upper() == "CLOSE" or side.upper() == "CLOSE_PARTIAL":
             if pnl is not None:
                 emoji = "💰" if pnl >= 0 else "💀"
-                pnl_str = f"PnL: `{pnl:+.2f} USDT`"
+                pnl_str = f"PnL Realizzato: `{pnl:+.2f} USDT`"
             else:
                 emoji = "🏁"
                 pnl_str = ""
+            status = "CHIUSO" if side.upper() == "CLOSE" else "PARZIALMENTE CHIUSO"
         else:
             emoji = "🚀" if side.lower() in ['buy', 'long'] else "🩸"
             pnl_str = ""
+            status = "ESEGUITO"
 
-        msg = f"{emoji} *TRADE {'EXECUTED' if side.upper() != 'CLOSE' else 'CLOSED'}*\n\n" \
-              f"Instrument: `{symbol}`\n" \
-              f"Side: `{side.upper()}`\n" \
-              f"Price: `{price}`\n" \
-              f"Amount: `{amount}`\n"
+        msg = f"{emoji} *ORDINE {status}*\n\n" \
+              f"Strumento: `{symbol}`\n" \
+              f"Tipo: `{side.upper()}`\n" \
+              f"Prezzo: `{price}`\n" \
+              f"Quantità: `{amount}`\n"
         
         if pnl_str:
             msg += f"{pnl_str}\n"
             
-        if reason:
-            msg += f"Reason: `{reason}`"
+        if reason_it:
+            msg += f"Motivazione: `{reason_it}`"
             
         asyncio.create_task(self.send_message(msg))
 
     def notify_alert(self, type, title, value=""):
-        msg = f"⚠️ *ALERT: {type}*\n\n" \
-              f"Title: {title}\n" \
-              f"Value: `{value}`"
+        # Traduzione dei tipi di alert
+        types_it = {
+            "WHALE": "🐳 MOVIMENTO WHALE",
+            "CASCADE": "🩸 CASCATA LIQUIDAZIONI",
+            "GATEKEEPER": "🛡️ GATEKEEPER AI",
+            "CRITICAL": "🆘 CRITICO",
+            "ERROR": "❌ ERRORE",
+            "WARNING": "⚠️ AVVISO"
+        }
+        
+        type_it = types_it.get(type, type)
+        
+        msg = f"⚠️ *ALLERTA: {type_it}*\n\n" \
+              f"Dettaglio: {title}\n" \
+              f"Valore: `{value}`"
         asyncio.create_task(self.send_message(msg))

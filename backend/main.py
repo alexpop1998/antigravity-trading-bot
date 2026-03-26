@@ -162,15 +162,6 @@ class AnalyzeRequest(BaseModel):
     price: float
     rsi: float
 
-class TestNewsRequest(BaseModel):
-    title: str
-    content: str = "Test Content"
-
-@app.post("/api/test-news")
-async def test_news(req: TestNewsRequest):
-    # Bypassing the scraper/gatekeeper for pure MiroFish mock
-    await news_radar.trigger_mirofish(req.title, req.content)
-    return {"status": "success", "message": f"Test news sent to Radar: {req.title}"}
 
 class TestWhaleRequest(BaseModel):
     btc_amount: float

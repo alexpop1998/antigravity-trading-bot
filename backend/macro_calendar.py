@@ -105,17 +105,14 @@ class MacroCalendar:
             if self.next_event:
                 time_till_event = (self.next_event["time"] - now).total_seconds()
                 
-                # Pause trading 15 mins before to 5 mins after
+                # Volatility Shield: 15 mins before to 5 mins after
                 if -300 <= time_till_event <= 900:  # 900s = 15m before, -300s = 5m after
                     if not self.bot.is_macro_paused:
-                        logger.warning(f"🚨 MACRO EVENT IMMINENT: '{self.next_event['title']}'. Pausing algorithmic trading to protect capital.")
-                        self.bot.is_macro_paused = True
-                        
-                        # Optionally close positions to eliminate risk during the volatile spike
-                        # asyncio.create_task(self.bot.close_all_positions())
+                        logger.warning(f"🚨 MACRO VOLATILITY SHIELD ACTIVE: '{self.next_event['title']}'. Reducing sizing (0.5%) and widening SL (5x ATR).")
+                        self.bot.is_macro_paused = True # Still called is_macro_paused but logic in bot.py now handles it as a shield
                 else:
                     if self.bot.is_macro_paused:
-                        logger.info(f"✅ MACRO EVENT PASSED: '{self.next_event['title']}'. Resuming algorithmic trading.")
+                        logger.info(f"✅ MACRO EVENT PASSED: '{self.next_event['title']}'. Resuming standard risk profile.")
                         self.bot.is_macro_paused = False
                         
                         # Pop the event so we look for the next one
