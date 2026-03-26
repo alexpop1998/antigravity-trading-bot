@@ -1641,7 +1641,8 @@ class CryptoBot:
         """
         try:
             # 1. Get high-potential candidates (volume/volatility filtered)
-            scored_assets = await self.scanner.get_top_performing_assets(limit=100)
+            # Reduce candidate volume (100 -> 50) for cost optimization
+            scored_assets = await self.scanner.get_top_performing_assets(limit=50)
             
             # 2. AI Refinement: Let Gemini pick the Final 50
             new_symbols = await self.analyst.refine_market_selection(scored_assets, limit=50)
@@ -1838,7 +1839,7 @@ class CryptoBot:
                 await self.refresh_symbols()
             except Exception as e:
                 logger.error(f"Error in refresh_symbols_loop: {e}")
-            await asyncio.sleep(1800) # Refresh every 30 minutes (Increased frequency per user request)
+            await asyncio.sleep(14400) # Refresh every 4 hours (Optimized for cost/efficiency)
 
     async def weekly_self_audit_loop(self):
         """Background task to perform AI self-audit every Sunday."""
