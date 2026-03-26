@@ -14,21 +14,23 @@ Once logged into your server via SSH, run these commands:
 # Update system
 sudo apt update && sudo apt upgrade -y
 
-# Install Python and dependencies
+# Install Python 3.9+, pip, venv, nginx, and git
 sudo apt install python3-pip python3-venv nginx certbot python3-certbot-nginx git -y
 ```
 
 ## 3. Project Setup
 ```bash
-# Clone your project (assuming you upload it or use git)
-cd /home/alex/
-mkdir trading-terminal && cd trading-terminal
+# Clone your project from Git
+cd /home/$(whoami)/
+git clone https://github.com/alexpop1998/antigravity-trading-bot.git trading-terminal
+cd trading-terminal
 
 # Setup Virtual Environment
 python3 -m venv venv
 source venv/bin/activate
 
 # Install requirements
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -36,12 +38,27 @@ pip install -r requirements.txt
 Create the `.env` file in the `backend/` directory:
 ```bash
 nano backend/.env
-# Paste your keys (EXCHANGE_API_KEY, SECRET, LLM_API_KEY, etc.)
+```
+Paste your keys. Ensure you include the LLM configuration:
+```env
+EXCHANGE_API_KEY=your_key
+EXCHANGE_API_SECRET=your_secret
+LLM_API_KEY=your_gemini_key
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1/openai/
+LLM_MODEL_NAME=gemini-1.5-flash
+BINANCE_SANDBOX=false
 ```
 
 ## 5. Systemd Persistence (Uptime 24/7)
+Edit the service file to match your VPS username:
 ```bash
-# Copy the service file created by Antigravity
+nano deployment/trading-bot.service
+# Change User=alex to your VPS username
+# Change /Users/alex/... paths to /home/your_user/trading-terminal/...
+```
+
+Then install it:
+```bash
 sudo cp deployment/trading-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable trading-bot
@@ -66,6 +83,6 @@ sudo certbot --nginx -d yourdomain.com
 
 ## 7. Remote Support (Antigravity AI)
 Since I cannot "live" inside the VPS, when you need my help to debug or upgrade:
-1. Copy the logs using: `tail -n 100 /var/log/trading-bot.log`
+1. Copy the logs using: `sudo journalctl -u trading-bot -n 100` or `tail -f /var/log/trading-bot.log`
 2. Paste them here in our chat.
-3. I will analyze them and provide you with the updated code or new configuration files!
+3. I will analyze them and provide you with updated code or configuration!

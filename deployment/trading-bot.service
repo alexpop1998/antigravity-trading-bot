@@ -3,13 +3,13 @@ Description=Institutional Trading Terminal Backend
 After=network.target
 
 [Service]
-User=alex
-Group=alex
-WorkingDirectory=/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend
-Environment="PATH=/Users/alex/.gemini/antigravity/scratch/trading-terminal/venv/bin"
+User=YOUR_VPS_USERNAME
+Group=YOUR_VPS_USERNAME
+WorkingDirectory=/home/YOUR_VPS_USERNAME/trading-terminal/backend
+Environment="PATH=/home/YOUR_VPS_USERNAME/trading-terminal/venv/bin"
 # Load environment variables from our .env file
-EnvironmentFile=/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/.env
-ExecStart=/Users/alex/.gemini/antigravity/scratch/trading-terminal/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+EnvironmentFile=/home/YOUR_VPS_USERNAME/trading-terminal/backend/.env
+ExecStart=/home/YOUR_VPS_USERNAME/trading-terminal/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 
 Restart=always
 RestartSec=5
