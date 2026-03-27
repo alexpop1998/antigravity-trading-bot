@@ -10,6 +10,7 @@ class TelegramNotifier:
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.enabled = bool(self.token and self.chat_id and self.token != "YOUR_TELEGRAM_TOKEN")
+        self.active_exchange = os.getenv("ACTIVE_EXCHANGE", "unknown").upper()
         
         if not self.enabled:
             logger.warning("Telegram Notifier disabilitato: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel .env")
@@ -71,8 +72,9 @@ class TelegramNotifier:
             emoji = "🚀" if side.lower() in ['buy', 'long'] else "🩸"
             pnl_str = ""
             status = "ESEGUITO"
-
-        msg = f"{emoji} *ORDINE {status}*\n\n" \
+ 
+        exchange_prefix = f" [{self.active_exchange}]" if self.active_exchange != "UNKNOWN" else ""
+        msg = f"{emoji} *ORDINE {status}{exchange_prefix}*\n\n" \
               f"Strumento: `{symbol}`\n" \
               f"Tipo: `{side.upper()}`\n" \
               f"Prezzo: `{price}`\n" \
@@ -99,7 +101,8 @@ class TelegramNotifier:
         
         type_it = types_it.get(type, type)
         
-        msg = f"⚠️ *ALLERTA: {type_it}*\n\n" \
+        exchange_prefix = f" [{self.active_exchange}]" if self.active_exchange != "UNKNOWN" else ""
+        msg = f"⚠️ *ALLERTA{exchange_prefix}: {type_it}*\n\n" \
               f"Dettaglio: {title}\n" \
               f"Valore: `{value}`"
         asyncio.create_task(self.send_message(msg))
