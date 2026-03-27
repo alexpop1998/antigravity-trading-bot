@@ -43,30 +43,47 @@ class CryptoBot:
         self.panic_drawdown_threshold = max(0.15, self.daily_loss_limit + 0.05)
         self.current_margin_ratio = 0.0
         
-        api_key = os.getenv("EXCHANGE_API_KEY")
-        api_secret = os.getenv("EXCHANGE_API_SECRET")
-        # binance doesn't need a passphrase
+        # Select active exchange from environment
+        self.active_exchange_name = os.getenv("ACTIVE_EXCHANGE", "binance").lower()
         
-        # Initialize Binance USDT-M Futures explicitly
-        self.exchange = ccxt.binanceusdm({
-            'apiKey': api_key,
-            'secret': api_secret,
-            'enableRateLimit': True,
-            'timeout': 10000, # 10 seconds timeout
-        })
-        
-        # Set to sandbox mode based on .env
-        sandbox_mode = os.getenv("BINANCE_SANDBOX", "true").lower() == "true"
-        self.exchange.set_sandbox_mode(sandbox_mode)
-        
-        mode_str = "BINANCE TESTNET" if sandbox_mode else "BINANCE PRODUCTION"
+        # Load API Credentials for active exchange
+        if self.active_exchange_name == "bitget":
+            api_key = os.getenv("BITGET_API_KEY")
+            api_secret = os.getenv("BITGET_API_SECRET")
+            password = os.getenv("BITGET_PASSWORD")
+            
+            self.exchange = ccxt.bitget({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'password': password,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'swap'},
+                'timeout': 10000,
+            })
+            mode_str = "BITGET PRODUCTION"
+        else:
+            api_key = os.getenv("EXCHANGE_API_KEY")
+            api_secret = os.getenv("EXCHANGE_API_SECRET")
+            
+            self.exchange = ccxt.binanceusdm({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'enableRateLimit': True,
+                'timeout': 10000,
+            })
+            
+            # Set to sandbox mode based on .env
+            sandbox_mode = os.getenv("BINANCE_SANDBOX", "true").lower() == "true"
+            self.exchange.set_sandbox_mode(sandbox_mode)
+            mode_str = "BINANCE TESTNET" if sandbox_mode else "BINANCE PRODUCTION"
+
         logger.warning(f"🚀 INITIALIZING BOT IN {mode_str} MODE")
         
         # Debug: Check if keys are loaded
         if api_key:
-            logger.info(f"Using API Key: {api_key[:4]}...{api_key[-4:]} (Length: {len(api_key)})")
+            logger.info(f"Using {self.active_exchange_name} API Key: {api_key[:4]}...{api_key[-4:]}")
         else:
-            logger.error("EXCHANGE_API_KEY IS EMPTY!")
+            logger.error(f"{self.active_exchange_name} API_KEY IS EMPTY!")
         
         # Active symbols data
         self.latest_data: Dict[str, Dict[str, Any]] = {symbol: {
@@ -491,12 +508,12 @@ class CryptoBot:
                 asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "sell", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
 
             self._check_soft_stop_loss(symbol, current_close)
-            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx, mtf_context)
+            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx, mtf_context, change_5m_pct)
             
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
 
-    def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance, ema200, volume24h, atr, adx, mtf_context):
+    def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance, ema200, volume24h, atr, adx, mtf_context, change_5m_pct):
         if pd.isna(rsi) or pd.isna(macd_hist) or pd.isna(bb_lower) or pd.isna(ema200):
             return
             
@@ -1332,6 +1349,32 @@ class CryptoBot:
             # Sleep before fetching again
             await asyncio.sleep(10)
 
+    def _calculate_unified_balance(self, balances):
+        """Standardizes account data across different exchange API structures."""
+        # Generic fallbacks from CCXT 'total'
+        wallet_balance = float(balances.get('USDT', {}).get('total', 0)) + float(balances.get('USDC', {}).get('total', 0))
+        equity = wallet_balance
+        unrealized_pnl = 0.0
+        margin_ratio = 0.0
+        
+        if 'info' in balances:
+            info = balances['info']
+            if self.active_exchange_name == "binance":
+                wallet_balance = float(info.get('totalWalletBalance') or wallet_balance)
+                equity = float(info.get('totalMarginBalance') or equity)
+                unrealized_pnl = float(info.get('totalUnrealizedProfit') or 0.0)
+                margin_ratio = float(info.get('marginRatio') or 0.0)
+            elif self.active_exchange_name == "bitget":
+                # Bitget V2 Structures (USDT-M)
+                wallet_balance = float(info.get('totalWalletBalance') or wallet_balance)
+                equity = float(info.get('totalEquity') or info.get('equity') or wallet_balance)
+                unrealized_pnl = float(info.get('totalUnrealizedPL') or info.get('unrealizedPL') or 0.0)
+                # Bitget margin ratio (maintMargin / equity)
+                total_maint_margin = float(info.get('totalMaintMargin', 0))
+                margin_ratio = float(info.get('marginRatio') or (total_maint_margin / equity if equity > 0 else 0))
+
+        return wallet_balance, equity, unrealized_pnl, margin_ratio
+
     async def account_update_loop(self):
         logger.info("Starting bot account update loop...")
         while True:
@@ -1348,33 +1391,11 @@ class CryptoBot:
                 # --- ACCURATE BALANCE & EQUITY: Using Binance Native Fields if available ---
                 balances = await self.exchange.fetch_balance()
                 
-                # Default fallbacks
-                usdt_bal = float(balances.get('USDT', {}).get('total', 0))
-                usdc_bal = float(balances.get('USDC', {}).get('total', 0))
-                wallet_balance = usdt_bal + usdc_bal # Simplistic fallback
-                unrealized_pnl = 0.0
-                equity = wallet_balance
+                # --- UNIFIED BALANCE PARSING (Phase 5: Dual-Exchange) ---
+                wallet_balance, equity, unrealized_pnl, self.current_margin_ratio = self._calculate_unified_balance(balances)
                 
-                # --- SOURCE OF TRUTH: Binance API Info Fields ---
-                # These fields are the most accurate as they account for multi-asset collateral,
-                # haircuts, fees, and all concurrent positions automatically.
-                if 'info' in balances:
-                    info = balances['info']
-                    #Wallet Balance (Net collateral across all assets)
-                    raw_wallet = info.get('totalWalletBalance')
-                    if raw_wallet is not None:
-                        wallet_balance = float(raw_wallet)
-                    
-                    # Margin Balance (Equity = Wallet + Unrealized PnL)
-                    raw_margin = info.get('totalMarginBalance')
-                    if raw_margin is not None:
-                        equity = float(raw_margin)
-                    
-                    # Total Unrealized PnL
-                    raw_upnl = info.get('totalUnrealizedProfit')
-                    if raw_upnl is not None:
-                        unrealized_pnl = float(raw_upnl)
-                else:
+                # Check for other exchanges/fallbacks if info is missing
+                if not balances.get('info'):
                     # Fallback for other exchanges: sum up position PnLs manually
                     # Note: We must be careful NOT to use balances['USDT']['total'] here
                     # as it might already include PnL on some exchanges depending on CCXT implementation.
@@ -1415,11 +1436,7 @@ class CryptoBot:
 
                 logger.info(f"Account Update: Wallet={wallet_balance:.4f}, Equity={equity:.4f}, PnL={unrealized_pnl:.4f} (Eff: {effective_pnl_pct:.2%})")
                 
-                if 'info' in balances:
-                    info = balances['info']
-                    # Attempt to get margin ratio from info or calculate it
-                    total_maint_margin = float(info.get('totalMaintMargin', 0))
-                    self.current_margin_ratio = float(info.get('marginRatio', 0)) or (total_maint_margin / equity if equity > 0 else 0)
+                # --- DANGER CHECK ---
                 
                 if self.current_margin_ratio > 0.95: # 95% Margin Usage is DANGEROUS
                     logger.critical(f"⚠️ DANGER: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
@@ -1734,8 +1751,9 @@ class CryptoBot:
                     # but ensure SOME protection.
                     self.trade_levels[symbol] = {
                         'entry_price': entry_price,
-                        'stop_loss': current_price * (1.03 if side == 'short' else 0.97),
-                        'take_profit': current_price * (0.90 if side == 'short' else 1.10),
+                        'sl': current_price * (1.03 if side == 'short' else 0.97),
+                        'tp1': current_price * (0.95 if side == 'short' else 1.05),
+                        'tp2': current_price * (0.90 if side == 'short' else 1.10),
                         'side': 'long' if side == 'long' else 'short',
                         'amount': amount,
                         'status': 'RECOVERED_ZOMBIE'
@@ -1791,7 +1809,7 @@ class CryptoBot:
         elif action == "PIVOT":
             await self._execute_pivot(symbol)
         elif action == "CLOSE":
-            await self.emergency_cleanup_all() # Or implement specific close
+            await self.close_position(symbol, level, reason="AI AUDIT")
             
     async def _execute_scale_out(self, symbol):
         """Close 50% of an active position to lock in profits or reduce risk."""

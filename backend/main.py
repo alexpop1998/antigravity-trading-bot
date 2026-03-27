@@ -175,7 +175,7 @@ async def test_whale(req: TestWhaleRequest):
         current_price = trading_bot.latest_data.get(ticker, {}).get('price', 0)
         if current_price > 0:
             trading_bot.active_positions[ticker] = 'SHORT'
-            asyncio.create_task(trading_bot.execute_order(ticker, 'sell', current_price, is_black_swan=True, confidence_modifier=5.0))
+            asyncio.create_task(trading_bot.execute_order(ticker, 'sell', current_price, is_black_swan=True, consensus_score=5.0, signal_type="WHALE"))
             return {"status": "success", "message": f"Whale signal triggered for {req.btc_amount} BTC on {ticker}"}
     return {"status": "ignored", "message": f"Symbol {ticker} not ready or already in SHORT"}
 
@@ -283,6 +283,25 @@ async def get_report():
         return FileResponse("/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/investor_report.html")
     except Exception as e:
         return {"status": "error", "message": f"Errore generazione report: {str(e)}"}
+
+@app.post("/api/manual-audit")
+async def manual_audit():
+    if not trading_bot or not trading_bot.db:
+        return {"status": "error", "message": "Bot non inizializzato"}
+    
+    try:
+        logger.warning("🧠 [MANUAL AUDIT] Triggering immediate AI self-correction cycle...")
+        # Get last 50 trades to give plenty of context for the drawdown
+        history = trading_bot.db.get_trades(limit=50)
+        await trading_bot.analyst.perform_self_audit(history)
+        return {
+            "status": "success", 
+            "message": "AI Post-Mortem completato", 
+            "lessons": trading_bot.analyst.lessons_learned
+        }
+    except Exception as e:
+        logger.error(f"Manual audit failed: {e}")
+        return {"status": "error", "message": str(e)}
 
 frontend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 

@@ -198,7 +198,7 @@ class BotDatabase:
         except Exception as e:
             logger.error(f"Errore durante sync_binance_trades: {e}")
 
-    def get_trades(self, start_date=None, end_date=None):
+    def get_trades(self, start_date=None, end_date=None, limit=None):
         try:
             cursor = self.conn.cursor()
             query = "SELECT * FROM trade_history"
@@ -207,6 +207,9 @@ class BotDatabase:
                 query += " WHERE timestamp BETWEEN ? AND ?"
                 params = [start_date + " 00:00:00", end_date + " 23:59:59"]
             query += " ORDER BY timestamp DESC"
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
         except Exception as e:

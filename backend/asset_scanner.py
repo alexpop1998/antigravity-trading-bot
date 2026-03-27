@@ -13,7 +13,7 @@ class AssetScanner:
         # Symbols to ignore (stables, delisted, etc.)
         self.blacklist = ["USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT"]
 
-    async def get_top_performing_assets(self, limit: int = 50) -> List[str]:
+    async def get_top_performing_assets(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Scansiona tutti i mercati Futures USDT-M e restituisce i top N per (Volume * Volatilità).
         """
