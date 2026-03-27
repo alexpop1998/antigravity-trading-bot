@@ -59,7 +59,7 @@
         "usdt_per_trade": 10,
         "percent_per_trade": 15.0,
         "max_concurrent_positions": 100,
-        "consensus_threshold": 2.5,
+        "consensus_threshold": 1.5,
         "max_global_margin_ratio": 0.8,
         "max_daily_loss": 0.1,
         "funding_filter_threshold": 0.05,
