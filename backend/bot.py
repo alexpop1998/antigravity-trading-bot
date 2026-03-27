@@ -1377,7 +1377,13 @@ class CryptoBot:
     def _calculate_unified_balance(self, balances):
         """Standardizes account data across different exchange API structures."""
         # Generic fallbacks from CCXT 'total'
+        # On some exchanges/testnets, CCXT puts the totals here
         wallet_balance = float(balances.get('USDT', {}).get('total', 0)) + float(balances.get('USDC', {}).get('total', 0))
+        
+        # If still 0, try a more aggressive fallback from standard CCXT structure
+        if wallet_balance == 0 and 'total' in balances:
+            wallet_balance = float(balances['total'].get('USDT', 0)) + float(balances['total'].get('USDC', 0))
+
         equity = wallet_balance
         unrealized_pnl = 0.0
         margin_ratio = 0.0
@@ -1385,20 +1391,26 @@ class CryptoBot:
         if 'info' in balances:
             info = balances['info']
             if self.active_exchange_name == "binance":
-                wallet_balance = float(info.get('totalWalletBalance') or wallet_balance)
-                equity = float(info.get('totalMarginBalance') or equity)
-                unrealized_pnl = float(info.get('totalUnrealizedProfit') or 0.0)
-                margin_ratio = float(info.get('marginRatio') or 0.0)
+                # Binance USDS-M (Info is a dict)
+                if isinstance(info, dict):
+                    wallet_balance = float(info.get('totalWalletBalance') or wallet_balance)
+                    equity = float(info.get('totalMarginBalance') or equity)
+                    unrealized_pnl = float(info.get('totalUnrealizedProfit') or 0.0)
+                    
+                    # Calculate Margin Ratio if missing
+                    total_maint = float(info.get('totalMaintMargin', 0))
+                    margin_ratio = float(info.get('marginRatio') or (total_maint / equity if equity > 0 else 0))
+                    
             elif self.active_exchange_name == "bitget":
                 # Bitget V2 Structures (USDT-M) - info is a list of asset dicts or a single record
                 usdt_info = {}
-                if isinstance(balances.get('info'), list):
-                    for item in balances.get('info', []):
+                if isinstance(info, list):
+                    for item in info:
                         if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
                             usdt_info = item
                             break
-                elif isinstance(balances.get('info'), dict):
-                    usdt_info = balances['info']
+                elif isinstance(info, dict):
+                    usdt_info = info
                 
                 # Robust extraction for Bitget V2: totalWalletBalance, totalEquity, totalUnrealizedPL
                 wallet_balance = float(usdt_info.get('totalWalletBalance') or usdt_info.get('available') or wallet_balance)
@@ -1408,7 +1420,7 @@ class CryptoBot:
                 # Margin ratio parsing for Bitget
                 total_maint_margin = float(usdt_info.get('totalMaintMargin', 0))
                 margin_ratio = float(usdt_info.get('marginRatio') or (total_maint_margin / equity if equity > 0 else 0))
-
+        
         return wallet_balance, equity, unrealized_pnl, margin_ratio
 
     async def account_update_loop(self):
