@@ -33,7 +33,7 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Errore connessione Telegram: {e}")
 
-    def notify_trade(self, symbol, side, price, amount, reason="", pnl=None):
+    def notify_trade(self, symbol, side, price, amount, reason="", pnl=None, pnl_pct=None):
         # Mappa delle ragioni in italiano
         reasons_it = {
             "EXIT": "Chiusura Posizione",
@@ -60,7 +60,9 @@ class TelegramNotifier:
         if side.upper() == "CLOSE" or side.upper() == "CLOSE_PARTIAL":
             if pnl is not None:
                 emoji = "💰" if pnl >= 0 else "💀"
-                pnl_str = f"PnL Realizzato: `{pnl:+.2f} USDT`"
+                pnl_str = f"PnL: `{pnl:+.2f} USDT`"
+                if pnl_pct is not None:
+                    pnl_str += f" (`{pnl_pct*100:+.2f}% ROE`)"
             else:
                 emoji = "🏁"
                 pnl_str = ""

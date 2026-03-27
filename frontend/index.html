@@ -771,12 +771,12 @@
                 document.getElementById('active-positions-count').innerText = data.positions.length;
                 let phtml = '<table><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>Market</th><th>uPnL</th></tr>';
                 data.positions.forEach(p => {
-                    const upnl = parseFloat(p.unrealizedPnl || 0);
+                    const upnl = parseFloat(p.unrealizedPnl || p.unrealizedPnL || 0);
                     const pnlClass = upnl >= 0 ? 'positive' : 'negative';
                     phtml += `<tr>
                         <td style="font-weight:700;">${p.symbol}</td>
                         <td class="${p.side === 'long' ? 'positive' : 'negative'}" style="text-transform:uppercase; font-weight:600;">${p.side}</td>
-                        <td>${parseFloat(p.contracts || 0).toFixed(3)}</td>
+                        <td>${parseFloat(p.amount || p.contracts || 0).toFixed(3)}</td>
                         <td>$${parseFloat(p.entryPrice || 0).toFixed(2)}</td>
                         <td>$${parseFloat(p.markPrice || 0).toFixed(2)}</td>
                         <td class="${pnlClass}" style="font-weight:700;">${upnl > 0 ? '+' : ''}$${upnl.toFixed(2)}</td>

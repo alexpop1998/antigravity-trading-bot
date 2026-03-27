@@ -16,6 +16,7 @@ from liquidation_hunter import LiquidationHunter
 from macro_calendar import MacroCalendar
 from rl_tuner import RLTuner
 from dex_sniper import DEXSniper
+from listing_radar import ListingRadar
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -67,6 +68,7 @@ liquidation_hunter = None
 macro_calendar = None
 rl_tuner = None
 dex_sniper = None
+listing_radar = None
 http_client = None # NEW: Global shared HTTP client
 
 @app.on_event("startup")
@@ -89,6 +91,8 @@ async def startup_event():
     macro_calendar = MacroCalendar(bot_instance=trading_bot, http_client=http_client)
     rl_tuner = RLTuner(interval_hours=24)
     dex_sniper = DEXSniper(bot_instance=trading_bot)
+    listing_radar = ListingRadar(bot_instance=trading_bot)
+    await listing_radar.initialize()
 
     # Helper to wrap background tasks with logging
     def safe_run(coro, task_name):
@@ -120,6 +124,7 @@ async def startup_event():
     safe_run(macro_calendar.monitor_calendar(), "Macro Calendar")
     safe_run(rl_tuner.run_optimization_loop(), "RL Tuner")
     safe_run(dex_sniper.monitor_arbitrage(), "DEX Sniper")
+    safe_run(listing_radar.start_polling(), "Listing Radar")
 
 @app.on_event("shutdown")
 async def shutdown_event():

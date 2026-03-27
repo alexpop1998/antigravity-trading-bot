@@ -7,7 +7,7 @@ class SignalManager:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.signals = {} # symbol -> { type: { 'side': 'buy'/'sell', 'weight': 0.0, 'timestamp': ts } }
-        self.min_conviction = 2.5 
+        self.min_conviction = getattr(bot_instance, 'consensus_threshold', 2.5)
         
         # Signal TTL (Time-To-Live in seconds)
         self.ttls = {
@@ -21,20 +21,21 @@ class SignalManager:
             "VELOCITY_MOMENTUM": 30,
             "RECOVERY": 120,
             "REJECTION": 120,
-            "SENTIMENT": 600      # 10m
+            "SENTIMENT": 600,      # 10m
+            "NEW_LISTING": 60    # 1m (High speed)
         }
 
         self.weights = {
-            "TECH": 1.0, "AI": 1.2, "NEWS": 1.5, "GATEKEEPER": 2.0, "WHALE": 2.5,
+            "TECH": 1.0, "AI": 1.2, "NEWS": 1.5, "GATEKEEPER": 3.0, "WHALE": 2.5,
             "LIQUIDATION": 2.5, "DEX_ARBITRAGE": 3.0, "EVENT_DUMP": 2.5, "EVENT_PUMP": 2.5,
             "RECOVERY": 3.0, "REJECTION": 3.0, "VELOCITY_MOMENTUM": 2.5,
-            "SENTIMENT": 1.5
+            "SENTIMENT": 1.5, "NEW_LISTING": 5.0
         }
 
     async def add_signal(self, symbol, type, side, weight_modifier=1.0, current_price=None, ema200=None, ai_confidence=0.0):
         now = time.time()
         
-        if type in ["LIQUIDATION", "DEX_ARBITRAGE"]:
+        if type in ["LIQUIDATION", "DEX_ARBITRAGE", "NEW_LISTING"]:
             logger.warning(f"⚡ [HFT PATH] Immediate execution triggered for {symbol} via {type} ({side})")
             return True, 5.0 # HFT signals bypass consensus map
 

@@ -80,8 +80,8 @@ class LLMAnalyst:
             MISSIONE:
             Basandoti sui dati tecnici e sullo storico dei risultati (se presenti), decidi se questa operazione ha un'alta probabilità di successo. 
             Determina anche: 
-            1. LEVA ottimale (5-25x).
-            2. FORZA della posizione (0.5-2.0x).
+            1. LEVA ottimale (5-25x) - Sii conservativo se lo SPREAD è alto o la LIQUIDITÀ è bassa.
+            2. FORZA della posizione (0.5-2.0x) - Riduci se c'è troppo squilibrio nel book.
             3. Multiplo STOP LOSS (0.5-2.0x dello standard ATR).
             4. Multiplo TAKE PROFIT (0.5-2.0x dello standard ATR).
             

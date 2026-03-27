@@ -29,7 +29,7 @@ class SectorManager:
             "PLAY/USDT:USDT": "DEFI"
         }
         self.default_sector = "ALTCOIN"
-        self.max_sector_exposure = 10.0  # 1000% Max per sector (Effectively disabled for autonomous trading)
+        self.max_sector_exposure = 0.30  # 30% Max per sector (Protections for Real Account)
 
     def get_sector(self, symbol):
         return self.sector_map.get(symbol, self.default_sector)

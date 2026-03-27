@@ -40,6 +40,7 @@ class CryptoBot:
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
         self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
         self.daily_loss_limit = params.get("daily_loss_limit", 1.0)
+        self.consensus_threshold = params.get("consensus_threshold", 3.0)
         self.panic_drawdown_threshold = max(0.15, self.daily_loss_limit + 0.05)
         self.current_margin_ratio = 0.0
         
@@ -339,11 +340,26 @@ class CryptoBot:
             df['adx'] = dx.rolling(window=period).mean()
             current_adx = df['adx'].iloc[-1]
             
-            # --- Order Book Imbalance Calculation ---
+            # --- Order Book & Liquidity Analysis ---
             orderbook = await self.exchange.fetch_order_book(symbol, limit=100)
-            bids = sum(float(bid[1]) for bid in orderbook['bids'])
-            asks = sum(float(ask[1]) for ask in orderbook['asks'])
-            imbalance = bids / asks if asks > 0 else 1.0
+            bids = orderbook['bids']
+            asks = orderbook['asks']
+            
+            # 1. Volume Imbalance (Total 100 levels)
+            total_bids = sum(float(bid[1]) for bid in bids)
+            total_asks = sum(float(ask[1]) for ask in asks)
+            imbalance = total_bids / total_asks if total_asks > 0 else 1.0
+            
+            # 2. Bid/Ask Spread %
+            best_bid = float(bids[0][0]) if bids else current_close
+            best_ask = float(asks[0][0]) if asks else current_close
+            spread_pct = (best_ask - best_bid) / best_bid if best_bid > 0 else 0
+            
+            # 3. Depth at 1% (Sum of amount within 1% of mid-price)
+            mid_price = (best_bid + best_ask) / 2
+            bid_depth_1pct = sum(float(bid[1]) for bid in bids if float(bid[0]) >= mid_price * 0.99)
+            ask_depth_1pct = sum(float(ask[1]) for ask in asks if float(ask[0]) <= mid_price * 1.01)
+            total_depth_1pct = bid_depth_1pct + ask_depth_1pct
             
             # --- FLASH & RECOVERY DETECTION (5m Rolling Window) ---
             change_5m_pct = 0
@@ -486,6 +502,8 @@ class CryptoBot:
                 'bb_upper': round(current_bb_upper, 4) if not pd.isna(current_bb_upper) else "N/A",
                 'bb_lower': round(current_bb_lower, 4) if not pd.isna(current_bb_lower) else "N/A",
                 'imbalance': round(imbalance, 2),
+                'spread_pct': round(spread_pct * 100, 4), # Percentage for AI readability
+                'liquidity_depth': round(total_depth_1pct, 2), 
                 'atr': round(current_atr, 6) if not pd.isna(current_atr) else "N/A",
                 'ema200': round(current_ema200, 4) if not pd.isna(current_ema200) else "N/A",
                 'volume24h': quote_volume,
@@ -638,7 +656,7 @@ class CryptoBot:
         
         if approved:
             # If it's an HFT signal, set the lock
-            if type in ["LIQUIDATION", "DEX_ARBITRAGE"]:
+            if type in ["LIQUIDATION", "DEX_ARBITRAGE", "NEW_LISTING"]:
                 self.hft_locks[symbol] = now
                 logger.warning(f"🔒 [TIME-DOMAIN LOCK] Lock ACTIVE for {symbol} (60s).")
 
@@ -650,7 +668,7 @@ class CryptoBot:
                 if existing_side != side.lower():
                     # --- REVERSAL PRIORITY ---
                     # If it's a Black Swan or Gatekeeper news, we MUST flip the position
-                    if is_black_swan or type in ["GATEKEEPER", "NEWS"]:
+                    if is_black_swan or type in ["GATEKEEPER", "NEWS", "NEW_LISTING"]:
                         logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
                         await self.close_position(symbol, self.trade_levels[symbol])
                     else:
@@ -851,7 +869,10 @@ class CryptoBot:
             
             # Extract execution details
             order_id = order_response.get('id')
-            execution_price = float(order_response.get('average') or order_response.get('price', 0))
+            # Bitget/CCXT might return None for price or average in market orders
+            raw_avg = order_response.get('average')
+            raw_price = order_response.get('price')
+            execution_price = float(raw_avg if raw_avg is not None else (raw_price if raw_price is not None else 0))
             
             # Fallback for execution price if not in response
             if execution_price <= 0:
@@ -872,6 +893,10 @@ class CryptoBot:
             entry_price = float(trade.get('entry_price', execution_price))
             pnl = (execution_price - entry_price) * amount_to_close if is_long else (entry_price - execution_price) * amount_to_close
             
+            # ROI (Price Change %) and ROE (Leverage adjusted %)
+            pnl_pct_raw = (execution_price - entry_price) / entry_price if is_long else (entry_price - execution_price) / entry_price
+            pnl_pct_leveraged = pnl_pct_raw * getattr(self, 'leverage', 1.0)
+            
             # Use provided reason or fallback to default
             if not reason:
                 reason = "EXIT" if partial_pct >= 1.0 else "PARTIAL_EXIT"
@@ -879,7 +904,7 @@ class CryptoBot:
             # Log with exchange_trade_id to prevent duplicates in sync_binance_trades
             self.db.log_trade(symbol, "CLOSE" if partial_pct >= 1.0 else "CLOSE_PARTIAL", execution_price, amount_to_close, pnl, reason, exchange_trade_id=order_id)
             
-            self.notifier.notify_trade(symbol, "CLOSE", execution_price, amount_to_close, reason, pnl=pnl)
+            self.notifier.notify_trade(symbol, "CLOSE", execution_price, amount_to_close, reason, pnl=pnl, pnl_pct=pnl_pct_leveraged)
             
             # Save state immediately to persist closure
             self.db.save_state("trade_levels", self.trade_levels)
@@ -1026,7 +1051,7 @@ class CryptoBot:
             # FIX #1: Acquire lock to serialize order execution and prevent position count race condition
             async with self.order_lock:
                 # Re-check limit inside the lock with latest confirmed info
-                confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('contracts', 0) or 0) != 0]
+                confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('amount', 0) or 0) != 0]
                 
                 # --- [REMOVED] Global Position Count Limit ---
                 # User requested to trade purely based on margin ratio instead of position count.
@@ -1365,13 +1390,24 @@ class CryptoBot:
                 unrealized_pnl = float(info.get('totalUnrealizedProfit') or 0.0)
                 margin_ratio = float(info.get('marginRatio') or 0.0)
             elif self.active_exchange_name == "bitget":
-                # Bitget V2 Structures (USDT-M)
-                wallet_balance = float(info.get('totalWalletBalance') or wallet_balance)
-                equity = float(info.get('totalEquity') or info.get('equity') or wallet_balance)
-                unrealized_pnl = float(info.get('totalUnrealizedPL') or info.get('unrealizedPL') or 0.0)
-                # Bitget margin ratio (maintMargin / equity)
-                total_maint_margin = float(info.get('totalMaintMargin', 0))
-                margin_ratio = float(info.get('marginRatio') or (total_maint_margin / equity if equity > 0 else 0))
+                # Bitget V2 Structures (USDT-M) - info is a list of asset dicts or a single record
+                usdt_info = {}
+                if isinstance(balances.get('info'), list):
+                    for item in balances.get('info', []):
+                        if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
+                            usdt_info = item
+                            break
+                elif isinstance(balances.get('info'), dict):
+                    usdt_info = balances['info']
+                
+                # Robust extraction for Bitget V2: totalWalletBalance, totalEquity, totalUnrealizedPL
+                wallet_balance = float(usdt_info.get('totalWalletBalance') or usdt_info.get('available') or wallet_balance)
+                equity = float(usdt_info.get('totalEquity') or usdt_info.get('equity') or usdt_info.get('marginBalance') or wallet_balance)
+                unrealized_pnl = float(usdt_info.get('totalUnrealizedPL') or usdt_info.get('unrealizedPL') or 0.0)
+                
+                # Margin ratio parsing for Bitget
+                total_maint_margin = float(usdt_info.get('totalMaintMargin', 0))
+                margin_ratio = float(usdt_info.get('marginRatio') or (total_maint_margin / equity if equity > 0 else 0))
 
         return wallet_balance, equity, unrealized_pnl, margin_ratio
 
@@ -1382,7 +1418,8 @@ class CryptoBot:
                 # 1. Fetch positions FIRST
                 try:
                     positions = await self.exchange.fetch_positions()
-                    active_pos = [p for p in positions if float(p.get('contracts', 0) or 0) != 0]
+                    # Filter for active positions: support both CCXT normalized 'amount' and 'contracts'
+                    active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
                 except Exception as pe:
                     logger.error(f"Error fetching positions: {pe}")
                     active_pos = []
@@ -1459,7 +1496,7 @@ class CryptoBot:
                                 pos = active_symbols_map[worst_symbol]
                                 trade_to_close = {
                                     'side': pos['side'],
-                                    'amount': pos['contracts']
+                                    'amount': pos.get('amount', pos['contracts'])
                                 }
                             asyncio.create_task(self.close_position(worst_symbol, trade_to_close, reason="CIRCUIT BREAKER"))
                 
@@ -1483,7 +1520,7 @@ class CryptoBot:
                                 # Double check active_positions to avoid re-syncing something currently being closed
                                 if self.active_positions.get(symbol) is not None:
                                     entry_price = float(pos.get('entryPrice', 0))
-                                    amount = float(pos.get('contracts', 0))
+                                    amount = float(pos.get('amount', pos.get('contracts', 0)))
                                     if entry_price > 0:
                                         logger.info(f"🔄 Re-syncing trade levels for {symbol} from existing position @ {entry_price}")
                                         current_atr = self.latest_data[symbol].get('atr', entry_price * 0.01) if symbol in self.latest_data else entry_price * 0.01
@@ -1613,13 +1650,13 @@ class CryptoBot:
         try:
             logger.warning("🛡️ Starting Emergency Cleanup of ALL positions...")
             positions = await self.exchange.fetch_positions()
-            active_pos = [p for p in positions if float(p.get('contracts', 0) or 0) != 0]
+            active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
             
             for pos in active_pos:
                 symbol = pos['symbol']
                 side = pos['side'].lower()
                 close_side = 'sell' if side == 'long' else 'buy'
-                amount = float(pos['contracts'])
+                amount = float(pos.get('amount', pos.get('contracts', 0)))
                 
                 logger.warning(f"🆘 Emergency closing {symbol} ({amount} {side})")
                 current_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
@@ -1724,7 +1761,7 @@ class CryptoBot:
         """
         try:
             positions = await self.exchange.fetch_positions()
-            active_pos = [p for p in positions if float(p.get('contracts', 0) or 0) != 0]
+            active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
             
             for pos in active_pos:
                 symbol = pos['symbol']
@@ -1744,7 +1781,7 @@ class CryptoBot:
                     side = pos['side'].lower()
                     entry_price = float(pos['entryPrice'])
                     current_price = float(pos.get('markPrice', entry_price))
-                    amount = float(pos['contracts'])
+                    amount = float(pos.get('amount', pos['contracts']))
                     
                     # Initialize trade levels with a safe emergency SL (3% from current price or 5% from entry)
                     # We use a broad SL to avoid instant closure if the user wants to manage it, 
@@ -1758,7 +1795,7 @@ class CryptoBot:
                         'amount': amount,
                         'status': 'RECOVERED_ZOMBIE'
                     }
-                    logger.warning(f"🛡️ [RECOVERY] {symbol} restored with emergency SL @ {self.trade_levels[symbol]['stop_loss']}")
+                    logger.warning(f"🛡️ [RECOVERY] {symbol} restored with emergency SL @ {self.trade_levels[symbol]['sl']}")
             
             # Save state to DB
             self.db.save_state("trade_levels", self.trade_levels)
