@@ -43,6 +43,50 @@
             overflow: hidden;
         }
 
+        @media (max-width: 992px) {
+            body {
+                flex-direction: column;
+                height: auto;
+                overflow: auto;
+            }
+            
+            nav {
+                width: 100% !important;
+                height: auto !important;
+                border-right: none !important;
+                border-bottom: 1px solid var(--border);
+                flex-direction: row !important;
+                align-items: center;
+                justify-content: space-between;
+                padding: 10px 20px !important;
+                position: sticky;
+                top: 0;
+            }
+            
+            .logo-container {
+                margin-bottom: 0 !important;
+            }
+            
+            .nav-items {
+                flex-direction: row !important;
+                gap: 5px !important;
+            }
+            
+            .nav-item {
+                padding: 8px 10px !important;
+                font-size: 12px !important;
+            }
+            
+            .nav-label, .logo-text {
+                display: none !important;
+            }
+            
+            .app-container {
+                flex: none;
+                width: 100%;
+            }
+        }
+
         /* Sidebar Navigation */
         nav {
             width: var(--sidebar-width);
@@ -140,6 +184,33 @@
             z-index: 50;
         }
 
+        @media (max-width: 768px) {
+            .top-bar {
+                padding: 0 15px;
+                height: auto;
+                min-height: 60px;
+                flex-direction: column;
+                gap: 10px;
+                padding-bottom: 15px;
+            }
+            
+            .account-summary {
+                gap: 15px !important;
+                width: 100%;
+                justify-content: space-between;
+                overflow-x: auto;
+                padding-bottom: 5px;
+            }
+            
+            .stat-value {
+                font-size: 14px !important;
+            }
+            
+            .content-area {
+                padding: 15px !important;
+            }
+        }
+
         .account-summary {
             display: flex;
             gap: 40px;
@@ -235,7 +306,7 @@
         /* Markets Grid */
         .markets-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 20px;
         }
 
@@ -306,6 +377,7 @@
             border-radius: 12px;
             border: 1px solid var(--border);
             overflow: hidden;
+            overflow-x: auto; /* Fix for mobile overflow */
         }
 
         table {
