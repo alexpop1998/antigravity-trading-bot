@@ -47,7 +47,7 @@
             body {
                 display: block !important;
                 height: auto !important;
-                min-height: 100% !important;
+                min-height: 100vh !important;
                 overflow: visible !important;
             }
             
@@ -56,28 +56,33 @@
                 width: 100% !important;
                 height: auto !important;
                 border-right: none !important;
-                border-bottom: 1px solid var(--border);
-                flex-direction: row !important;
-                flex-wrap: wrap !important;
-                align-items: center;
-                justify-content: space-between;
-                padding: 10px 15px !important;
+                border-bottom: 2px solid var(--border) !important;
+                flex-direction: column !important;
+                align-items: center !important;
+                padding: 15px 10px !important;
                 position: relative !important;
                 z-index: 1000 !important;
+                background-color: var(--bg-surface) !important;
             }
             
             .logo-container {
-                margin-bottom: 0 !important;
+                margin-bottom: 15px !important;
+                justify-content: center !important;
+                width: 100%;
             }
             
             .nav-items {
                 flex-direction: row !important;
-                gap: 5px !important;
+                justify-content: center;
+                width: 100%;
+                gap: 8px !important;
+                flex-wrap: wrap;
             }
             
             .nav-item {
                 padding: 8px 10px !important;
-                font-size: 12px !important;
+                font-size: 11px !important;
+                background: var(--bg-panel);
             }
             
             .nav-label, .logo-text {
@@ -89,6 +94,31 @@
                 flex: none !important;
                 width: 100% !important;
                 position: relative !important;
+                z-index: 100 !important;
+            }
+
+            .top-bar {
+                height: auto !important;
+                min-height: 80px !important;
+                padding: 20px 15px !important;
+                flex-direction: column !important;
+                gap: 20px !important;
+                background: var(--bg-panel) !important;
+                border-bottom: 1px solid var(--border) !important;
+                position: relative !important;
+            }
+            
+            .account-summary {
+                display: grid !important;
+                grid-template-columns: 1fr 1fr !important;
+                gap: 15px !important;
+                width: 100% !important;
+                justify-content: center !important;
+            }
+            
+            .stat-item {
+                align-items: center !important;
+                text-align: center;
             }
         }
 
