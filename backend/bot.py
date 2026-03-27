@@ -17,6 +17,7 @@ from sector_manager import SectorManager
 import feedparser
 from typing import Any, Dict, List, Optional
 from asset_scanner import AssetScanner
+from regime_detector import RegimeDetector
 
 load_dotenv(override=True)
 
@@ -154,6 +155,7 @@ class CryptoBot:
         self.max_leverage = 25
         
         self.sector_manager = SectorManager()
+        self.regime_detector = RegimeDetector()
         self.current_news = "" # Real-time market sentiment
         
         # Recupero stato persistente
@@ -322,23 +324,13 @@ class CryptoBot:
             df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
             current_ema200 = df['ema200'].iloc[-1]
 
-            # --- ADX (Average Directional Index) Calculation ---
-            plus_dm = df['high'].diff()
-            minus_dm = df['low'].diff().multiply(-1)
-            plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
-            minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+            # --- NEW: MARKET REGIME DETECTION (ADX & DONCHIAN) ---
+            regime, multiplier = self.regime_detector.detect_regime(df)
+            current_adx = df['adx'].iloc[-1] if 'adx' in df.columns else 0
             
-            # Smoothing TR, +DM, -DM (Wilder's Smoothing)
-            period = 14
-            smoothed_tr = df['tr'].rolling(window=period).mean() # Simple mean for now
-            smoothed_plus_dm = plus_dm.rolling(window=period).mean()
-            smoothed_minus_dm = minus_dm.rolling(window=period).mean()
-            
-            plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
-            minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
-            dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di))
-            df['adx'] = dx.rolling(window=period).mean()
-            current_adx = df['adx'].iloc[-1]
+            # Store in latest data
+            self.latest_data[symbol]['regime'] = regime
+            self.latest_data[symbol]['regime_multiplier'] = multiplier
             
             # --- Order Book & Liquidity Analysis ---
             orderbook = await self.exchange.fetch_order_book(symbol, limit=100)
@@ -588,17 +580,19 @@ class CryptoBot:
                 is_technical_signal = True
 
         # --- FUNDING RATE FILTER (DEEPSEEK REFACTOR) ---
-        # Don't open LONGs if the funding rate is extreme (>0.05%)
-        # Don't open SHORTs if the funding rate is extreme (< -0.05%)
+        # Instead of blocking, apply a reduction multiplier
         current_funding = self.latest_data.get(symbol, {}).get('funding_rate', 0)
         threshold = self.risk_profile.get("trading_parameters", {}).get("funding_filter_threshold", 0.0005)
+        funding_multiplier = 1.0
         
         if tech_side == 'buy' and current_funding > threshold:
-            logger.warning(f"🚫 [FUNDING GUARD] Skipping LONG on {symbol} due to high funding rate: {current_funding*100:.3f}%")
-            return
+            funding_multiplier = 0.5
+            logger.warning(f"⚠️ [FUNDING PENALTY] High funding on {symbol} ({current_funding*100:.3f}%). Reducing size by 50%.")
         elif tech_side == 'sell' and current_funding < -threshold:
-            logger.warning(f"🚫 [FUNDING GUARD] Skipping SHORT on {symbol} due to negative funding rate (Squeeze Risk): {current_funding*100:.3f}%")
-            return
+            funding_multiplier = 0.5
+            logger.warning(f"⚠️ [FUNDING PENALTY] Negative funding on {symbol} ({current_funding*100:.3f}%). Reducing size by 50%.")
+            
+        self.latest_data[symbol]['funding_multiplier'] = funding_multiplier
 
         # --- CONSENSUS ENGINE: Routing signals to SignalManager ---
         if is_technical_signal:
@@ -708,10 +702,9 @@ class CryptoBot:
         if ai_tp is not None:
             ai_tp = float(ai_tp)
         
-        # --- DUAL STOP LOSS (DeepSeek v3.2 - Phase 4) ---
-        # Technical Stop: 3x ATR (Active Exit - Relaxed from 2x)
-        # Survival Stop: 5x ATR (Safety Net)
-        tech_multiplier = 3.0
+        # Technical Stop: 3x ATR (Active Exit)
+        # DeepSeek Scaling Out: Tighten to 1.5x ATR after TP1 hit
+        tech_multiplier = 1.5 if trade.get('tp1_hit', False) else 3.0
         survival_multiplier = 5.0
         
         latest = self.latest_data.get(symbol, {})
@@ -781,9 +774,9 @@ class CryptoBot:
             elif current_price <= sl:
                 should_close = True
                 reason = "TECHNICAL STOP (2x ATR Trailing)"
-            elif current_price >= tp2:
+            elif current_price >= tp2 and not trade.get('tp1_hit', False):
                 should_close = True
-                reason = "TAKE-PROFIT 2 (FINAL)"
+                reason = "TAKE-PROFIT 2 (FINAL - STATIC)"
             elif current_price >= tp1:
                 # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
@@ -816,9 +809,9 @@ class CryptoBot:
             elif current_price >= sl:
                 should_close = True
                 reason = "TECHNICAL STOP (2x ATR Trailing)"
-            elif current_price <= tp2:
+            elif current_price <= tp2 and not trade.get('tp1_hit', False):
                 should_close = True
-                reason = "TAKE-PROFIT 2 (FINAL)"
+                reason = "TAKE-PROFIT 2 (FINAL - STATIC)"
             elif ai_tp and current_price <= ai_tp:
                 should_close = True
                 reason = "AI PRECISE TARGET HIT"
@@ -957,8 +950,14 @@ class CryptoBot:
         volatility_modifier = baseline_atr_pct / atr_pct if atr_pct > 0 else 1.0
         volatility_modifier = max(0.5, min(2.0, volatility_modifier))
         
-        # 4. Final Allocation
-        adjusted_usdt = base_usdt * volatility_modifier
+        # 4. Final Allocation with Regime & Funding Multipliers
+        regime_mult = self.latest_data.get(symbol, {}).get('regime_multiplier', 1.0)
+        funding_mult = self.latest_data.get(symbol, {}).get('funding_multiplier', 1.0)
+        
+        adjusted_usdt = base_usdt * volatility_modifier * regime_mult * funding_mult
+        
+        if regime_mult != 1.0 or funding_mult != 1.0:
+            logger.info(f"🛡️ [RISK SIZING] Multipliers for {symbol}: Regime={regime_mult:.2f}, Funding={funding_mult:.2f}")
         
         # Global Safety Cap: 10% of equity per trade (extra cautious)
         max_limit = current_equity * 0.10

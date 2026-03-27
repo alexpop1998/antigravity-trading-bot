@@ -141,6 +141,40 @@ class BotDatabase:
             logger.error(f"Errore recupero memorie AI: {e}")
             return []
             
+    def get_ai_performance_stats(self, hours=24):
+        """
+        Calcola statistiche aggregate per settore e segnale negli ultimi periodi.
+        Restituisce un prompt strutturato per Gemini.
+        """
+        try:
+            cursor = self.conn.cursor()
+            # Statistiche per Segnale (TECH vs AI vs NEWS) nelle ultime 24 ore
+            cursor.execute('''
+                SELECT signal_type, 
+                       COUNT(*) as total,
+                       SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) as wins,
+                       AVG(pnl) as avg_pnl
+                FROM ai_memory 
+                WHERE timestamp >= datetime('now', '-' || ? || ' hours')
+                AND outcome IS NOT NULL
+                GROUP BY signal_type
+            ''', (hours,))
+            rows = cursor.fetchall()
+            
+            stats = {}
+            for row in rows:
+                sig = row['signal_type']
+                total = row['total']
+                stats[sig] = {
+                    'accuracy': (row['wins'] / total) * 100 if total > 0 else 0,
+                    'avg_pnl': row['avg_pnl'] or 0,
+                    'sample_size': total
+                }
+            return stats
+        except Exception as e:
+            logger.error(f"Errore calcolo statistiche AI: {e}")
+            return {}
+            
     def sync_binance_trades(self, trades_list):
         """Syncs an array of CCXT trade objects to the local SQLite database"""
         if not trades_list:

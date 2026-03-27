@@ -43,15 +43,14 @@ class LLMAnalyst:
             return True, 1.0, self.bot.leverage, 1.0, 1.0, "API_KEY_MISSING"
 
         try:
-            # 1. Recupera la memoria (ultimi 5 trade simili)
-            memories = self.bot.db.get_similar_memories(symbol, limit=5)
-            memory_context = ""
-            if memories:
-                memory_context = "\nSTORICO RECENTE (ESITI):\n"
-                for m in memories:
-                    memory_context += f"- {m['timestamp']} | {m['symbol']} | {m['side'].upper()} | Outcome: {m['outcome']} | PnL: {m['pnl']}\n"
+            # 1. Recupera la memoria statistica (ultime 24 ore)
+            stats = self.bot.db.get_ai_performance_stats(hours=24)
+            memory_context = "\nPERFORMANCE RECENTE (STATISTICHE AGGREGATE - 24H):\n"
+            if stats:
+                for signal, data in stats.items():
+                    memory_context += f"- Segnale {signal}: Accuracy {data['accuracy']:.1f}%, Avg PnL {data['avg_pnl']:.4f} (Sample size: {data['sample_size']})\n"
             else:
-                memory_context = "\nSTORICO RECENTE: Nessun dato disponibile (Prima operazione o database pulito).\n"
+                memory_context += "Nessun trade registrato nelle ultime 24 ore.\n"
 
             # 2. Prepara il prompt
             prompt = f"""
