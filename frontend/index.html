@@ -45,22 +45,25 @@
 
         @media (max-width: 992px) {
             body {
-                flex-direction: column;
-                height: auto;
-                overflow: auto;
+                display: block !important;
+                height: auto !important;
+                min-height: 100% !important;
+                overflow: visible !important;
             }
             
             nav {
+                display: flex !important;
                 width: 100% !important;
                 height: auto !important;
                 border-right: none !important;
                 border-bottom: 1px solid var(--border);
                 flex-direction: row !important;
+                flex-wrap: wrap !important;
                 align-items: center;
                 justify-content: space-between;
-                padding: 10px 20px !important;
-                position: relative; /* Fixed overlap */
-                z-index: 100;
+                padding: 10px 15px !important;
+                position: relative !important;
+                z-index: 1000 !important;
             }
             
             .logo-container {
@@ -82,8 +85,10 @@
             }
             
             .app-container {
-                flex: none;
-                width: 100%;
+                display: block !important;
+                flex: none !important;
+                width: 100% !important;
+                position: relative !important;
             }
         }
 
