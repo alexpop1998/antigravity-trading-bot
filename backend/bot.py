@@ -18,6 +18,7 @@ import feedparser
 from typing import Any, Dict, List, Optional
 from asset_scanner import AssetScanner
 from regime_detector import RegimeDetector
+from ai_parameter_optimizer import AIParameterOptimizer
 
 load_dotenv(override=True)
 
@@ -156,6 +157,7 @@ class CryptoBot:
         
         self.sector_manager = SectorManager()
         self.regime_detector = RegimeDetector()
+        self.ai_optimizer = AIParameterOptimizer(self)
         self.current_news = "" # Real-time market sentiment
         
         # Recupero stato persistente
@@ -831,6 +833,9 @@ class CryptoBot:
             pnl = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
             self.db.update_trade_outcome(trade.get('snapshot_id'), current_price, pnl)
             
+            # --- NEW: POST-MORTEM FEEDBACK LOOP ---
+            asyncio.create_task(self.llm_analyst.perform_post_mortem(symbol, trade, current_price, pnl))
+            
             asyncio.create_task(self.close_position(symbol, trade, reason=reason))
             self.trade_levels[symbol] = None
             self.db.save_state("trade_levels", self.trade_levels)
@@ -1370,6 +1375,10 @@ class CryptoBot:
                     await asyncio.gather(*tasks)
                 await asyncio.sleep(2) # Increased sleep between chunks to be gentler
             
+            # --- AI STRATEGIC OPTIMIZATION (v5.0) ---
+            # Run hourly global risk optimization
+            asyncio.create_task(self.ai_optimizer.run_optimization_cycle())
+
             # Sleep before fetching again
             await asyncio.sleep(10)
 

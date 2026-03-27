@@ -78,22 +78,25 @@ class LLMAnalyst:
             
             MISSIONE:
             Basandoti sui dati tecnici e sullo storico dei risultati (se presenti), decidi se questa operazione ha un'alta probabilità di successo. 
-            Determina anche: 
-            1. LEVA ottimale (5-25x) - Sii conservativo se lo SPREAD è alto o la LIQUIDITÀ è bassa.
-            2. FORZA della posizione (0.5-2.0x) - Riduci se c'è troppo squilibrio nel book.
-            3. Multiplo STOP LOSS (0.5-2.0x dello standard ATR).
-            4. Multiplo TAKE PROFIT (0.5-2.0x dello standard ATR).
+            
+            DEVI SEGUIRE QUESTO PROCESSO LOGICO (Chain-of-Thought):
+            1. ANALISI MACRO: Valuta le news e il trend dominante.
+            2. ANALISI TECNICA: Verifica RSI, MACD e Bollinger rispetto ai livelli chiave.
+            3. VALUTAZIONE RISCHIO: Analizza lo spread, la liquidità e il funding.
             
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{
+                "macro_analysis": "breve sintesi macro",
+                "technical_analysis": "analisi degli indicatori",
+                "risk_assessment": "valutazione spread/funding/volatilità",
                 "verdict": "APPROVE" o "REJECT",
                 "confidence": 0.0 a 1.0,
                 "suggested_leverage": intero da 5 a 25,
                 "position_strength": 0.5 a 2.0,
                 "sl_multiplier": 0.5 a 2.0,
                 "tp_multiplier": 0.5 a 2.0,
-                "tp_price": numero o null (specifico target di prezzo),
-                "reasoning": "Breve spiegazione tecnica (max 20 parole)"
+                "tp_price": numero o null,
+                "reasoning": "Sintesi finale della decisione (max 20 parole)"
             }}
             """
 
@@ -148,8 +151,14 @@ class LLMAnalyst:
             3. PIVOT: Chiudi subito tutto e apri in direzione OPPOSTA (solo se il trend è girato violentemente).
             4. CLOSE: Chiudi tutto ora.
             
+            DEVI SEGUIRE QUESTO PROCESSO LOGICO:
+            - Analizza se il trend tecnico a supporto dell'entry è ancora valido.
+            - Valuta se il PnL attuale giustifica una chiusura parziale per "de-risking".
+            
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{
+                "technical_status": "sintesi stato tecnico",
+                "risk_status": "livello di rischio attuale",
                 "action": "HOLD" o "SCALE_OUT" o "PIVOT" o "CLOSE",
                 "confidence": 0.0 a 1.0,
                 "reasoning": "Breve spiegazione tecnica (max 15 parole)"
@@ -276,3 +285,57 @@ class LLMAnalyst:
 
         except Exception as e:
             logger.error(f"Errore durante self-audit AI: {e}")
+
+    async def perform_post_mortem(self, symbol: str, trade: Dict, close_price: float, pnl: float):
+        """Analizza l'esito di un trade per estrarre lezioni strategiche."""
+        if not self.ai_client:
+            return
+
+        try:
+            outcome = "WIN" if pnl > 0.005 else ("LOSS" if pnl < -0.005 else "NEUTRAL/PARTIAL")
+            
+            prompt = f"""
+            Sei un Senior Trading Mentor. Analizza questo trade appena chiuso e ricava una lezione per il futuro.
+            
+            DATI TRADE:
+            - Simbolo: {symbol}
+            - Entry: {trade.get('entry_price')}
+            - Close: {close_price}
+            - PnL: {pnl:.2%}
+            - Esito: {outcome}
+            - Ragione entrata originale: {trade.get('reasoning', 'N/D')}
+            
+            MISSIONE:
+            - Cosa abbiamo imparato? (es. "RSI era troppo alto", "Trend News era fasullo").
+            - Definisci una regola "Golden Rule" di massimo 10 parole.
+            
+            RISPONDI SOLO IN JSON:
+            {{
+                "analysis": "analisi tecnica del perché è andata così",
+                "lesson": "la lezione imparata",
+                "golden_rule": "regola sintetica da ricordare"
+            }}
+            """
+
+            async with self.semaphore:
+                response = await self.ai_client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={ "type": "json_object" },
+                    temperature=0.3
+                )
+            
+            content = json.loads(response.choices[0].message.content)
+            new_lesson = content.get("golden_rule", "Be careful.")
+            
+            # Update lessons_learned memory (simple concatenation or summary)
+            self.lessons_learned = f"{new_lesson} | {self.lessons_learned}"[:500]
+            
+            # Save to file
+            with open(self.lessons_file, 'w') as f:
+                json.dump({"lessons": self.lessons_learned}, f)
+                
+            logger.warning(f"🎓 [AI MENTOR] New lesson learned for {symbol}: {new_lesson}")
+
+        except Exception as e:
+            logger.error(f"Error in post-mortem: {e}")
