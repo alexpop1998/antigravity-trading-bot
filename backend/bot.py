@@ -2123,23 +2123,46 @@ class CryptoBot:
             await self.close_position(symbol, level, reason="AI AUDIT")
             
     async def _execute_scale_out(self, symbol):
-        """Close 50% of an active position to lock in profits or reduce risk."""
+        """Close 50% of an active position to lock in profits or reduce risk (AI Triggered)."""
         level = self.trade_levels.get(symbol)
-        if not level: return
+        if not level or level.get('tp1_hit'): return
         
-        amount_to_close = level['amount'] / 2
+        # Calculate current PnL to verify if we are in the dynamic range (0.75%+)
+        entry_price = float(level['entry_price'])
+        current_price = self.latest_data[symbol].get('price', entry_price)
         side = level['side']
-        close_side = 'sell' if side == 'long' else 'buy'
+        is_long = side == 'long'
+        pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+
+        # Floor di sicurezza per lo SCALE_OUT dinamico (0.75%)
+        # Se il profitto è inferiore, l'AI SCALE_OUT viene ignorato per evitare perdite sulle fee
+        if pnl_pct < 0.0075:
+            logger.info(f"⏳ [AI TP1 GUARD] Ignoring AI SCALE_OUT for {symbol}: {pnl_pct:.2%} < 0.75% minimum.")
+            return
+
+        amount_to_close = level['amount'] / 2
+        close_side = 'sell' if is_long else 'buy'
         
-        logger.warning(f"✂️ [SCALE OUT] Closing 50% of {symbol} ({amount_to_close} {side.upper()})")
+        logger.warning(f"🎯 [AI DYNAMIC TP1] Gemini triggered early TP1 for {symbol} at {current_price} (+{pnl_pct:.2%})")
         try:
+            # Esecuzione ordine
             order = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, params={'reduceOnly': True})
-            # Update local state
+            
+            # 1. Aggiorna quantità rimanente
             level['amount'] -= amount_to_close
+            level['tp1_hit'] = True
+            
+            # 2. [BREAK-EVEN] Sposta SL in zona sicura (Entry + 0.3%)
+            offset = entry_price * 0.003
+            level['sl'] = entry_price + offset if is_long else entry_price - offset
+            
+            # 3. Salva stato e notifica
             self.db.save_state("trade_levels", self.trade_levels)
-            self.notifier.notify_alert("AI SCALING", f"Venduta metà posizione su {symbol}", f"Motivo: {level.get('status', 'Monitoraggio standard')}")
+            logger.warning(f"🛡️ [BREAK-EVEN] AI-Triggered: SL for {symbol} moved to {level['sl']} (Entry+Costs)")
+            self.notifier.notify_alert("AI DYNAMIC TP1", f"Gemini ha anticipato il TP1 su {symbol} (+{pnl_pct:.2%})", f"SL spostato in Break-Even.")
+            
         except Exception as e:
-            logger.error(f"Failed to scale out of {symbol}: {e}")
+            logger.error(f"Failed to execute AI scale out for {symbol}: {e}")
 
     async def _execute_pivot(self, symbol):
         """Close current position and immediately open in opposite direction."""

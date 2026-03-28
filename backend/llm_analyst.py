@@ -148,7 +148,7 @@ class LLMAnalyst:
             MISSIONE:
             1. HOLD: Mantieni tutto invariato. Punta al TP2 (grande profitto). 
                - [!] IGNORA I PULLBACK: Se siamo in rosso (PnL negativo) ma il trend primario è intatto, scegli HOLD.
-            2. SCALE_OUT: Suggerisci di chiudere il 50% (TP1) se siamo sopra l'1% di profitto e vedi incertezza o esaurimento volumetrico.
+            2. SCALE_OUT: Suggerisci di chiudere il 50% (TP1) se siamo sopra lo 0.75% di profitto e vedi incertezza, esaurimento volumetrico o un'inversione imminente.
             3. PIVOT: Chiudi subito tutto e apri in direzione OPPOSTA (solo se il trend è girato violentemente su timeframe H1/H4).
             4. CLOSE: Chiudi tutto ora. 
                - [!] TRIGGER REVERSE: Scegli CLOSE solo se rilevi una rottura dei livelli di supporto/resistenza MACRO.
