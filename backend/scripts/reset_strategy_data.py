@@ -6,7 +6,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("DBCleanup")
 
 def cleanup():
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_data.db")
+    # Database is in the parent directory (backend/)
+    db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot_data.db")
     if not os.path.exists(db_path):
         logger.error(f"Database not found at {db_path}")
         return
