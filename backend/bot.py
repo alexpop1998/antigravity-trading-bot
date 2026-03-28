@@ -1592,26 +1592,32 @@ class CryptoBot:
                         self.trade_levels[symbol] = None
                 
                 # 3. Fetch recent trades (Slow part, do it in chunks)
-                # We only fetch for active positions or major symbols to be fast and resilient
+                # We check ALL symbols in monitor list to ensure manual trades are captured
                 all_trades = []
-                symbols_to_check = list(set([p['symbol'] for p in self.latest_account_data['positions']] + self.symbols[:20]))
+                # Combine active positions symbols with ALL symbols from the monitor list
+                symbols_to_check = list(set([p['symbol'] for p in self.latest_account_data['positions']] + self.symbols))
                 
-                for i in range(0, len(symbols_to_check), 5):
-                    chunk = symbols_to_check[i:i+5]
+                for i in range(0, len(symbols_to_check), 10): # Chunk of 10 for faster sync
+                    chunk = symbols_to_check[i:i+10]
                     tasks = []
                     for symbol in chunk:
-                        tasks.append(self.exchange.fetch_my_trades(symbol, limit=5))
+                        tasks.append(self.exchange.fetch_my_trades(symbol, limit=10))
                     
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     for res in results:
                         if isinstance(res, list):
                             all_trades.extend(res)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3) # Slightly reduced sleep for faster initial sync
                 
                 # Sync trades to local database for history tracking
                 if all_trades:
-                    # Filter: Only sync trades happened after bot start to ensure clean report from scratch
-                    recent_only = [t for t in all_trades if (t.get('timestamp', 0) / 1000.0) >= self.start_time]
+                    # Filter: Sync trades happened after bot start with a 1-hour buffer (3600s)
+                    # This ensures trades made while the VPS was being updated/synced are captured.
+                    sync_cutoff = self.start_time - 3600
+                    recent_only = [t for t in all_trades if (t.get('timestamp', 0) / 1000.0) >= sync_cutoff]
+                    if recent_only:
+                        await asyncio.to_thread(self.db.sync_binance_trades, recent_only)
+                        logger.info(f"Account Update: Synced {len(recent_only)} trades found in history (Cutoff: {sync_cutoff}).")
                     if recent_only:
                         await asyncio.to_thread(self.db.sync_binance_trades, recent_only)
                         logger.info(f"Account Update: Synced {len(recent_only)} NEW trades after restart.")
