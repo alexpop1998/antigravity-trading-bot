@@ -1083,14 +1083,18 @@ class CryptoBot:
         if adjusted_usdt > max_limit:
             adjusted_usdt = max_limit
 
+        # --- DYNAMIC FLOOR (1% Equity) ---
+        # Garantisce 100$ su un conto da 10k, ma resta scalabile (2$) su un conto da 200$.
+        min_margin = max(5.0, current_equity * 0.01) 
+        if adjusted_usdt < min_margin and not self.circuit_breaker_active:
+             adjusted_usdt = min_margin
+             logger.info(f"🚀 [DYNAMIC BOOST] Pushing {symbol} margin to {min_margin} USD (1% Equity Floor).")
+
         purchasing_power = adjusted_usdt * leverage
         
-        # --- NOTIONAL FLOOR ---
-        # Minimo 500 USD per operazione per essere rilevante
-        min_notional = 500.0
-        if purchasing_power < min_notional and not self.circuit_breaker_active:
-             purchasing_power = min_notional
-             logger.info(f"🚀 [NOTIONAL BOOST] Pushing {symbol} total position to {min_notional} USD min.")
+        # Safety Check: Never below $5 notional
+        if purchasing_power < 5.0:
+            purchasing_power = 5.0
 
         if current_price <= 0:
             logger.error(f"❌ Impossibile calcolare l'ordine per {symbol}: prezzo zero o non pervenuto.")

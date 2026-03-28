@@ -201,8 +201,12 @@ def generate():
     <script>
         const tradeData = {json.dumps(trade_data_json)};
         if(tradeData.length === 0) {{
-            tradeData.push({{timestamp: "{START_DATE}", cum_pnl: 0, shadow_cum_pnl: 0}});
-            tradeData.push({{timestamp: "{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", cum_pnl: 0, shadow_cum_pnl: 0}});
+            tradeData.push({{
+                timestamp: "{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 
+                symbol: "ATTESA...", side: "N/A", price: 0, 
+                pnl: 0, pnl_pct: 0, reason: "In attesa della prima operazione della sessione...",
+                cum_pnl: 0, shadow_cum_pnl: 0
+            }});
         }}
         
         const tbody = document.getElementById('table-body');
