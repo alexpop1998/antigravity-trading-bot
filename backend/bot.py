@@ -167,6 +167,11 @@ class CryptoBot:
             self.trade_levels = saved_levels
             logger.info("📦 Stato trade_levels recuperato correttamente.")
         
+        saved_balance = self.db.load_state("initial_balance")
+        if saved_balance:
+            self.initial_wallet_balance = float(saved_balance)
+            logger.info(f"🏦 Bilancio iniziale recuperato dal database: {self.initial_wallet_balance:.2f} USDT")
+        
         # Exchange instance will be initialized with load_markets in initialize()
         self.initialized = False
 
@@ -569,12 +574,13 @@ class CryptoBot:
         # Don't take trend-following signals if we're in a sideways range (ADX < 25)
         is_trending = adx > 25 if not pd.isna(adx) else True
         
-        if rsi < 30 and macd_hist > 0 and price <= (bb_lower * 1.01):
+        # --- STRONGER TECHNICAL CONFLUENCE: RSI + MACD Hist + Bollinger ---
+        if rsi < 30 and macd_hist > -0.0001 and macd_hist > self.latest_data[symbol].get('macd_hist_prev', -1) and price <= (bb_lower * 1.01):
             if price_above_ema and is_trending: # Trend-following LONG
                 tech_side = 'buy'
                 is_technical_signal = True
             
-        elif rsi > 70 and macd_hist < 0 and price >= (bb_upper * 0.99):
+        elif rsi > 70 and macd_hist < 0.0001 and macd_hist < self.latest_data[symbol].get('macd_hist_prev', 1) and price >= (bb_upper * 0.99):
             # --- SHORTING MOMENTUM GUARD ---
             # Don't short if there is strong bullish momentum in the last 5 minutes
             if change_5m_pct > 0.008: # 0.8% in 5m is too strong to short technically
@@ -582,6 +588,9 @@ class CryptoBot:
             elif not price_above_ema and is_trending: # Trend-following SHORT
                 tech_side = 'sell'
                 is_technical_signal = True
+
+        # Store hist for next cycle confluence
+        self.latest_data[symbol]['macd_hist_prev'] = macd_hist
 
         # --- FUNDING RATE FILTER (DEEPSEEK REFACTOR) ---
         # Instead of blocking, apply a reduction multiplier
@@ -613,10 +622,10 @@ class CryptoBot:
         if isinstance(prediction, dict) and 'direction' in prediction:
             direction = prediction['direction']
             confidence = prediction['confidence']
-            # Confidence Threshold: 0.55
-            if direction == 1 and confidence > 0.55 and price_above_ema:
+            # Confidence Threshold: 0.70 (Increased from 0.55 for higher quality)
+            if direction == 1 and confidence > 0.70 and price_above_ema:
                 asyncio.create_task(self.handle_signal(symbol, "AI", "buy", weight_modifier=1.2, current_price=price, ema200=ema200, ai_confidence=confidence, mtf_context=mtf_context))
-            elif direction == 0 and confidence > 0.55 and not price_above_ema:
+            elif direction == 0 and confidence > 0.70 and not price_above_ema:
                 asyncio.create_task(self.handle_signal(symbol, "AI", "sell", weight_modifier=1.2, current_price=price, ema200=ema200, ai_confidence=confidence, mtf_context=mtf_context))
 
     async def handle_signal(self, symbol, type, side, weight_modifier=1.0, is_black_swan=False, current_price=None, ema200=None, ai_confidence=0.0, mtf_context="N/A"):
@@ -930,14 +939,13 @@ class CryptoBot:
              total_pct = 0.5
              logger.warning(f"🛡️ [SIZING] Macro Volatility Shield active: Capping size to 0.5% for {symbol}.")
         else:
-            base_pct = float(risk_pct)
-            # Use 3.0 as the new "low" threshold for bonus calculation (Phase 4)
-            bonus_pct = max(0, (float(consensus_score) - 3.0) * 0.5)
-            # --- NEW: AI STRENGTH MODIFIER ---
+            # --- NEW: GEMINI DYNAMIC RISK SIZING ---
+            # Gemini returns 'position_strength' (0.5 - 2.5). 
+            # We base the total risk on this multiplier to achieve dynamic risk per trade.
             ai_mod = kwargs.get('ai_strength', 1.0)
-            total_pct = (base_pct + bonus_pct) * ai_mod
+            total_pct = risk_pct * ai_mod
             if ai_mod != 1.0:
-                logger.info(f"🧠 [AI SIZING] Applied AI Strength Multiplier: {ai_mod:.2f}x (Final Pct: {total_pct:.2f}%)")
+                logger.info(f"🧠 [AI RISK SIZING] Dynamic size for {symbol}: {total_pct:.2f}% (Strength: {ai_mod:.2f}x)")
         
         # 2. Base Capital Calculation from Equity
         current_equity = self.latest_account_data.get('equity', 0)
@@ -1467,6 +1475,7 @@ class CryptoBot:
                 # --- IMPROVED INITIALIZATION: Use EQUITY to include open positions in the starting benchmark ---
                 if self.initial_wallet_balance is None:
                     self.initial_wallet_balance = equity
+                    self.db.save_state("initial_balance", self.initial_wallet_balance)
                     logger.info(f"🏦 Account Balance Initialized (Benchmark=EQUITY): {self.initial_wallet_balance:.4f}")
                 
                 # --- OVERHAUL: Circuit Breaker now also considers EQUITY DRAWDOWN (Unrealized) ---
@@ -1498,7 +1507,9 @@ class CryptoBot:
                             self.circuit_breaker_active = True
                             self.global_panic_notified = True
                         else:
+                            # CRITICAL: Suppress action during startup shield
                             logger.warning(f"🛡️ [STARTUP SHIELD] Global Panic suppressed during sync ({effective_pnl_pct:.2%}).")
+                            return # Avoid proceeding to margin dangerous check if we are in protection
                 
                 elif effective_pnl_pct > -0.03: # Reset if we recover or restart with better balance
                     if self.circuit_breaker_active:
@@ -1511,8 +1522,11 @@ class CryptoBot:
                 # --- DANGER CHECK ---
                 
                 if self.current_margin_ratio > 0.95: # 95% Margin Usage is DANGEROUS
-                    if not is_startup_protected:
-                        logger.critical(f"⚠️ [MARGIN DANGER]: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
+                    if is_startup_protected:
+                        logger.warning(f"🛡️ [STARTUP SHIELD] Margin danger suppressed during sync ({self.current_margin_ratio*100:.2f}%).")
+                        return # Protection Shield ACTIVE
+
+                    logger.critical(f"⚠️ [MARGIN DANGER]: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
                     worst_symbol = None
                     worst_pnl = 0
                     if active_pos:
@@ -1623,13 +1637,13 @@ class CryptoBot:
                 
                 # Sync trades to local database for history tracking
                 if all_trades:
-                    # Filter: Sync trades happened after bot start with a 1-hour buffer (3600s)
-                    # This ensures trades made while the VPS was being updated/synced are captured.
-                    sync_cutoff = self.start_time - 3600
+                    # Filter: Sync trades happened in the last 24 hours (86400s)
+                    # This ensures all trades from 'today' are captured even after multiple restarts.
+                    sync_cutoff = time.time() - 86400
                     recent_only = [t for t in all_trades if (t.get('timestamp', 0) / 1000.0) >= sync_cutoff]
                     if recent_only:
                         await asyncio.to_thread(self.db.sync_binance_trades, recent_only)
-                        logger.info(f"Account Update: Synced {len(recent_only)} trades found in history (Cutoff: {sync_cutoff}).")
+                        logger.info(f"Account Update: Synced {len(recent_only)} trades found in 24h history.")
                     
                 # Sort trades by timestamp descending and keep top 20
                 all_trades.sort(key=lambda x: x.get('timestamp', 0) or 0, reverse=True)
@@ -1823,19 +1837,18 @@ class CryptoBot:
                     current_price = float(pos.get('markPrice', entry_price))
                     amount = float(pos.get('amount', pos['contracts']))
                     
-                    # Initialize trade levels with a safe emergency SL (3% from current price or 5% from entry)
-                    # We use a broad SL to avoid instant closure if the user wants to manage it, 
-                    # but ensure SOME protection.
+                    # Initialize trade levels with RE-INITIALIZED recovery SL/TP
+                    # RELAXED SL/TP for recovered zombies (12% and 25% to allow sync)
                     self.trade_levels[symbol] = {
                         'entry_price': entry_price,
-                        'sl': current_price * (1.03 if side == 'short' else 0.97),
-                        'tp1': current_price * (0.95 if side == 'short' else 1.05),
-                        'tp2': current_price * (0.90 if side == 'short' else 1.10),
+                        'sl': current_price * (1.12 if side == 'short' else 0.88),
+                        'tp1': current_price * (0.75 if side == 'short' else 1.25),
+                        'tp2': current_price * (0.70 if side == 'short' else 1.30),
                         'side': 'long' if side == 'long' else 'short',
                         'amount': amount,
                         'status': 'RECOVERED_ZOMBIE'
                     }
-                    logger.warning(f"🛡️ [RECOVERY] {symbol} restored with emergency SL @ {self.trade_levels[symbol]['sl']}")
+                    logger.warning(f"🛡️ [RECOVERY] {symbol} restored with RELAXED SL @ {self.trade_levels[symbol]['sl']}")
             
             # Save state to DB
             self.db.save_state("trade_levels", self.trade_levels)

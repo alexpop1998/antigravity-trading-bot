@@ -9,9 +9,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Data di Reset: Inizia da questo momento (2026-03-28 11:26:00 UTC)
-START_DATE = "2026-03-28 00:00:00"
-INITIAL_CAPITAL = 10000.0
+# Data di Reset/Inizio Report: (Default: ultime 48 ore se non specificato altrimenti)
+from datetime import timedelta
+DEFAULT_START_DATE = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+START_DATE = os.getenv("REPORT_START_DATE", DEFAULT_START_DATE)
+INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", 10000.0))
 
 # --- FUNZIONI DI SUPPORTO ---
 def calculate_metrics(trades):
