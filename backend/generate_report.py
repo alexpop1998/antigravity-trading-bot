@@ -66,38 +66,43 @@ def calculate_metrics(trades):
 
 async def async_generate():
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # --- QUERY SEMPLIFICATA (TUTTI I TRADE) ---
-        cursor.execute("""
-            SELECT * FROM trade_history 
-            WHERE timestamp >= ?
-            ORDER BY timestamp ASC
-        """, (START_DATE,))
-        trades = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # --- QUERY SEMPLIFICATA (TUTTI I TRADE) ---
+            print(f"🔍 [Report] Scanning trades since {START_DATE}...")
+            cursor.execute("""
+                SELECT * FROM trade_history 
+                WHERE timestamp >= ?
+                ORDER BY timestamp ASC
+            """, (START_DATE,))
+            trades = [dict(row) for row in cursor.fetchall()]
         
         # Pre-calculate global metrics for initial display
+        print(f"📊 [Report] Processing {len(trades)} trades for analysis...")
         m = calculate_metrics(trades)
         
         # Prepare Chart Data
         cumulative_pnl = 0
         trade_data_json = []
         for t in trades:
-            cumulative_pnl += float(t['pnl'] or 0)
-            trade_data_json.append({
-                "timestamp": str(t['timestamp']),
-                "symbol": str(t['symbol']),
-                "side": str(t['side']).upper(),
-                "price": float(t['price'] or 0),
-                "amount": float(t['amount'] or 0),
-                "pnl": float(t['pnl'] or 0),
-                "pnl_pct": float(t.get('pnl_pct', 0) or 0),
-                "reason": str(t['reason']),
-                "cum_pnl": round(cumulative_pnl, 2)
-            })
+            try:
+                p = float(t.get('pnl') or 0)
+                cumulative_pnl += p
+                trade_data_json.append({
+                    "timestamp": str(t.get('timestamp', 'N/A')),
+                    "symbol": str(t.get('symbol', 'UNKNOWN')),
+                    "side": str(t.get('side', 'N/A')).upper(),
+                    "price": float(t.get('price') or 0),
+                    "amount": float(t.get('amount') or 0),
+                    "pnl": p,
+                    "pnl_pct": float(t.get('pnl_pct') or 0),
+                    "reason": str(t.get('reason', 'N/A')),
+                    "cum_pnl": round(cumulative_pnl, 2)
+                })
+            except Exception as loop_e:
+                print(f"⚠️ [Report] Skipping malformed trade row for {t.get('symbol')}: {loop_e}")
 
         html_template = f"""
 <!DOCTYPE html>
@@ -377,7 +382,7 @@ async def async_generate():
             
     except Exception as e:
         import traceback
-        print(f"Error generating report: {{e}}")
+        print(f"❌ [Report] FATAL ERROR generating report: {str(e)}")
         traceback.print_exc()
 
 def generate():

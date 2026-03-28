@@ -83,6 +83,18 @@ class CryptoBot:
 
         logger.warning(f"🚀 INITIALIZING BOT IN {mode_str} MODE")
         
+        # --- NEW: SHADOW MODE DATA FETCHER (Binance Mainnet for Clean Signals) ---
+        try:
+            self.data_fetcher = ccxt.binanceusdm({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'swap'},
+                'timeout': 10000,
+            })
+            logger.info("🛡️ [Shadow Mode] Data Fetcher Initialized (Mainnet Binance)")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Shadow Mode Fetcher: {e}")
+            self.data_fetcher = self.exchange
+        
         # Debug: Check if keys are loaded
         if api_key:
             logger.info(f"Using {self.active_exchange_name} API Key: {api_key[:4]}...{api_key[-4:]}")
@@ -132,6 +144,17 @@ class CryptoBot:
         self.notifier = TelegramNotifier()
         self.signal_manager = SignalManager(self)
         self.scanner = AssetScanner(self.exchange)
+        
+    def _get_data_provider(self, symbol):
+        """Returns the data provider (Mainnet or Testnet) for a given symbol."""
+        if hasattr(self, 'data_fetcher') and self.data_fetcher is not None:
+            # Check if symbol exists in Mainnet markets
+            try:
+                if symbol in self.data_fetcher.markets:
+                    return self.data_fetcher
+            except:
+                pass
+        return self.exchange
         
         # Resource management
         self.ml_semaphore = asyncio.Semaphore(1) 
@@ -253,14 +276,16 @@ class CryptoBot:
         """Fetches 4h and 1d OHLCV to determine macro trend."""
         try:
             # 4h Trend
-            ohlcv_4h = await self.exchange.fetch_ohlcv(symbol, '4h', limit=20)
+            provider = self._get_data_provider(symbol)
+            ohlcv_4h = await provider.fetch_ohlcv(symbol, '4h', limit=20)
             df_4h = pd.DataFrame(ohlcv_4h, columns=['t', 'o', 'h', 'l', 'c', 'v'])
             ema200_4h = df_4h['c'].ewm(span=200, adjust=False).mean().iloc[-1] if len(df_4h) > 5 else 0
             current_4h = df_4h['c'].iloc[-1]
             trend_4h = "BULLISH" if current_4h > ema200_4h else "BEARISH"
             
             # 1d Trend
-            ohlcv_1d = await self.exchange.fetch_ohlcv(symbol, '1d', limit=10)
+            provider = self._get_data_provider(symbol)
+            ohlcv_1d = await provider.fetch_ohlcv(symbol, '1d', limit=10)
             df_1d = pd.DataFrame(ohlcv_1d, columns=['t', 'o', 'h', 'l', 'c', 'v'])
             current_1d = df_1d['c'].iloc[-1]
             prev_1d = df_1d['c'].iloc[-2]
@@ -274,7 +299,8 @@ class CryptoBot:
     async def fetch_data_and_analyze(self, symbol):
         try:
             # Using direct await instead of asyncio.to_thread with async_support
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, self.timeframe, limit=100)
+            provider = self._get_data_provider(symbol)
+            ohlcv = await provider.fetch_ohlcv(symbol, self.timeframe, limit=100)
             mtf_context = await self.fetch_mtf_trend(symbol)
             
             if not ohlcv:
@@ -342,7 +368,8 @@ class CryptoBot:
             self.latest_data[symbol]['regime_multiplier'] = multiplier
             
             # --- Order Book & Liquidity Analysis ---
-            orderbook = await self.exchange.fetch_order_book(symbol, limit=100)
+            provider = self._get_data_provider(symbol)
+            orderbook = await provider.fetch_order_book(symbol, limit=100)
             bids = orderbook['bids']
             asks = orderbook['asks']
             
@@ -454,7 +481,8 @@ class CryptoBot:
             # Store current price for next cycle velocity tracking
             self.previous_prices[symbol] = current_close
 
-            ticker = await self.exchange.fetch_ticker(symbol)
+            provider = self._get_data_provider(symbol)
+            ticker = await provider.fetch_ticker(symbol)
             # 24h Volume Guard (USD or Quote Currency)
             quote_volume = float(ticker.get('quoteVolume', 0))
             
@@ -479,7 +507,8 @@ class CryptoBot:
             current_ls = 1.0
             try:
                 # fetch_open_interest usually works in sandbox if available
-                oi_data = await self.exchange.fetch_open_interest(symbol)
+                provider = self._get_data_provider(symbol)
+                oi_data = await provider.fetch_open_interest(symbol)
                 current_oi = float(oi_data.get('openInterestAmount', 0))
                 
                 # Global Account L/S Ratio (5m) - Skip or use production fallback if in sandbox
@@ -490,7 +519,8 @@ class CryptoBot:
                 logger.error(f"⚠️ Sentiment fetch limited for {symbol}: {se}")
 
             # --- FUNDING RATE FETCH ---
-            funding = await self.exchange.fetch_funding_rate(symbol)
+            provider = self._get_data_provider(symbol)
+            funding = await provider.fetch_funding_rate(symbol)
             funding_rate = float(funding.get('fundingRate', 0))
             
             self.latest_data[symbol] = {
