@@ -1377,7 +1377,7 @@ class CryptoBot:
                 except Exception as e:
                     logger.error(f"⚠️ Failed to catch Shadow Entry price for {symbol}: {e}")
 
-            # Log to DB with Real Price
+            # Log to DB with Real Price and Exchange ID (to prevent sync duplicates)
             self.db.log_trade(
                 symbol, 
                 side.upper(), 
@@ -1386,6 +1386,7 @@ class CryptoBot:
                 0, 
                 0, 
                 f"{signal_type} ({consensus_score:.2f})",
+                exchange_trade_id=order['id'],
                 real_price=real_entry_price
             )
 

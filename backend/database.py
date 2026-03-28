@@ -222,18 +222,26 @@ class BotDatabase:
                     continue # Skip trades without time
                 
                 try:
-                    # Usiamo INSERT OR REPLACE per assicurarci che i dati di Binance (il "fatto") 
-                    # sovrascrivano eventuali log manuali del bot (l'"intento") per lo stesso trade_id.
+                    # Usiamo INSERT OR IGNORE per assicurarci di non duplicare righe con lo stesso exchange_trade_id.
+                    # Se il trade esiste già (loggato dal bot), NON lo sovrascriviamo con i dati "vuoti" di Binance,
+                    # ma aggiorniamo solo i campi necessari (pnl).
                     cursor.execute('''
-                        INSERT OR REPLACE INTO trade_history 
+                        INSERT OR IGNORE INTO trade_history 
                         (timestamp, symbol, side, price, amount, pnl, reason, exchange_trade_id)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (dt_str, symbol, side, price, amount, pnl, "BINANCE", exchange_trade_id))
+                    ''', (dt_str, symbol, side, price, amount, pnl, "BINANCE_SYNC", exchange_trade_id))
+                    
+                    # Se la riga esisteva già, aggiorniamo solo il PnL se è diverso da 0 (es: trade chiuso)
+                    if pnl != 0:
+                        cursor.execute('''
+                            UPDATE trade_history SET pnl = ? 
+                            WHERE exchange_trade_id = ? AND pnl = 0
+                        ''', (pnl, exchange_trade_id))
                     
                     if cursor.rowcount > 0:
                         inserted_count = inserted_count + 1
                 except Exception as row_error:
-                    logger.error(f"Error inserting individual trade {exchange_trade_id}: {row_error}")
+                    logger.error(f"Error syncing individual trade {exchange_trade_id}: {row_error}")
                     
             self.conn.commit()
             if inserted_count > 0:
