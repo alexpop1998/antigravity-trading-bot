@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Quantum Edge | Trading Terminal</title>
+    <title>FUTURES TRADING BOT</title>
     <!-- Modern Typography -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
             /* Sleek Obsidian Palette */
-            --bg-base: #06080a;
-            --bg-surface: #0f141a;
+            --bg-base: #020408;
+            --bg-surface: #0d1117;
             --bg-panel: #161c24;
             --bg-hover: #1c252e;
-            --accent: #00d2ff; /* Cyber Cyan */
-            --accent-glow: rgba(0, 210, 255, 0.4);
+            --accent: #7367f0; /* Institutional Purple */
+            --accent-glow: rgba(115, 103, 240, 0.4);
             --buy-green: #00e6a8; /* Neon Emerald */
             --sell-red: #ff2a55;  /* Vivid Crimson */
             --text-primary: #f8fafc;
@@ -615,31 +615,26 @@
             <div class="logo-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l10 5-10 5-10-5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             </div>
-            <div class="logo-text">QUANTUM EDGE</div>
+            <div class="logo-text">FUTURES TRADING BOT</div>
         </div>
 
-        <div class="nav-items">
-            <a href="#" class="nav-item active" onclick="showSection('markets', this)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-                Market Pairs
-            </a>
-            <a href="#" class="nav-item" onclick="showSection('portfolio', this)">
+            <a href="#" class="nav-item active" onclick="showSection('portfolio', this)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-                Active Portfolio
+                Portafoglio Attivo
             </a>
             <a href="#" class="nav-item" onclick="showSection('history', this)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                Trade History
+                Cronologia Operazioni
             </a>
             
-            <div class="nav-label">Institutional Tools</div>
+            <div class="nav-label">Strumenti Istituzionali</div>
             <a href="#" class="nav-item" onclick="showSection('whale-signals', this)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                Whale Tracker
+                Radar Balene
             </a>
             <a href="#" class="nav-item" onclick="showSection('liq-signals', this)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"></path><line x1="16" y1="8" x2="2" y2="22"></line><line x1="17.5" y1="15" x2="9" y2="15"></line></svg>
-                Liquidation Hunter
+                Cacciatore Liquidazioni
             </a>
         </div>
     </nav>
@@ -656,53 +651,42 @@
             </button>
             <div class="account-summary">
                 <div class="stat-item">
-                    <span class="stat-label">Total Wallet (USDT)</span>
+                    <span class="stat-label">Portafoglio Totale (USDT)</span>
                     <span class="stat-value" id="total-balance">0.00</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Total Equity</span>
+                    <span class="stat-label">Equity Totale</span>
                     <span class="stat-value" style="color: var(--accent);" id="total-equity">0.00</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Unrealized PnL</span>
+                    <span class="stat-label">PnL Non Realizzato</span>
                     <span class="stat-value" id="total-pnl">0.00</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Active Signals</span>
+                    <span class="stat-label">Segnali Attivi</span>
                     <span class="stat-value" id="active-signals" style="color: var(--accent);">0</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Open Positions</span>
+                    <span class="stat-label">Posizioni Aperte</span>
                     <span class="stat-value" id="active-positions-count" style="color: var(--buy-green);">0</span>
                 </div>
             </div>
 
             <div class="server-status">
                 <span class="status-dot" id="ws-status"></span>
-                <span id="ws-text">DISCONNECTED</span>
+                <span id="ws-text">DISCONNESSO</span>
             </div>
         </div>
 
         <!-- Scrollable Content Area -->
         <div class="content-area">
             
-            <!-- Markets Section -->
-            <div id="markets" class="view-section active">
-                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Live Market Streams</h2>
-                <div class="markets-grid" id="dashboard">
-                    <div style="grid-column: 1/-1; padding: 100px; text-align: center;">
-                        <div class="spinner" style="margin: 0 auto 20px;"></div>
-                        <p style="color: var(--text-secondary);">Connecting to Real-time Testnet Feed...</p>
-                    </div>
-                </div>
-            </div>
-
             <!-- Portfolio Section -->
-            <div id="portfolio" class="view-section">
-                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Active Positions</h2>
+            <div id="portfolio" class="view-section active">
+                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Posizioni Attive</h2>
                 <div class="table-container" id="positionsTab">
                     <div style="padding: 60px; text-align: center; color: var(--text-secondary);">
-                        No active positions currently monitored.
+                        Nessuna posizione attiva monitorata attualmente.
                     </div>
                 </div>
             </div>
@@ -710,7 +694,7 @@
             <!-- History Section -->
             <div id="history" class="view-section">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
-                    <h2 style="font-family: 'Outfit', sans-serif; margin: 0;">Trade History & PnL</h2>
+                    <h2 style="font-family: 'Outfit', sans-serif; margin: 0;">Cronologia Operazioni & PnL</h2>
                     <div style="display: flex; gap: 15px; align-items: center; background: var(--bg-surface); padding: 10px 20px; border-radius: 12px; border: 1px solid var(--border);">
                         <div class="metric" style="min-width: 120px;">
                             <span class="m-label">Range PnL</span>
@@ -727,27 +711,27 @@
                 </div>
                 <div class="table-container" id="historyTab">
                     <div style="padding: 60px; text-align: center; color: var(--text-secondary);">
-                        No trades executed in the current session.
+                        Nessuna operazione eseguita nella sessione corrente.
                     </div>
                 </div>
             </div>
 
             <!-- Whale Alerts Section -->
             <div id="whale-signals" class="view-section">
-                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">On-Chain Whale Tracker</h2>
+                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Radar Balene On-Chain</h2>
                 <div class="table-container" id="whaleTab">
                     <div style="padding: 60px; text-align: center; color: var(--text-secondary);">
-                        Waiting for Whale movements...
+                        In attesa di movimenti delle Balene...
                     </div>
                 </div>
             </div>
 
             <!-- Liquidation Alerts Section -->
             <div id="liq-signals" class="view-section">
-                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">HFT Liquidation Hunter</h2>
+                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Cacciatore Liquidazioni HFT</h2>
                 <div class="table-container" id="liqTab">
                     <div style="padding: 60px; text-align: center; color: var(--text-secondary);">
-                        Waiting for market liquidations...
+                        In attesa di liquidazioni di mercato...
                     </div>
                 </div>
             </div>
@@ -785,7 +769,7 @@
 
             socket.onopen = (e) => {
                 document.getElementById('ws-status').classList.add('connected');
-                document.getElementById('ws-text').innerText = "LIVE SIGNAL FEED";
+                document.getElementById('ws-text').innerText = "FEED SEGNALI LIVE";
             };
 
             socket.onmessage = (event) => {

@@ -284,7 +284,7 @@ async def get_report():
         import generate_report
         import importlib
         importlib.reload(generate_report)
-        await generate_report.async_generate()
+        generate_report.generate() # New synchronous function
         report_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "investor_report.html")
         return FileResponse(report_file)
     except Exception as e:
