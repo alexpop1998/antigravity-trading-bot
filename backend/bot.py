@@ -189,9 +189,12 @@ class CryptoBot:
     def _get_data_provider(self, symbol):
         """Returns the data provider (Mainnet or Testnet) for a given symbol."""
         if hasattr(self, 'data_fetcher') and self.data_fetcher is not None:
-            # Check if symbol exists in Mainnet markets
+            # Normalize symbol to strip exchange-specific suffixes like :USDT for matching
+            normalized_symbol = symbol.split(':')[0] if ':' in symbol else symbol
+            
             try:
-                if symbol in self.data_fetcher.markets:
+                # Check if symbol exists in Mainnet markets (primary or normalized)
+                if symbol in self.data_fetcher.markets or normalized_symbol in self.data_fetcher.markets:
                     return self.data_fetcher
             except:
                 pass
@@ -517,13 +520,15 @@ class CryptoBot:
             current_oi = 0
             current_ls = 1.0
             try:
-                # fetch_open_interest usually works in sandbox if available
+                # Force Mainnet provider for sentiment in Shadow Mode to avoid testnet -4108 errors
                 provider = self._get_data_provider(symbol)
+                
                 oi_data = await provider.fetch_open_interest(symbol)
                 current_oi = float(oi_data.get('openInterestAmount', 0))
                 
                 # Global Account L/S Ratio (5m) - Use production fallback if in shadow mode
                 if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true' or hasattr(self, 'data_fetcher'):
+                    # Ensure we use the best available provider for LS ratio
                     ls_data = await provider.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
                     current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
             except Exception as se:
