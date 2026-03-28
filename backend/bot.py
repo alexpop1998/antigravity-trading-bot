@@ -1442,7 +1442,7 @@ class CryptoBot:
                 # 1. Fetch positions FIRST
                 try:
                     positions = await self.exchange.fetch_positions()
-                    # Filter for active positions: support both CCXT normalized 'amount' and 'contracts'
+                    # Filter for active positions: support both CCXT normalized 'amount' and 'contracts' 
                     active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
                 except Exception as pe:
                     logger.error(f"Error fetching positions: {pe}")
@@ -1464,9 +1464,10 @@ class CryptoBot:
                     unrealized_pnl = sum(float(p.get('unrealizedPnl', 0) or 0) for p in pos_data)
                     equity = wallet_balance + unrealized_pnl
 
+                # --- IMPROVED INITIALIZATION: Use EQUITY to include open positions in the starting benchmark ---
                 if self.initial_wallet_balance is None:
-                    self.initial_wallet_balance = wallet_balance
-                    logger.info(f"🏦 Account Balance Initialized: Balance={self.initial_wallet_balance}")
+                    self.initial_wallet_balance = equity
+                    logger.info(f"🏦 Account Balance Initialized (Benchmark=EQUITY): {self.initial_wallet_balance:.4f}")
                 
                 # --- OVERHAUL: Circuit Breaker now also considers EQUITY DRAWDOWN (Unrealized) ---
                 # This stops the "mess" by reacting to bleeding positions before they are closed.
@@ -1476,18 +1477,28 @@ class CryptoBot:
                 # Use the worse of the two for the circuit breaker
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
+                # --- NEW: STARTUP PROTECTION SHIELD (v4.1) ---
+                # We skip panic closures for the first 60 seconds of operation to allow sync to settle.
+                is_startup_protected = (time.time() - self.start_time) < 60
+
                 if effective_pnl_pct <= -self.daily_loss_limit:
                     if not self.circuit_breaker_active:
-                        logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({effective_pnl_pct:.2%}). Activating Strategic Circuit Breaker (HIE Exceptions active).")
-                        self.circuit_breaker_active = True
+                        if not is_startup_protected:
+                            logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({effective_pnl_pct:.2%}). Activating Strategic Circuit Breaker.")
+                            self.circuit_breaker_active = True
+                        else:
+                            logger.warning(f"🛡️ [STARTUP SHIELD] Circuit Breaker suppressed during sync ({effective_pnl_pct:.2%}).")
                 
                 # --- NEW: GLOBAL PANIC SELL ---
                 if effective_pnl_pct <= -self.panic_drawdown_threshold:
                     if not self.global_panic_notified:
-                        logger.critical(f"🆘 GLOBAL PANIC: Drawdown at {effective_pnl_pct:.2%}. CLOSING ALL POSITIONS.")
-                        asyncio.create_task(self.emergency_cleanup_all())
-                        self.circuit_breaker_active = True
-                        self.global_panic_notified = True
+                        if not is_startup_protected:
+                            logger.critical(f"🆘 GLOBAL PANIC: Drawdown at {effective_pnl_pct:.2%}. CLOSING ALL POSITIONS.")
+                            asyncio.create_task(self.emergency_cleanup_all())
+                            self.circuit_breaker_active = True
+                            self.global_panic_notified = True
+                        else:
+                            logger.warning(f"🛡️ [STARTUP SHIELD] Global Panic suppressed during sync ({effective_pnl_pct:.2%}).")
                 
                 elif effective_pnl_pct > -0.03: # Reset if we recover or restart with better balance
                     if self.circuit_breaker_active:
@@ -1618,9 +1629,6 @@ class CryptoBot:
                     if recent_only:
                         await asyncio.to_thread(self.db.sync_binance_trades, recent_only)
                         logger.info(f"Account Update: Synced {len(recent_only)} trades found in history (Cutoff: {sync_cutoff}).")
-                    if recent_only:
-                        await asyncio.to_thread(self.db.sync_binance_trades, recent_only)
-                        logger.info(f"Account Update: Synced {len(recent_only)} NEW trades after restart.")
                     
                 # Sort trades by timestamp descending and keep top 20
                 all_trades.sort(key=lambda x: x.get('timestamp', 0) or 0, reverse=True)
