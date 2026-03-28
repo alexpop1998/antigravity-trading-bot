@@ -522,9 +522,9 @@ class CryptoBot:
                 oi_data = await provider.fetch_open_interest(symbol)
                 current_oi = float(oi_data.get('openInterestAmount', 0))
                 
-                # Global Account L/S Ratio (5m) - Skip or use production fallback if in sandbox
-                if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true':
-                    ls_data = await self.exchange.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
+                # Global Account L/S Ratio (5m) - Use production fallback if in shadow mode
+                if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true' or hasattr(self, 'data_fetcher'):
+                    ls_data = await provider.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
                     current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
             except Exception as se:
                 logger.error(f"⚠️ Sentiment fetch limited for {symbol}: {se}")
