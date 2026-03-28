@@ -521,18 +521,22 @@ class CryptoBot:
             current_ls = 1.0
             try:
                 # Force Mainnet provider for sentiment in Shadow Mode to avoid testnet -4108 errors
-                provider = self._get_data_provider(symbol)
+                sentiment_api = getattr(self, 'data_fetcher', self.exchange)
                 
-                oi_data = await provider.fetch_open_interest(symbol)
+                oi_data = await sentiment_api.fetch_open_interest(symbol)
                 current_oi = float(oi_data.get('openInterestAmount', 0))
                 
                 # Global Account L/S Ratio (5m) - Use production fallback if in shadow mode
                 if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true' or hasattr(self, 'data_fetcher'):
                     # Ensure we use the best available provider for LS ratio
-                    ls_data = await provider.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
+                    ls_data = await sentiment_api.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
                     current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
             except Exception as se:
-                logger.error(f"⚠️ Sentiment fetch limited for {symbol}: {se}")
+                # Silence the specific -4108 error which is common noise on Binance Testnet
+                if "-4108" in str(se):
+                    logger.debug(f"🤫 Sentiment fetch skipped for {symbol} (Testnet pre-trading/maintenance)")
+                else:
+                    logger.error(f"⚠️ Sentiment fetch limited for {symbol}: {se}")
 
             # --- FUNDING RATE FETCH ---
             provider = self._get_data_provider(symbol)
