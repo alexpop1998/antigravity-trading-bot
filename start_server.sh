@@ -3,8 +3,8 @@
 # Antigravity Trading Terminal - Safe Start Script
 # ---------------------------------------------------------
 
-# Absolute path to the backend directory
-BACKEND_DIR="/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend"
+# Dynamic path to the backend directory (works locally & on VPS)
+BACKEND_DIR="$(cd "$(dirname "$0")" && pwd)/backend"
 VENV_PYTHON="$BACKEND_DIR/venv/bin/python3"
 ENV_FILE="$BACKEND_DIR/.env"
 
