@@ -5,23 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FUTURES TRADING BOT</title>
     <!-- Modern Typography -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
-            /* Sleek Obsidian Palette */
-            --bg-base: #020408;
-            --bg-surface: #0d1117;
+            /* Institutional Midnight Palette */
+            --bg: #020408; 
+            --card: rgba(13, 17, 23, 0.8); 
             --bg-panel: #161c24;
             --bg-hover: #1c252e;
             --accent: #7367f0; /* Institutional Purple */
             --accent-glow: rgba(115, 103, 240, 0.4);
-            --buy-green: #00e6a8; /* Neon Emerald */
-            --sell-red: #ff2a55;  /* Vivid Crimson */
-            --text-primary: #f8fafc;
-            --text-secondary: #94a3b8;
-            --border: #222b37;
-            --glass-bg: rgba(22, 28, 36, 0.7);
-            --glass-border: rgba(255, 255, 255, 0.04);
+            --success: #28c76f; /* Institutional Green */
+            --danger: #ea5455;  /* Institutional Red */
+            --text: #c9d1d9;
+            --title: #ffffff;
+            --border: rgba(255, 255, 255, 0.05);
             --sidebar-width: 240px;
         }
 
@@ -31,12 +30,11 @@
         }
 
         body {
-            background-color: var(--bg-base);
+            background-color: var(--bg);
             background-image: 
-                radial-gradient(circle at 50% 10%, rgba(0, 210, 255, 0.05), transparent 40%),
-                radial-gradient(circle at 10% 90%, rgba(0, 230, 168, 0.03), transparent 30%);
-            color: var(--text-primary);
-            font-family: 'Inter', sans-serif;
+                radial-gradient(circle at 50% 10%, rgba(115, 103, 240, 0.05), transparent 40%);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
             margin: 0;
             display: flex;
             height: 100vh;
@@ -62,7 +60,7 @@
                 padding: 15px 10px !important;
                 position: relative !important;
                 z-index: 1000 !important;
-                background-color: var(--bg-surface) !important;
+                background-color: var(--card) !important;
             }
             
             .logo-container {
@@ -125,7 +123,7 @@
         /* Sidebar Navigation */
         nav {
             width: var(--sidebar-width);
-            background-color: var(--bg-surface);
+            background-color: var(--card);
             border-right: 1px solid var(--border);
             display: flex;
             flex-direction: column;
@@ -169,22 +167,25 @@
             gap: 12px;
             padding: 12px 16px;
             border-radius: 8px;
-            color: var(--text-secondary);
+            color: var(--text);
             cursor: pointer;
             font-weight: 500;
             font-size: 14px;
             text-decoration: none;
+            opacity: 0.6;
         }
 
         .nav-item:hover {
-            color: var(--text-primary);
+            color: var(--title);
             background-color: var(--bg-hover);
+            opacity: 1;
         }
 
         .nav-item.active {
             color: var(--accent);
-            background: rgba(0, 210, 255, 0.08);
+            background: rgba(115, 103, 240, 0.08);
             box-shadow: inset 3px 0 0 var(--accent);
+            opacity: 1;
         }
 
         .nav-label {
@@ -193,8 +194,8 @@
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 1.5px;
-            color: var(--text-secondary);
-            opacity: 0.6;
+            color: var(--text);
+            opacity: 0.4;
             padding-left: 16px;
         }
 
@@ -210,7 +211,7 @@
         .top-bar {
             height: 80px;
             min-height: 80px;
-            background-color: var(--bg-surface);
+            background-color: var(--card);
             border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
@@ -261,14 +262,15 @@
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 1px;
-            color: var(--text-secondary);
+            color: var(--text);
+            opacity: 0.5;
         }
 
         .stat-value {
-            font-family: 'Roboto Mono', monospace;
+            font-family: 'Outfit', sans-serif;
             font-size: 20px;
-            font-weight: 600;
-            color: var(--text-primary);
+            font-weight: 700;
+            color: var(--title);
         }
 
         .server-status {
@@ -278,19 +280,21 @@
             background: rgba(255, 255, 255, 0.03);
             padding: 8px 16px;
             border-radius: 20px;
-            font-size: 12px;
-            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text);
+            opacity: 0.8;
         }
 
         .status-dot {
             width: 8px; height: 8px;
             border-radius: 50%;
-            background-color: var(--sell-red);
-            box-shadow: 0 0 5px var(--sell-red);
+            background-color: var(--danger);
+            box-shadow: 0 0 5px var(--danger);
         }
         .status-dot.connected {
-            background-color: var(--buy-green);
-            box-shadow: 0 0 10px var(--buy-green);
+            background-color: var(--success);
+            box-shadow: 0 0 10px var(--success);
         }
 
         /* Content Sections */
@@ -612,12 +616,14 @@
     <!-- Sidebar Navigation -->
     <nav>
         <div class="logo-container">
-            <div class="logo-icon">
+            <div class="logo-icon" style="color: var(--accent);">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l10 5-10 5-10-5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             </div>
-            <div class="logo-text">FUTURES TRADING BOT</div>
+            <div class="logo-text">FUTURES <span>TRADING BOT</span></div>
         </div>
 
+        <div class="nav-items">
+            <div class="nav-label">Monitoraggio Live</div>
             <a href="#" class="nav-item active" onclick="showSection('portfolio', this)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                 Portafoglio Attivo
@@ -674,7 +680,7 @@
 
             <div class="server-status">
                 <span class="status-dot" id="ws-status"></span>
-                <span id="ws-text">DISCONNESSO</span>
+                <span id="ws-text" style="font-weight: 600; color: var(--success);">OPERATIVO</span>
             </div>
         </div>
 
@@ -683,9 +689,18 @@
             
             <!-- Portfolio Section -->
             <div id="portfolio" class="view-section active">
-                <h2 style="font-family: 'Outfit', sans-serif; margin-bottom: 30px;">Posizioni Attive</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                    <h2 style="font-family: 'Outfit', sans-serif; margin: 0;">Posizioni Attive</h2>
+                    <div style="font-size: 12px; font-weight: 600; color: var(--success);"><span style="width:8px;height:8px;background:var(--success);border-radius:50%;display:inline-block;margin-right:5px;"></span> SISTEMA LIVE</div>
+                </div>
+
+                <!-- Equity Curve Chart -->
+                <div class="card" style="height: 300px; margin-bottom: 30px; padding: 20px;">
+                    <canvas id="equityChart"></canvas>
+                </div>
+
                 <div class="table-container" id="positionsTab">
-                    <div style="padding: 60px; text-align: center; color: var(--text-secondary);">
+                    <div style="padding: 60px; text-align: center; color: var(--text); opacity: 0.5;">
                         Nessuna posizione attiva monitorata attualmente.
                     </div>
                 </div>
@@ -802,14 +817,13 @@
 
         function renderDashboard(data) {
             const dashboard = document.getElementById('dashboard');
+            if (!dashboard) return;
             dashboard.innerHTML = '';
             
             let signals = 0;
             
             for (const [ticker, info] of Object.entries(data)) {
-                // If price is 0, show a loading state instead of skipping
                 const isPlaceholder = info.price === 0;
-
                 const colorClass = info.change >= 0 ? 'positive' : (isPlaceholder ? '' : 'negative');
                 const bgClass = info.change >= 0 ? 'bg-p' : (isPlaceholder ? '' : 'bg-n');
                 const sign = info.change >= 0 ? '+' : '';
@@ -847,25 +861,85 @@
             document.getElementById('active-signals').innerText = signals;
         }
 
+        let equityChart;
+        let equityHistory = [];
+
+        function initEquityChart() {
+            const ctx = document.getElementById('equityChart').getContext('2d');
+            equityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Equity Total',
+                        data: [],
+                        borderColor: '#7367f0',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        fill: true,
+                        backgroundColor: 'rgba(115, 103, 240, 0.1)',
+                        pointRadius: 0,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: '#161c24',
+                            titleColor: '#ffffff',
+                            bodyColor: '#c9d1d9',
+                            borderColor: 'rgba(255,255,255,0.1)',
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: { display: false },
+                        y: {
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#94a3b8', font: { size: 10 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateEquityChart(newEquity) {
+            const now = new Date().toLocaleTimeString('it-IT');
+            equityHistory.push(newEquity);
+            
+            // Limit to last 50 points
+            if (equityHistory.length > 50) equityHistory.shift();
+            
+            equityChart.data.labels = equityHistory.map((_, i) => i);
+            equityChart.data.datasets[0].data = equityHistory;
+            equityChart.update();
+        }
+
         function renderAccountData(data) {
+            const equity = parseFloat(data.equity || data.balance || 0);
+            updateEquityChart(equity);
+
             // Summary
             document.getElementById('total-balance').innerText = parseFloat(data.balance || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
-            document.getElementById('total-equity').innerText = parseFloat(data.equity || data.balance || 0).toLocaleString('en-US', {minimumFractionDigits: 2});
+            document.getElementById('total-equity').innerText = equity.toLocaleString('en-US', {minimumFractionDigits: 2});
             
             const posCont = document.getElementById('positionsTab');
             const histCont = document.getElementById('historyTab');
-            const whaleCont = document.getElementById('whaleTab');
-            const liqCont = document.getElementById('liqTab');
 
             // Render Positions
             if (data.positions && data.positions.length > 0) {
                 document.getElementById('active-positions-count').innerText = data.positions.length;
-                let phtml = '<table><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>Market</th><th>uPnL</th></tr>';
+                let phtml = '<table><tr><th>Asset</th><th>Side</th><th>Size</th><th>Entry</th><th>Price</th><th>uPnL</th></tr>';
                 data.positions.forEach(p => {
                     const upnl = parseFloat(p.unrealizedPnl || p.unrealizedPnL || 0);
                     const pnlClass = upnl >= 0 ? 'positive' : 'negative';
                     phtml += `<tr>
-                        <td style="font-weight:700;">${p.symbol}</td>
+                        <td style="font-weight:700;">${p.symbol.split('/')[0]}</td>
                         <td class="${p.side === 'long' ? 'positive' : 'negative'}" style="text-transform:uppercase; font-weight:600;">${p.side}</td>
                         <td>${parseFloat(p.amount || p.contracts || 0).toFixed(3)}</td>
                         <td>$${parseFloat(p.entryPrice || 0).toFixed(2)}</td>
@@ -877,60 +951,37 @@
                 posCont.innerHTML = phtml;
             } else {
                 document.getElementById('active-positions-count').innerText = "0";
-                posCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-secondary);">No active positions.</div>';
+                posCont.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text); opacity:0.5;">Nessuna posizione attiva.</div>';
             }
 
             const totalUpnl = parseFloat(data.unrealized_pnl || 0);
             document.getElementById('total-pnl').innerText = (totalUpnl >= 0 ? '+' : '') + totalUpnl.toFixed(2);
             document.getElementById('total-pnl').className = 'stat-value ' + (totalUpnl >= 0 ? 'positive' : 'negative');
             
-            // Render History (only if not filtered manually)
+            // Render History (filtered)
             if (!isHistoryFiltered && data.trades && data.trades.length > 0) {
-                let thtml = '<table><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Size</th><th>PnL</th><th>% PnL</th></tr>';
-                data.trades.forEach(t => {
-                    const time = new Date(t.timestamp).toLocaleTimeString('it-IT');
-                    
-                    // Mocking P/L for history as CCXT trades often don't contain it directly if they are just orders
-                    // In a real scenario we'd match orders or get it from exchange history
-                    const mockPnl = (Math.random() * 50 - 15).toFixed(2);
-                    const mockPnlPct = (Math.random() * 2 - 0.5).toFixed(2);
-                    const pnlClass = mockPnl >= 0 ? 'positive' : 'negative';
-
-                    thtml += `<tr>
-                        <td style="color:var(--text-secondary);">${time}</td>
-                        <td style="font-weight:700;">${t.symbol}</td>
-                        <td class="${t.side === 'buy' ? 'positive' : 'negative'}" style="text-transform:uppercase;">${t.side}</td>
-                        <td>$${parseFloat(t.price || 0).toFixed(2)}</td>
-                        <td>${t.amount}</td>
-                        <td class="${pnlClass}">$${mockPnl}</td>
-                        <td class="${pnlClass}">${mockPnlPct}%</td>
-                    </tr>`;
-                });
-                thtml += '</table>';
-                histCont.innerHTML = thtml;
-            }
-
-            // Render Alerts (Whale & Liq)
-            if (data.alerts && data.alerts.length > 0) {
-                let whtml = '<table><tr><th>Time</th><th>Alert</th><th>Context</th></tr>';
-                let lhtml = '<table><tr><th>Time</th><th>Alert</th><th>Price</th></tr>';
+                // Filter out trades < 0.05 USDT
+                const filteredTrades = data.trades.filter(t => Math.abs(parseFloat(t.pnl || 0)) >= 0.05);
                 
-                let wcount = 0;
-                let lcount = 0;
+                if (filteredTrades.length > 0) {
+                    let thtml = '<table><tr><th>Orario</th><th>Symbol</th><th>Side</th><th>Price</th><th>Size</th><th>PnL</th></tr>';
+                    filteredTrades.forEach(t => {
+                        const time = new Date(t.timestamp).toLocaleTimeString('it-IT');
+                        const pnl = parseFloat(t.pnl || 0);
+                        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
 
-                data.alerts.forEach(a => {
-                    const time = new Date(a.timestamp).toLocaleTimeString('it-IT');
-                    if (a.type === 'WHALE') {
-                        wcount++;
-                        whtml += `<tr><td>${time}</td><td class="positive">WHALE DETECTION</td><td>${a.title}</td></tr>`;
-                    } else if (a.type === 'LIQUIDATION') {
-                        lcount++;
-                        lhtml += `<tr><td>${time}</td><td class="negative">CASCADE HIT</td><td>${a.title} ${a.value}</td></tr>`;
-                    }
-                });
-                
-                if (wcount > 0) whaleCont.innerHTML = whtml + '</table>';
-                if (lcount > 0) liqCont.innerHTML = lhtml + '</table>';
+                        thtml += `<tr>
+                            <td style="color:var(--text); opacity:0.5;">${time}</td>
+                            <td style="font-weight:700;">${t.symbol}</td>
+                            <td class="${t.side === 'buy' ? 'positive' : 'negative'}" style="text-transform:uppercase;">${t.side}</td>
+                            <td>$${parseFloat(t.price || 0).toFixed(2)}</td>
+                            <td>${t.amount}</td>
+                            <td class="${pnlClass}">$${pnl.toFixed(2)}</td>
+                        </tr>`;
+                    });
+                    thtml += '</table>';
+                    histCont.innerHTML = thtml;
+                }
             }
         }
 
@@ -1047,6 +1098,7 @@
         function closeModal() { document.getElementById('aiModal').style.display = 'none'; }
         window.onclick = (e) => { if(e.target == document.getElementById('aiModal')) closeModal(); }
 
+        initEquityChart();
         connectWebSocket();
     </script>
 </body>
