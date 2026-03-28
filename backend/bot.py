@@ -830,11 +830,13 @@ class CryptoBot:
         if should_close:
             logger.warning(f"🔔 SOFT {reason} HIT for {symbol} at {current_price}!")
             # Aggiorna l'esito dell'IA prima di chiudere
-            pnl = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
-            self.db.update_trade_outcome(trade.get('snapshot_id'), current_price, pnl)
-            
-            # --- NEW: POST-MORTEM FEEDBACK LOOP ---
-            asyncio.create_task(self.llm_analyst.perform_post_mortem(symbol, trade, current_price, pnl))
+            # --- NEW: POST-MORTEM FEEDBACK LOOP (Isolate errors to prevent blocking closure) ---
+            try:
+                # Calculate PnL for post-mortem analysis
+                pnl = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+                asyncio.create_task(self.analyst.perform_post_mortem(symbol, trade, current_price, pnl))
+            except Exception as ai_err:
+                logger.error(f"⚠️ Failed to initiate post-mortem for {symbol}: {ai_err}")
             
             asyncio.create_task(self.close_position(symbol, trade, reason=reason))
             self.trade_levels[symbol] = None
@@ -1547,11 +1549,12 @@ class CryptoBot:
                                         if current_atr == "N/A" or not current_atr:
                                             current_atr = entry_price * 0.01
 
-                                        # --- TIGHTER RISK MANAGEMENT ---
-                                        # Relax SL/TP constraints to avoid premature closures
-                                        sl_distance = current_atr * 2.2
-                                        tp1_distance = current_atr * 3.0
-                                        tp2_distance = current_atr * 6.0
+                                        # --- TIGHTER RISK MANAGEMENT FOR RECOVERED POSITIONS ---
+                                        # Use a standard 3.0x ATR for SL to ensure we stop the bleeding
+                                        # based on the original entry price if possible.
+                                        sl_distance = current_atr * 3.0
+                                        tp1_distance = current_atr * 5.0
+                                        tp2_distance = current_atr * 10.0
                                         
                                         if side == 'long':
                                             sl = entry_price - sl_distance
