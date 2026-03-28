@@ -285,7 +285,8 @@ async def get_report():
         import importlib
         importlib.reload(generate_report)
         await generate_report.async_generate()
-        return FileResponse("/Users/alex/.gemini/antigravity/scratch/trading-terminal/backend/investor_report.html")
+        report_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "investor_report.html")
+        return FileResponse(report_file)
     except Exception as e:
         return {"status": "error", "message": f"Errore generazione report: {str(e)}"}
 
