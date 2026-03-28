@@ -90,8 +90,7 @@ class CryptoBot:
                 'options': {'defaultType': 'swap'},
                 'timeout': 10000,
             })
-            await self.data_fetcher.load_markets()
-            logger.info(f"🛡️ [Shadow Mode] Data Fetcher Initialized with {len(self.data_fetcher.markets)} real symbols.")
+            # load_markets() will be called in initialize()
         except Exception as e:
             logger.error(f"❌ Failed to initialize Shadow Mode Fetcher: {e}")
             self.data_fetcher = self.exchange
@@ -206,6 +205,13 @@ class CryptoBot:
         try:
             logger.info("📡 Loading markets from Binance (Async)...")
             await self.exchange.load_markets()
+            
+            # --- SHADOW MODE INITIALIZATION ---
+            if hasattr(self, 'data_fetcher'):
+                logger.info("🛡️ [Shadow Mode] Loading Real Binance Markets...")
+                await self.data_fetcher.load_markets()
+                logger.info(f"✅ Shadow Mode Active: {len(self.data_fetcher.markets)} real symbols validated.")
+                
             logger.info("✅ Markets loaded successfully.")
             
             # Filter symbols to only include those available on the current exchange
