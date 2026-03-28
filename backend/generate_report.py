@@ -10,7 +10,7 @@ DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
 # Data di Reset: Inizia da questo momento (2026-03-28 11:26:00 UTC)
-START_DATE = "2026-03-27 00:00:00"
+START_DATE = "2026-03-28 11:26:00"
 INITIAL_CAPITAL = 10000.0
 
 # --- FUNZIONI DI SUPPORTO ---
@@ -48,7 +48,7 @@ def calculate_metrics(trades):
         if dd > max_dd:
             max_dd = dd
             
-    return {{
+    return {
         "total_pnl": total_pnl,
         "win_rate": win_rate,
         "profit_factor": profit_factor,
@@ -56,7 +56,7 @@ def calculate_metrics(trades):
         "avg_trade": avg_trade,
         "total_trades": total_trades,
         "portfolio_roi": portfolio_roi
-    }}
+    }
 
 async def async_generate():
     try:
