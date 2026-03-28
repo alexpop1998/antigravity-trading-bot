@@ -255,7 +255,7 @@ class CryptoBot:
             logger.info("🤖 Activating AI Autonomy Loops (Monitor & Refresh)...")
             asyncio.create_task(self.monitor_position_health_loop())
             asyncio.create_task(self.refresh_symbols_loop())
-            asyncio.create_task(self.weekly_self_audit_loop())
+            asyncio.create_task(self.daily_self_audit_loop())
             asyncio.create_task(self.news_sentiment_loop())
             asyncio.create_task(self.automated_report_loop())
             
