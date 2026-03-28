@@ -197,11 +197,15 @@ class BotDatabase:
                 price = float(t.get('price', 0) or 0)
                 amount = float(t.get('amount', 0) or 0)
                 
-                # Realized PnL is usually inside trade.info on Binance Futures
+                # Realized PnL detection (Multi-Exchange Support)
                 pnl = 0.0
                 info = t.get('info', {})
-                if 'realizedPnl' in info:
-                    pnl = float(info['realizedPnl'])
+                # Binance: 'realizedPnl', Bitget: 'pnl', generic: 'pnl' or 'profit'
+                pnl_fields = ['realizedPnl', 'pnl', 'profit', 'realized_pnl', 'income']
+                for field in pnl_fields:
+                    if field in info and info[field] is not None:
+                        pnl = float(info[field])
+                        break
                     
                 timestamp_ms = t.get('timestamp')
                 dt_str = None

@@ -1620,14 +1620,32 @@ class CryptoBot:
                 # 3. Fetch recent trades (Slow part, do it in chunks)
                 # We check ALL symbols in monitor list to ensure manual trades are captured
                 all_trades = []
-                # Combine active positions symbols with ALL symbols from the monitor list
-                symbols_to_check = list(set([p['symbol'] for p in self.latest_account_data['positions']] + self.symbols))
+                # --- GLOBAL SCAN: Identify ANY symbol with activity (even manual trades) ---
+                # 1. Fetch current positions symbols
+                pos_symbols = [p['symbol'] for p in self.latest_account_data.get('positions', []) if abs(float(p.get('amount', 0) or 0)) > 0]
+                
+                # 2. Fetch all symbols with non-zero balance (potential recent activity)
+                bal_symbols = []
+                try:
+                    balance = self.latest_account_data.get('full_balance', {})
+                    if 'info' in balance and 'assets' in balance['info']: # Binance
+                        bal_symbols = [f"{a['asset']}/USDT:USDT" for a in balance['info']['assets'] if float(a.get('walletBalance', 0)) > 0]
+                    elif 'info' in balance and isinstance(balance['info'], list): # Bitget
+                        bal_symbols = [f"{b['symbol']}" for b in balance['info'] if float(b.get('available', 0)) > 0]
+                except:
+                    pass
+                
+                # Standard symbols + Active symbols + Balance symbols
+                symbols_to_check = list(set(self.symbols + pos_symbols + bal_symbols))
+                
+                # Limit to 30 symbols to avoid API ban
+                symbols_to_check = symbols_to_check[:30]
                 
                 for i in range(0, len(symbols_to_check), 10): # Chunk of 10 for faster sync
                     chunk = symbols_to_check[i:i+10]
                     tasks = []
                     for symbol in chunk:
-                        tasks.append(self.exchange.fetch_my_trades(symbol, limit=10))
+                        tasks.append(self.exchange.fetch_my_trades(symbol, limit=20)) # Increased limit to 20
                     
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     for res in results:

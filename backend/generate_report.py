@@ -9,9 +9,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Data di Reset/Inizio Report: (Default: ultime 48 ore se non specificato altrimenti)
+# Data di Reset/Inizio Report: (Default: ULTIMI 7 GIORNI per vedere tutto lo storico recente)
 from datetime import timedelta
-DEFAULT_START_DATE = (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")
+DEFAULT_START_DATE = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 START_DATE = os.getenv("REPORT_START_DATE", DEFAULT_START_DATE)
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", 10000.0))
 
