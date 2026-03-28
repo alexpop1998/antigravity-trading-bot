@@ -145,17 +145,6 @@ class CryptoBot:
         self.signal_manager = SignalManager(self)
         self.scanner = AssetScanner(self.exchange)
         
-    def _get_data_provider(self, symbol):
-        """Returns the data provider (Mainnet or Testnet) for a given symbol."""
-        if hasattr(self, 'data_fetcher') and self.data_fetcher is not None:
-            # Check if symbol exists in Mainnet markets
-            try:
-                if symbol in self.data_fetcher.markets:
-                    return self.data_fetcher
-            except:
-                pass
-        return self.exchange
-        
         # Resource management
         self.ml_semaphore = asyncio.Semaphore(1) 
         self.api_semaphore = asyncio.Semaphore(5) 
@@ -164,7 +153,7 @@ class CryptoBot:
         self.circuit_breaker_active = False
         self.global_panic_notified = False
         self.symbol_blacklist = set()
-        self.initial_wallet_balance: Optional[float] = None
+        self.initial_wallet_balance = None
         self.previous_prices: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
         
         # --- NEW: Time-Domain Lock (DeepSeek Refinement) ---
@@ -195,8 +184,18 @@ class CryptoBot:
             self.initial_wallet_balance = float(saved_balance)
             logger.info(f"🏦 Bilancio iniziale recuperato dal database: {self.initial_wallet_balance:.2f} USDT")
         
-        # Exchange instance will be initialized with load_markets in initialize()
         self.initialized = False
+
+    def _get_data_provider(self, symbol):
+        """Returns the data provider (Mainnet or Testnet) for a given symbol."""
+        if hasattr(self, 'data_fetcher') and self.data_fetcher is not None:
+            # Check if symbol exists in Mainnet markets
+            try:
+                if symbol in self.data_fetcher.markets:
+                    return self.data_fetcher
+            except:
+                pass
+        return self.exchange
 
     async def initialize(self, skip_leverage=False):
         if self.initialized:
