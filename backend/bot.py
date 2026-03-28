@@ -1424,7 +1424,6 @@ class CryptoBot:
             }
             # Save and Log
             self.db.save_state("trade_levels", self.trade_levels)
-            self.db.log_trade(symbol, side.upper(), current_price, amount_to_buy, 0, f"{signal_type} ({consensus_score:.2f})")
             self.notifier.notify_trade(symbol, side.upper(), current_price, amount_to_buy, "CONSENSUS_HIT")
             
             # Decrement pending count
