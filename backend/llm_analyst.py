@@ -290,12 +290,15 @@ class LLMAnalyst:
             logger.error(f"Errore durante self-audit AI: {e}")
 
     async def perform_post_mortem(self, symbol: str, trade: Dict, close_price: float, pnl: float):
-        """Analizza l'esito di un trade per estrarre lezioni strategiche."""
+        """Analizza l'esito di un trade per estrarre lezioni strategiche e gestisce lo sliding window."""
         if not self.ai_client:
             return
 
         try:
             outcome = "WIN" if pnl > 0.005 else ("LOSS" if pnl < -0.005 else "NEUTRAL/PARTIAL")
+            
+            # --- Capture indicators context from bot ---
+            indicators = self.bot.latest_data.get(symbol, {})
             
             prompt = f"""
             Sei un Senior Trading Mentor. Analizza questo trade appena chiuso e ricava una lezione per il futuro.
@@ -306,17 +309,20 @@ class LLMAnalyst:
             - Close: {close_price}
             - PnL: {pnl:.2%}
             - Esito: {outcome}
-            - Ragione entrata originale: {trade.get('reasoning', 'N/D')}
+            - Reasoning Entrata: {trade.get('reasoning', 'N/D')}
+            
+            CONTESTO INDICATORI (CHIUSURA):
+            {json.dumps(indicators, indent=2)}
             
             MISSIONE:
-            - Cosa abbiamo imparato? (es. "RSI era troppo alto", "Trend News era fasullo").
-            - Definisci una regola "Golden Rule" di massimo 10 parole.
+            1. Identifica il 'Fatal Flaw' (errore fatale) o il 'Success Pattern'.
+            2. Definisci una 'Golden Rule' (max 12 parole) che il bot DEVE seguire per non ripetere errori.
             
             RISPONDI SOLO IN JSON:
             {{
-                "analysis": "analisi tecnica del perché è andata così",
-                "lesson": "la lezione imparata",
-                "golden_rule": "regola sintetica da ricordare"
+                "analysis": "analisi tecnica dettagliata",
+                "lesson": "cosa abbiamo imparato",
+                "golden_rule": "regola sintetica"
             }}
             """
 
@@ -329,16 +335,39 @@ class LLMAnalyst:
                 )
             
             content = json.loads(response.choices[0].message.content)
-            new_lesson = content.get("golden_rule", "Be careful.")
+            new_rule = content.get("golden_rule", "Be careful.")
             
-            # Update lessons_learned memory (simple concatenation or summary)
-            self.lessons_learned = f"{new_lesson} | {self.lessons_learned}"[:500]
-            
-            # Save to file
+            # --- SLIDING WINDOW MEMORY (v6.0) ---
+            lessons_db = []
+            if os.path.exists(self.lessons_file):
+                try:
+                    with open(self.lessons_file, 'r') as f:
+                        data = json.load(f)
+                        lessons_db = data.get("history", [])
+                except: pass
+
+            # Aggiungiamo la nuova lezione in testa
+            lessons_db.insert(0, {
+                "timestamp": time.time(),
+                "symbol": symbol,
+                "outcome": outcome,
+                "rule": new_rule,
+                "pnl": pnl
+            })
+
+            # Cleanup: Teniamo solo le ultime 100 lezioni o gli ultimi 14 giorni
+            cutoff = time.time() - (14 * 86400)
+            lessons_db = [l for l in lessons_db if l['timestamp'] > cutoff][:100]
+
+            # Generiamo il prompt context riassuntivo per le prossime decisioni
+            rules_summary = " | ".join([l['rule'] for l in lessons_db[:10]]) # Ultime 10 regole
+            self.lessons_learned = rules_summary
+
+            # Save per persistence
             with open(self.lessons_file, 'w') as f:
-                json.dump({"lessons": self.lessons_learned}, f)
+                json.dump({"history": lessons_db, "lessons": self.lessons_learned}, f)
                 
-            logger.warning(f"🎓 [AI MENTOR] New lesson learned for {symbol}: {new_lesson}")
+            logger.warning(f"🎓 [AI MENTOR] New lesson learned for {symbol}: {new_rule}")
 
         except Exception as e:
             logger.error(f"Error in post-mortem: {e}")

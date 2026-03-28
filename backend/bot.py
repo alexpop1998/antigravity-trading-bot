@@ -2170,21 +2170,20 @@ class CryptoBot:
                 logger.error(f"Error in refresh_symbols_loop: {e}")
             await asyncio.sleep(14400) # Refresh every 4 hours (Optimized for cost/efficiency)
 
-    async def weekly_self_audit_loop(self):
-        """Background task to perform AI self-audit every Sunday."""
+    async def daily_self_audit_loop(self):
+        """Background task to perform AI self-audit every night at 00:00."""
         while True:
             try:
-                # Run audit on Sundays (day 6)
-                if time.localtime().tm_wday == 6:
-                    logger.warning("🧠 [AI AUDIT] Initiating weekly self-correction cycle...")
-                    # Get closed trades from DB
-                    history = self.db.get_all_trades(limit=50)
-                    await self.analyst.perform_self_audit(history)
-                    
+                # Run daily audit
+                logger.warning("📊 [DAILY AUDIT] Initiating 24h performance review...")
+                # Get last 50 closed trades (within the day)
+                history = self.db.get_all_trades(limit=50)
+                await self.analyst.perform_self_audit(history)
+                
                 # Check every 24 hours
                 await asyncio.sleep(86400)
             except Exception as e:
-                logger.error(f"Error in weekly audit loop: {e}")
+                logger.error(f"Error in daily audit loop: {e}")
                 await asyncio.sleep(3600)
 
     async def news_sentiment_loop(self):
