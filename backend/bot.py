@@ -1111,7 +1111,7 @@ class CryptoBot:
                 is_side_flip = side.lower() != last_side
                 
                 # Cooldown Duration: 300s (5m) for standard, 900s (15m) for recent REJECTs
-                cooldown_active = (now - last_review) < 300 
+                cooldown_active = (now - last_review) < 300 if last_review > 0 else False
                 
                 if cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip:
                     logger.info(f"❄️ [COST OPTIMIZATION] Skipping repetitive AI Review for {symbol}")
@@ -1964,7 +1964,7 @@ class CryptoBot:
     async def automated_report_loop(self):
         """Periodically generates the HTML Investor Report."""
         # Initial wait to let bot sync data after restart
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
         while True:
             try:
                 logger.info("📊 [REPORTING] Regenerating Investor Track Record...")
