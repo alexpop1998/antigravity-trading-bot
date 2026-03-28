@@ -33,10 +33,14 @@ def calculate_metrics(trades):
     avg_trade = total_pnl / total_trades if total_trades > 0 else 0
     portfolio_roi = (total_pnl / INITIAL_CAPITAL * 100) if INITIAL_CAPITAL > 0 else 0
     
-    # Profit Factor
-    sum_wins = sum(float(t['pnl'] or 0) for t in wins)
-    sum_losses = abs(sum(float(t['pnl'] or 0) for t in losses))
-    profit_factor = round(sum_wins / sum_losses, 2) if sum_losses > 0 else (sum_wins if sum_wins > 0 else 0)
+    try:
+        # Profit Factor
+        sum_wins = sum(float(t['pnl'] or 0) for t in wins)
+        sum_losses = abs(sum(float(t['pnl'] or 0) for t in losses))
+        profit_factor = round(sum_wins / sum_losses, 2) if sum_losses > 0 else (sum_wins if sum_wins > 0 else 0)
+    except Exception as e:
+        # Use simple fallback if math fails
+        profit_factor = 0
 
     # Max Drawdown
     peak = 0

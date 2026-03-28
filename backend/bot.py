@@ -676,8 +676,12 @@ class CryptoBot:
                     # --- REVERSAL PRIORITY ---
                     # If it's a Black Swan or Gatekeeper news, we MUST flip the position
                     if is_black_swan or type in ["GATEKEEPER", "NEWS", "NEW_LISTING"]:
-                        logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
-                        await self.close_position(symbol, self.trade_levels[symbol])
+                        if not self._is_startup_shield_active():
+                            logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
+                            await self.close_position(symbol, self.trade_levels[symbol])
+                        else:
+                            logger.info(f"🛡️ [Shield] Skipping Emergency Reversal for {symbol} (Startup Protection activo)")
+                            return
                     else:
                         logger.warning(f"🚫 [MASTER CONTROLLER] Conflicting signal for {symbol}: Already in {existing_pos}. Skipping {side.upper()} {type}.")
                         return
@@ -982,7 +986,21 @@ class CryptoBot:
             adjusted_usdt = max_limit
 
         purchasing_power = adjusted_usdt * leverage
+        if current_price <= 0:
+            logger.error(f"❌ Impossibile calcolare l'ordine per {symbol}: prezzo zero o non pervenuto.")
+            return 0.0
+            
         amount = purchasing_power / current_price
+        
+        # --- ORDER SAFETY: Quantity Cap (Max Allowed by Exchange) ---
+        try:
+            market = self.exchange.markets.get(symbol, {})
+            max_qty = market.get('limits', {}).get('amount', {}).get('max')
+            if max_qty and amount > max_qty:
+                logger.warning(f"⚠️ [Safety] Capping order size for {symbol}: {amount} -> {max_qty} (Exchange Max)")
+                amount = max_qty
+        except:
+            pass
         
         logger.info(f"📐 [{symbol}] Sizing Summary: {total_pct:.1f}% Base, VolMod={volatility_modifier:.2f} -> {adjusted_usdt:.2f} USDT Margin (Score: {consensus_score})")
         
@@ -990,9 +1008,9 @@ class CryptoBot:
         amount = self.exchange.amount_to_precision(symbol, amount)
         return float(amount)
 
-    def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price, **kwargs):
-        """Calculates leverage based on consensus score, volatility, and trend safety."""
-        latest = self.latest_data.get(symbol, {})
+        # 1. Base leverage (AI suggested or config fallback)
+        if current_price <= 0: return self.leverage
+        
         atr = latest.get('atr', current_price * 0.01)
         if not atr or atr == "N/A":
             atr = current_price * 0.01

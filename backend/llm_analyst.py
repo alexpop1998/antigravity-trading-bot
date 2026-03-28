@@ -85,7 +85,7 @@ class LLMAnalyst:
             3. VALUTAZIONE RISCHIO: Analizza lo spread, la liquidità e il funding.
             
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
-            {
+            {{
                 "macro_analysis": "breve sintesi macro",
                 "technical_analysis": "analisi degli indicatori",
                 "risk_assessment": "valutazione spread/funding/volatilità",
@@ -97,7 +97,7 @@ class LLMAnalyst:
                 "tp_multiplier": 0.5 a 2.0,
                 "tp_price": numero o null,
                 "reasoning": "Sintesi finale della decisione (max 20 parole)"
-            }
+            }}
             """
 
             async with self.semaphore:
