@@ -15,6 +15,7 @@ from signal_manager import SignalManager
 from llm_analyst import LLMAnalyst
 from sector_manager import SectorManager
 import feedparser
+import generate_report
 from typing import Any, Dict, List, Optional
 from asset_scanner import AssetScanner
 from regime_detector import RegimeDetector
@@ -214,6 +215,7 @@ class CryptoBot:
             asyncio.create_task(self.refresh_symbols_loop())
             asyncio.create_task(self.weekly_self_audit_loop())
             asyncio.create_task(self.news_sentiment_loop())
+            asyncio.create_task(self.automated_report_loop())
             
             logger.warning("🤖 [PHASE 4] Institutional Intelligence Loops Active (MTF + Sector + Audit + News)")
             
@@ -1958,3 +1960,18 @@ class CryptoBot:
                 logger.error(f"Error fetching news: {e}")
             
             await asyncio.sleep(3600) # Update news every hour
+
+    async def automated_report_loop(self):
+        """Periodically generates the HTML Investor Report."""
+        # Initial wait to let bot sync data after restart
+        await asyncio.sleep(60)
+        while True:
+            try:
+                logger.info("📊 [REPORTING] Regenerating Investor Track Record...")
+                await generate_report.async_generate()
+                logger.info("✅ [REPORTING] Report updated successfully.")
+            except Exception as e:
+                logger.error(f"Error in automated_report_loop: {e}")
+            
+            # Update every hour
+            await asyncio.sleep(3600)
