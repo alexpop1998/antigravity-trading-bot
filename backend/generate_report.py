@@ -87,8 +87,8 @@ async def async_generate():
                 "side": t['side'].upper(),
                 "price": t['price'],
                 "amount": t['amount'],
-                "pnl": t['pnl'],
-                "pnl_pct": t.get('pnl_pct', 0) or 0,
+                "pnl": float(t['pnl'] or 0),
+                "pnl_pct": float(t.get('pnl_pct', 0) or 0),
                 "reason": t['reason'],
                 "cum_pnl": round(cumulative_pnl, 2)
             })
@@ -180,11 +180,11 @@ async def async_generate():
                 <div class="metric-label">Max Drawdown</div>
                 <div id="stat-mdd" class="metric-value" style="color: var(--danger)">$0.00</div>
             </div>
-        </div>
-
-        <div class="main-chart">
+        </div>        <div class="main-chart">
             <h4 style="margin: 0 0 20px 0; color: var(--title); font-weight: 400;">Analisi Equity Curve</h4>
-            <canvas id="equityChart" height="100"></canvas>
+            <div style="height: 300px; position: relative;">
+                <canvas id="equityChart"></canvas>
+            </div>
         </div>
 
         <h3>Attività Recente</h3>
@@ -262,7 +262,7 @@ async def async_generate():
                 row.innerHTML = `
                     <td>${{t.timestamp}}</td>
                     <td><strong>${{t.symbol}}</strong></td>
-                    <td style="color: ${{t.side === 'BUY' || t.side === 'LONG' ? 'var(--success)' : 'var(--danger)'}}">${{t.side}}</td>
+                    <td style="color: ${{t.side === 'BUY' || t.side === 'LONG' || t.side === 'SHORT' ? (t.side === 'SHORT' ? 'var(--danger)' : 'var(--success)') : 'var(--text)'}}">${{t.side}}</td>
                     <td>$${{t.price.toLocaleString(undefined, {{minimumFractionDigits: 4}})}}</td>
                     <td class="${{pnlClass}}">${{t.pnl >= 0 ? '+' : ''}}$${{t.pnl.toFixed(2)}}</td>
                     <td><span class="roi-badge ${{roiClass}}">${{t.pnl_pct >= 0 ? '+' : ''}}${{(t.pnl_pct).toFixed(2)}}%</span></td>
@@ -273,12 +273,16 @@ async def async_generate():
         }}
 
         function updateChart(data) {{
-            const ctx = document.getElementById('equityChart').getContext('2d');
+            const canvas = document.getElementById('equityChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
             
             let cum = 0;
+            // Use date + time for clearer labels
             const points = data.map(t => {{
                 cum += t.pnl;
-                return {{ x: t.timestamp.split(' ')[1], y: cum.toFixed(2) }};
+                const timePart = t.timestamp.includes(' ') ? t.timestamp.split(' ')[1] : t.timestamp;
+                return {{ x: timePart, y: cum.toFixed(2) }};
             }});
 
             if (chart) chart.destroy();
@@ -292,19 +296,45 @@ async def async_generate():
                         data: points.map(p => p.y),
                         borderColor: '#ff9f43',
                         backgroundColor: 'rgba(255, 159, 67, 0.1)',
-                        borderWidth: 3, fill: true, tension: 0.3, pointRadius: points.length > 50 ? 0 : 3
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: points.length > 50 ? 1 : 4,
+                        pointBackgroundColor: '#ff9f43'
                     }}]
                 }},
                 options: {{
                     responsive: true,
-                    plugins: {{ legend: {{ display: false }} }},
+                    maintainAspectRatio: false,
+                    plugins: {{ 
+                        legend: {{ display: false }},
+                        tooltip: {{
+                            backgroundColor: '#161d31',
+                            titleColor: '#fff',
+                            bodyColor: '#ff9f43',
+                            borderColor: '#3b4253',
+                            borderWidth: 1,
+                            padding: 10,
+                            displayColors: false,
+                            callbacks: {{
+                                label: (ctx) => `PnL: $${{ctx.raw}}`
+                            }}
+                        }}
+                    }},
                     scales: {{
-                        x: {{ grid: {{ display: false }}, ticks: {{ color: 'rgba(255,255,255,0.3)', font: {{ size: 10 }} }} }},
-                        y: {{ grid: {{ color: 'rgba(255,255,255,0.05)' }}, ticks: {{ color: 'rgba(255,255,255,0.4)', font: {{ size: 10 }} }} }}
+                        x: {{ 
+                            grid: {{ display: false }}, 
+                            ticks: {{ color: 'rgba(255,255,255,0.4)', font: {{ size: 9 }}, maxRotation: 45 }} 
+                        }},
+                        y: {{ 
+                            grid: {{ color: 'rgba(255,255,255,0.05)' }}, 
+                            ticks: {{ color: 'rgba(255,255,255,0.4)', font: {{ size: 9 }} }} 
+                        }}
                     }}
                 }}
             }});
         }}
+}}
 
         function filterData(type, btn) {{
             document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));

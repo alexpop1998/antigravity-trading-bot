@@ -1477,14 +1477,14 @@ class CryptoBot:
                 # Use the worse of the two for the circuit breaker
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
-                # --- NEW: STARTUP PROTECTION SHIELD (v4.1) ---
-                # We skip panic closures for the first 60 seconds of operation to allow sync to settle.
-                is_startup_protected = (time.time() - self.start_time) < 60
+                # --- NEW: STARTUP PROTECTION SHIELD (v4.2) ---
+                # We skip panic closures for the first 120 seconds of operation to allow sync to settle.
+                is_startup_protected = (time.time() - self.start_time) < 120
 
                 if effective_pnl_pct <= -self.daily_loss_limit:
                     if not self.circuit_breaker_active:
                         if not is_startup_protected:
-                            logger.critical(f"🛑 CRITICAL: Daily loss limit reached ({effective_pnl_pct:.2%}). Activating Strategic Circuit Breaker.")
+                            logger.critical(f"🛑 [CB LOCK]: Daily loss limit reached ({effective_pnl_pct:.2%}). Activating Strategic Circuit Breaker.")
                             self.circuit_breaker_active = True
                         else:
                             logger.warning(f"🛡️ [STARTUP SHIELD] Circuit Breaker suppressed during sync ({effective_pnl_pct:.2%}).")
@@ -1493,7 +1493,7 @@ class CryptoBot:
                 if effective_pnl_pct <= -self.panic_drawdown_threshold:
                     if not self.global_panic_notified:
                         if not is_startup_protected:
-                            logger.critical(f"🆘 GLOBAL PANIC: Drawdown at {effective_pnl_pct:.2%}. CLOSING ALL POSITIONS.")
+                            logger.critical(f"🆘 [PNL PANIC]: Drawdown at {effective_pnl_pct:.2%}. CLOSING ALL POSITIONS.")
                             asyncio.create_task(self.emergency_cleanup_all())
                             self.circuit_breaker_active = True
                             self.global_panic_notified = True
@@ -1511,7 +1511,8 @@ class CryptoBot:
                 # --- DANGER CHECK ---
                 
                 if self.current_margin_ratio > 0.95: # 95% Margin Usage is DANGEROUS
-                    logger.critical(f"⚠️ DANGER: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
+                    if not is_startup_protected:
+                        logger.critical(f"⚠️ [MARGIN DANGER]: Margin Ratio at {self.current_margin_ratio*100:.2f}%! Executing Emergency Cleanup.")
                     worst_symbol = None
                     worst_pnl = 0
                     if active_pos:
