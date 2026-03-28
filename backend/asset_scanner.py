@@ -6,12 +6,18 @@ from typing import List, Dict, Any
 logger = logging.getLogger("AssetScanner")
 
 class AssetScanner:
-    def __init__(self, exchange):
+    def __init__(self, exchange, allowed_symbols: List[str] = None):
         self.exchange = exchange
+        self.allowed_symbols = allowed_symbols # Mainnet Symbols only
         # Mandatory symbols to always keep in rotation
         self.mandatory_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
         # Symbols to ignore (stables, delisted, etc.)
         self.blacklist = ["USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT"]
+
+    def set_allowed_symbols(self, symbols: List[str]):
+        """Updates the list of confirmed real market symbols."""
+        self.allowed_symbols = symbols
+        logger.info(f"🛡️ [AssetScanner] Filter updated: {len(symbols)} Mainnet symbols allowed.")
 
     async def get_top_performing_assets(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
@@ -27,6 +33,10 @@ class AssetScanner:
             for symbol, data in tickers.items():
                 # Filter: Only USDT-M Perpetual Futures
                 if not symbol.endswith(":USDT"):
+                    continue
+                
+                # Filter: Only Mainnet-validated symbols (Shadow Mode)
+                if self.allowed_symbols is not None and symbol not in self.allowed_symbols:
                     continue
                 
                 if symbol in self.blacklist:

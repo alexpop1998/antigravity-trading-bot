@@ -205,11 +205,12 @@ class CryptoBot:
             logger.info("📡 Loading markets from Binance (Async)...")
             await self.exchange.load_markets()
             
-            # --- SHADOW MODE INITIALIZATION ---
             if hasattr(self, 'data_fetcher'):
                 logger.info("🛡️ [Shadow Mode] Loading Real Binance Markets...")
                 await self.data_fetcher.load_markets()
-                logger.info(f"✅ Shadow Mode Active: {len(self.data_fetcher.markets)} real symbols validated.")
+                mainnet_symbols = list(self.data_fetcher.markets.keys())
+                self.scanner.set_allowed_symbols(mainnet_symbols)
+                logger.info(f"✅ Shadow Mode Active: {len(self.data_fetcher.markets)} real symbols validated and synced with Scanner.")
                 
             logger.info("✅ Markets loaded successfully.")
             

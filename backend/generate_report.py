@@ -93,14 +93,33 @@ async def async_generate():
             try:
                 symbol = t.get('symbol', 'UNKNOWN')
                 side = str(t.get('side', 'N/A')).upper()
-                p = float(t.get('pnl') or 0)
+                
+                # Safe numeric conversion for PnL and PnL% (Legacy rows might contain strings)
+                try:
+                    raw_p = t.get('pnl')
+                    p = float(raw_p) if raw_p not in [None, ''] and not isinstance(raw_p, str) else 0.0
+                    if isinstance(raw_p, str):
+                        try: p = float(raw_p)
+                        except: p = 0.0
+                except:
+                    p = 0.0
+                    
+                try:
+                    raw_pct = t.get('pnl_pct')
+                    p_pct = float(raw_pct) if raw_pct not in [None, ''] and not isinstance(raw_pct, str) else 0.0
+                    if isinstance(raw_pct, str):
+                        try: p_pct = float(raw_pct)
+                        except: p_pct = 0.0
+                except:
+                    p_pct = 0.0
+                
                 real_p = float(t.get('real_price') or 0)
                 
                 cumulative_pnl += p
                 shadow_pnl = 0
                 
                 # Shadow PnL Calculation Logic
-                if side in ['BUY', 'SELL']:
+                if side in ['BUY', 'SELL', 'LONG', 'SHORT']:
                     open_trades_map[symbol] = {
                         'price': real_p if real_p > 0 else float(t.get('price') or 0),
                         'side': side
@@ -112,7 +131,7 @@ async def async_generate():
                         entry_price = entry_data['price']
                         
                         if entry_price > 0:
-                            direction = 1 if entry_data['side'] == 'BUY' else -1
+                            direction = 1 if entry_data['side'] in ['BUY', 'LONG'] else -1
                             # Simple price-delta based PnL (ignoring leverage for clean benchmarking)
                             shadow_pnl_pct = ((exit_price - entry_price) / entry_price) * direction
                             shadow_pnl = shadow_pnl_pct * (float(t.get('amount') or 0) * entry_price)
@@ -126,10 +145,11 @@ async def async_generate():
                     "amount": float(t.get('amount') or 0),
                     "pnl": p,
                     "shadow_pnl": round(shadow_pnl, 2),
-                    "pnl_pct": float(t.get('pnl_pct') or 0),
+                    "pnl_pct": p_pct,
                     "reason": str(t.get('reason', 'N/A')),
                     "cum_pnl": round(cumulative_pnl, 2),
-                    "shadow_cum_pnl": round(shadow_cumulative_pnl, 2)
+                    "shadow_cum_pnl": round(shadow_cumulative_pnl, 2),
+                    "real_price": real_p
                 })
             except Exception as loop_e:
                 print(f"⚠️ [Report] Skipping malformed trade row for {t.get('symbol')}: {loop_e}")
