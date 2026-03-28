@@ -146,14 +146,15 @@ class LLMAnalyst:
             {json.dumps(indicators, indent=2)}
             
             MISSIONE:
-            1. HOLD: Mantieni tutto invariato.
-            2. SCALE_OUT: Chiudi il 50% per proteggere il profitto o ridurre il rischio.
+            1. HOLD: Mantieni tutto invariato. Punta al TP2 (grande profitto).
+            2. SCALE_OUT: Suggerisci di chiudere il 50% (TP1) se siamo sopra l'1% di profitto e vedi incertezza.
             3. PIVOT: Chiudi subito tutto e apri in direzione OPPOSTA (solo se il trend è girato violentemente).
-            4. CLOSE: Chiudi tutto ora.
+            4. CLOSE: Chiudi tutto ora (solo in caso di emergenza o inversione totale).
             
-            DEVI SEGUIRE QUESTO PROCESSO LOGICO:
-            - Analizza se il trend tecnico a supporto dell'entry è ancora valido.
-            - Valuta se il PnL attuale giustifica una chiusura parziale per "de-risking".
+            REGOLE D'ORO:
+            - Favorisci il HOLD per far correre i profitti (TP2).
+            - Abbiamo un Trailing Stop LARGO che protegge la posizione dopo il TP1.
+            - NON suggerire CLOSE per piccoli profitti (<1%) a meno che il trend non sia compromesso.
             
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{

@@ -778,10 +778,12 @@ class CryptoBot:
         if ai_tp is not None:
             ai_tp = float(ai_tp)
         
-        # Technical Stop: 3x ATR (Active Exit)
-        # DeepSeek Scaling Out: Tighten to 1.5x ATR after TP1 hit
-        tech_multiplier = 2.0 if trade.get('tp1_hit', False) else 4.0
-        survival_multiplier = 5.0
+        # Technical Stop: Multiplier based on TP stage
+        # USER REQUEST: Wider Trailing Stop for TP2 to capture big trends
+        # Normal SL (Pre-TP1): 3x ATR
+        # TP2 Trailing (Post-TP1): 5x ATR (Wider "Largo")
+        tech_multiplier = 5.0 if trade.get('tp1_hit', False) else 3.0
+        survival_multiplier = 7.0 # Wider safety net
         
         latest = self.latest_data.get(symbol, {})
         current_atr = latest.get('atr')
@@ -856,12 +858,20 @@ class CryptoBot:
             elif current_price >= tp1:
                 # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
-                    logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
-                    asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT"))
-                    trade['tp1_hit'] = True
-                    # Move SL to fee-covering break-even (Entry + 0.30% profit)
-                    offset = entry_price * 0.003
-                    trade['sl'] = max(entry_price + offset, trade.get('sl', 0))
+                    # ENFORCE MINIMUM TP1 profit (1.0% price move)
+                    pnl_tp1 = (current_price - entry_price) / entry_price
+                    if pnl_tp1 < 0.010: # 1% Minimum
+                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < 1.00%")
+                    else:
+                        logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price} (+{pnl_tp1:.2%})")
+                        asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT_TP1"))
+                        trade['tp1_hit'] = True
+                        # --- [CRITICAL] SOLID BREAK-EVEN ---
+                        # Move SL to entry + 0.3% to lock in costs. 
+                        # This ensures TP2 part cannot go negative.
+                        offset = entry_price * 0.003
+                        trade['sl'] = entry_price + offset
+                        logger.warning(f"🛡️ [BREAK-EVEN] SL for {symbol} moved to {trade['sl']} (Entry+Costs)")
                     
         else: # SHORT
             # 1. Update Trailing Low
@@ -894,12 +904,19 @@ class CryptoBot:
             elif current_price <= tp1:
                 # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
-                    logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price}!")
-                    asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT"))
-                    trade['tp1_hit'] = True
-                    # Move SL to fee-covering break-even (Entry - 0.30% profit)
-                    offset = entry_price * 0.003
-                    trade['sl'] = min(entry_price - offset, trade.get('sl', 999999))
+                    # ENFORCE MINIMUM TP1 profit (1.0% price move)
+                    pnl_tp1 = (entry_price - current_price) / entry_price
+                    if pnl_tp1 < 0.010: # 1% Minimum
+                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < 1.00%")
+                    else:
+                        logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price} (+{pnl_tp1:.2%})")
+                        asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT_TP1"))
+                        trade['tp1_hit'] = True
+                        # --- [CRITICAL] SOLID BREAK-EVEN ---
+                        # Move SL to entry - 0.3% to lock in costs.
+                        offset = entry_price * 0.003
+                        trade['sl'] = entry_price - offset
+                        logger.warning(f"🛡️ [BREAK-EVEN] SL for {symbol} moved to {trade['sl']} (Entry+Costs)")
                 
         if should_close:
             logger.warning(f"🔔 SOFT {reason} HIT for {symbol} at {current_price}!")
@@ -1152,19 +1169,20 @@ class CryptoBot:
         
         lev = base_lev + score_bonus - vol_penalty + trend_bonus
         
-        # --- [UPGRADED] DYNAMIC CAPS (v5.0) ---
+        # --- [UPGRADED] DYNAMIC CAPS (v5.5) ---
         sector = self.sector_manager.get_sector(symbol)
-        max_cap = 50 if sector == "MAJOR" else (25 if sector == "ALTS" else 15)
+        # Increased freedom for Gemini as per User Request
+        max_cap = 50 if sector == "MAJOR" else (30 if sector == "ALTS" else 20)
         
         # High Conviction "Bullish" Override
-        if consensus_score >= 8.0:
-            max_cap += 10
-            logger.warning(f"🔥 [Leverage] High Conviction Bonus applied for {symbol} (Max Cap: {max_cap})")
+        if consensus_score >= 8.5:
+            max_cap = min(75, max_cap + 15)
+            logger.warning(f"🔥 [Leverage] Ultra-High Conviction Bonus applied for {symbol} (Max Cap: {max_cap})")
 
-        # ATR-BASED VOLATILITY CAP (Less aggressive)
-        if vol_pct > 6.0:
-             max_cap = 5
-             logger.warning(f"⚠️ [VOLATILITY LIMIT] Extreme Volatility ({vol_pct:.2f}%) on {symbol}. CAPPING TO 5x.")
+        # ATR-BASED VOLATILITY CAP (Less aggressive - let it run)
+        if vol_pct > 8.0:
+             max_cap = 10
+             logger.warning(f"⚠️ [VOLATILITY LIMIT] Extreme Volatility ({vol_pct:.2f}%) on {symbol}. CAPPING TO 10x.")
         
         final_lev = max(self.min_leverage, min(max_cap, round(lev)))
         logger.info(f"📐 [Leverage] {symbol} Calculation: AI_Base={base_lev}, ScoreBonus={score_bonus:.1f}, VolPenalty={vol_penalty:.1f}, TrendBonus={trend_bonus} -> Final={final_lev}x")
@@ -1348,17 +1366,19 @@ class CryptoBot:
                 tp1_distance = current_price * 0.012 # 1.2% TP1
                 tp2_distance = current_price * 0.030 # 3.0% TP2
             else:
-                # Optimized Strategy: SL 2.0x, TP1 3.2x, TP2 6.5x (Safe ATR multipliers)
+                # Optimized Strategy: SL 2.0x, TP1 4.0x, TP2 10.0x (Wider for big runs)
                 # --- NEW: Volatility Shield SL (DeepSeek Refinement) ---
                 if self.is_macro_paused:
-                    sl_mult = 5.0
-                    tp1_mult = 8.0
-                    tp2_mult = 15.0
+                    sl_mult = 6.0
+                    tp1_mult = 10.0
+                    # TP2 very large to allow Trailing Stop to do the work
+                    tp2_mult = 25.0
                     logger.warning(f"🛡️ [RISK MGMT] Macro Volatility Shield active: Widened SL/TP for {symbol}.")
                 else:
-                    sl_mult = 5.0 if is_black_swan else 2.0
-                    tp1_mult = 7.0 if is_black_swan else 4.0
-                    tp2_mult = 15.0 if is_black_swan else 8.0
+                    sl_mult = 2.0
+                    tp1_mult = 4.0
+                    # Higher TP2 to favor Trailing Stop Largo
+                    tp2_mult = 15.0
                 
                 # --- APPLY AI MULTIPLIERS ---
                 sl_mult *= ai_sl_mult
