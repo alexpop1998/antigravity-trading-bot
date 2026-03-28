@@ -146,15 +146,17 @@ class LLMAnalyst:
             {json.dumps(indicators, indent=2)}
             
             MISSIONE:
-            1. HOLD: Mantieni tutto invariato. Punta al TP2 (grande profitto).
-            2. SCALE_OUT: Suggerisci di chiudere il 50% (TP1) se siamo sopra l'1% di profitto e vedi incertezza.
-            3. PIVOT: Chiudi subito tutto e apri in direzione OPPOSTA (solo se il trend è girato violentemente).
-            4. CLOSE: Chiudi tutto ora (solo in caso di emergenza o inversione totale).
+            1. HOLD: Mantieni tutto invariato. Punta al TP2 (grande profitto). 
+               - [!] IGNORA I PULLBACK: Se siamo in rosso (PnL negativo) ma il trend primario è intatto, scegli HOLD.
+            2. SCALE_OUT: Suggerisci di chiudere il 50% (TP1) se siamo sopra l'1% di profitto e vedi incertezza o esaurimento volumetrico.
+            3. PIVOT: Chiudi subito tutto e apri in direzione OPPOSTA (solo se il trend è girato violentemente su timeframe H1/H4).
+            4. CLOSE: Chiudi tutto ora. 
+               - [!] TRIGGER REVERSE: Scegli CLOSE solo se rilevi una rottura dei livelli di supporto/resistenza MACRO.
             
             REGOLE D'ORO:
+            - Accettiamo un drawdown (rosso) fino al 2% di prezzo. Non avere paura se non vedi inversione reale.
             - Favorisci il HOLD per far correre i profitti (TP2).
-            - Abbiamo un Trailing Stop LARGO che protegge la posizione dopo il TP1.
-            - NON suggerire CLOSE per piccoli profitti (<1%) a meno che il trend non sia compromesso.
+            - Abbiamo un Trailing Stop LARGO che ci protegge.
             
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{

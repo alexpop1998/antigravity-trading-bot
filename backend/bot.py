@@ -779,11 +779,11 @@ class CryptoBot:
             ai_tp = float(ai_tp)
         
         # Technical Stop: Multiplier based on TP stage
-        # USER REQUEST: Wider Trailing Stop for TP2 to capture big trends
-        # Normal SL (Pre-TP1): 3x ATR
+        # USER REQUEST: Institutional SL - Wider to avoid noise
+        # Normal SL (Pre-TP1): 3.5x ATR
         # TP2 Trailing (Post-TP1): 5x ATR (Wider "Largo")
-        tech_multiplier = 5.0 if trade.get('tp1_hit', False) else 3.0
-        survival_multiplier = 7.0 # Wider safety net
+        tech_multiplier = 5.0 if trade.get('tp1_hit', False) else 3.5
+        survival_multiplier = 7.0 # Survival ceiling
         
         latest = self.latest_data.get(symbol, {})
         current_atr = latest.get('atr')
@@ -795,9 +795,18 @@ class CryptoBot:
             sl_distance = float(trade.get('sl_distance', current_price * self.stop_loss_pct))
             survival_sl_dist = sl_distance * 2.5
             
-        # Floor for Black Swans (at least 1.5% away to avoid noise)
+        # --- [CRITICAL] INSTITUTIONAL SL FLOOR ---
+        # Never closer than 1.5% from entry to avoid paper hands / noise
+        # We only apply the floor before TP1 is hit to give initial breathing room
+        if not trade.get('tp1_hit', False):
+            min_sl_dist = current_price * 0.015
+            if sl_distance < min_sl_dist:
+                 sl_distance = min_sl_dist
+                 logger.debug(f"📏 [SL GUARD] Enforcing institutional floor (1.5%) for {symbol}")
+            
+        # Floor for Black Swans (at least 2.0% away to avoid noise)
         if trade.get('is_black_swan') or trade.get('signal_type') == "GATEKEEPER":
-            min_dist = current_price * 0.015
+            min_dist = current_price * 0.02
             if sl_distance < min_dist:
                 sl_distance = min_dist
         
