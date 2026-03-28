@@ -9,10 +9,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Reset date: Start Fresh from this moment (2026-03-28 08:48:00 UTC)
+# Data di Reset: Inizia da questo momento (2026-03-28 08:48:00 UTC)
 START_DATE = "2026-03-28 08:48:00"
 
-# --- HELPER FUNCTIONS ---
+# --- FUNZIONI DI SUPPORTO ---
 def get_base64_image(path):
     if not os.path.exists(path):
         return ""
@@ -66,7 +66,7 @@ async def async_generate():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # --- DEDUPLICATION LOGIC ---
+        # --- LOGICA DI DEDUPICAZIONE ---
         cursor.execute("""
             WITH DedupedTrades AS (
                 SELECT *,
@@ -86,7 +86,7 @@ async def async_generate():
         
         metrics = calculate_metrics(trades)
         
-        # Chart Data
+        # Dati Grafico
         cumulative_pnl = 0
         chart_data = []
         for t in trades:
@@ -102,7 +102,7 @@ async def async_generate():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Antigravity Pro Operations - Track Record</title>
+    <title>Trading Futures Bot - Track Record</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -168,18 +168,18 @@ async def async_generate():
     <div class="container">
         <header>
             <div class="branding">
-                <h1>ANTIGRAVITY PRO OPERATIONS</h1>
-                <p>Institutional AI Trading Track Record | Ref: TRACK-{datetime.now().strftime('%Y%m%d')}</p>
+                <h1>TRADING FUTURES BOT</h1>
+                <p>Track Record AI Operativo | Ref: TRK-{datetime.now().strftime('%Y%m%d')}</p>
             </div>
             <div style="text-align: right">
-                <div style="color: var(--success); font-weight: 700;">● SYSTEM ONLINE</div>
-                <div style="font-size: 12px; opacity: 0.5">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+                <div style="color: var(--success); font-weight: 700;">● SISTEMA ONLINE</div>
+                <div style="font-size: 12px; opacity: 0.5">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
             </div>
         </header>
 
         <div class="metrics-grid">
             <div class="metric-card">
-                <div class="metric-label">Net Profit (USDT)</div>
+                <div class="metric-label">Profitto Netto (USDT)</div>
                 <div class="metric-value {'pnl-plus' if metrics['total_pnl'] >= 0 else 'pnl-minus'}">
                     {'+' if metrics['total_pnl'] >= 0 else ''}${metrics['total_pnl']:,.2f}
                 </div>
@@ -199,20 +199,21 @@ async def async_generate():
         </div>
 
         <div class="chart-box">
+            <h3 style="margin-top: 0; color: var(--title); font-weight: 400;">Curva di Equity (PnL Cumulativo)</h3>
             <canvas id="equityChart" height="120"></canvas>
         </div>
 
-        <h3>Recent Activity (Post-Emergency)</h3>
+        <h3>Attività Recente</h3>
         <table>
             <thead>
                 <tr>
                     <th>Timestamp</th>
                     <th>Asset</th>
-                    <th>Side</th>
-                    <th>Entry Price</th>
-                    <th>Ex. Amount</th>
-                    <th>Net PnL</th>
-                    <th>Strategy</th>
+                    <th>Direzione</th>
+                    <th>Prezzo Entry</th>
+                    <th>Quantità</th>
+                    <th>PnL Netto</th>
+                    <th>Strategia</th>
                 </tr>
             </thead>
             <tbody>
@@ -240,7 +241,7 @@ async def async_generate():
             data: {{
                 labels: data.map(d => d.x.split(' ')[1]),
                 datasets: [{{
-                    label: 'Cumulative Equity',
+                    label: 'Equity Cumulativa',
                     data: data.map(d => d.y),
                     borderColor: '#ff9f43',
                     backgroundColor: 'rgba(255, 159, 67, 0.1)',
