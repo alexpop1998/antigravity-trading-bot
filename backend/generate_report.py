@@ -82,14 +82,14 @@ async def async_generate():
         for t in trades:
             cumulative_pnl += float(t['pnl'] or 0)
             trade_data_json.append({
-                "timestamp": t['timestamp'],
-                "symbol": t['symbol'],
-                "side": t['side'].upper(),
-                "price": t['price'],
-                "amount": t['amount'],
+                "timestamp": str(t['timestamp']),
+                "symbol": str(t['symbol']),
+                "side": str(t['side']).upper(),
+                "price": float(t['price'] or 0),
+                "amount": float(t['amount'] or 0),
                 "pnl": float(t['pnl'] or 0),
                 "pnl_pct": float(t.get('pnl_pct', 0) or 0),
-                "reason": t['reason'],
+                "reason": str(t['reason']),
                 "cum_pnl": round(cumulative_pnl, 2)
             })
 
