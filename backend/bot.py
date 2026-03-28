@@ -1075,9 +1075,12 @@ class CryptoBot:
         amount = self.exchange.amount_to_precision(symbol, amount)
         return float(amount)
 
-        # 1. Base leverage (AI suggested or config fallback)
-        if current_price <= 0: return self.leverage
-        
+    def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price, **kwargs):
+        """Calculates dynamic leverage based on AI suggestions and risk factors."""
+        latest = self.latest_data.get(symbol, {})
+        if not latest or current_price <= 0:
+            return self.leverage
+            
         atr = latest.get('atr', current_price * 0.01)
         if not atr or atr == "N/A":
             atr = current_price * 0.01
