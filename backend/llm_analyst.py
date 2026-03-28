@@ -19,7 +19,7 @@ class LLMAnalyst:
             base_url=base_url
         ) if api_key else None
         
-        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash-latest")
+        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash-lite")
         self.semaphore = asyncio.Semaphore(2) # Limit concurrent decisions to avoid rate limits
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()

@@ -1204,9 +1204,9 @@ class CryptoBot:
                     tp2_mult = 15.0
                     logger.warning(f"🛡️ [RISK MGMT] Macro Volatility Shield active: Widened SL/TP for {symbol}.")
                 else:
-                    sl_mult = 5.0 if is_black_swan else 3.0
-                    tp1_mult = 7.0 if is_black_swan else 5.0
-                    tp2_mult = 15.0 if is_black_swan else 10.0
+                    sl_mult = 5.0 if is_black_swan else 2.0
+                    tp1_mult = 7.0 if is_black_swan else 4.0
+                    tp2_mult = 15.0 if is_black_swan else 8.0
                 
                 # --- APPLY AI MULTIPLIERS ---
                 sl_mult *= ai_sl_mult
@@ -1841,7 +1841,7 @@ class CryptoBot:
                         await asyncio.sleep(5) # Rate limit protection
             except Exception as e:
                 logger.error(f"Error in position health loop: {e}")
-            await asyncio.sleep(1800) # Run every 30 minutes
+            await asyncio.sleep(120) # Run every 2 minutes
 
     async def _audit_single_position(self, symbol):
         """Perform a single AI-driven audit of an active position."""

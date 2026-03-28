@@ -9,8 +9,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Data di Reset: Inizia da questo momento (2026-03-28 09:02:00 UTC)
-START_DATE = "2026-03-28 09:02:00"
+# Data di Reset: Inizia da questo momento (2026-03-28 11:26:00 UTC)
+START_DATE = "2026-03-28 11:26:00"
 INITIAL_CAPITAL = 10000.0
 
 # --- FUNZIONI DI SUPPORTO ---
@@ -64,19 +64,10 @@ async def async_generate():
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # --- LOGICA DI DEDUPICAZIONE ---
+        # --- QUERY SEMPLIFICATA (TUTTI I TRADE) ---
         cursor.execute("""
-            WITH DedupedTrades AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY symbol, ROUND(pnl, 2), CAST(strftime('%s', timestamp) / 60 AS INT)
-                        ORDER BY timestamp ASC
-                    ) as rn
-                FROM trade_history
-                WHERE ABS(pnl) > 0.01 AND timestamp >= ?
-            )
-            SELECT * FROM DedupedTrades 
-            WHERE rn = 1
+            SELECT * FROM trade_history 
+            WHERE timestamp >= ?
             ORDER BY timestamp ASC
         """, (START_DATE,))
         trades = [dict(row) for row in cursor.fetchall()]
