@@ -90,7 +90,8 @@ class CryptoBot:
                 'options': {'defaultType': 'swap'},
                 'timeout': 10000,
             })
-            logger.info("🛡️ [Shadow Mode] Data Fetcher Initialized (Mainnet Binance)")
+            await self.data_fetcher.load_markets()
+            logger.info(f"🛡️ [Shadow Mode] Data Fetcher Initialized with {len(self.data_fetcher.markets)} real symbols.")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Shadow Mode Fetcher: {e}")
             self.data_fetcher = self.exchange
@@ -637,6 +638,12 @@ class CryptoBot:
             
         self.latest_data[symbol]['funding_multiplier'] = funding_multiplier
 
+        # --- MAINNET VALIDITY FILTER (SHADOW MODE) ---
+        if hasattr(self, 'data_fetcher') and self.data_fetcher.markets:
+            if symbol not in self.data_fetcher.markets:
+                logger.warning(f"🚫 [Shadow Filter] Ignoring {symbol}: Not present on live Binance Mainnet (Testnet phantom).")
+                return
+                
         # --- CONSENSUS ENGINE: Routing signals to SignalManager ---
         if is_technical_signal:
              asyncio.create_task(self.handle_signal(symbol, "TECH", tech_side, weight_modifier=1.0, current_price=price, ema200=ema200))
