@@ -355,12 +355,13 @@ class LLMAnalyst:
                 "pnl": pnl
             })
 
-            # Cleanup: Teniamo solo le ultime 100 lezioni o gli ultimi 14 giorni
+            # Cleanup: Teniamo solo le ultime 2500 lezioni (circa 14 giorni @ 180 trade/day)
             cutoff = time.time() - (14 * 86400)
-            lessons_db = [l for l in lessons_db if l['timestamp'] > cutoff][:100]
+            lessons_db = [l for l in lessons_db if l['timestamp'] > cutoff][:2500]
 
             # Generiamo il prompt context riassuntivo per le prossime decisioni
-            rules_summary = " | ".join([l['rule'] for l in lessons_db[:10]]) # Ultime 10 regole
+            # Prendiamo le ultime 15 regole d'oro per dare più contesto senza saturare i token
+            rules_summary = " | ".join([l['rule'] for l in lessons_db[:15]])
             self.lessons_learned = rules_summary
 
             # Save per persistence
