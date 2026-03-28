@@ -31,6 +31,7 @@ class BotDatabase:
                 price REAL,
                 amount REAL,
                 pnl REAL,
+                pnl_pct REAL,
                 reason TEXT,
                 exchange_trade_id TEXT UNIQUE
             )
@@ -53,11 +54,10 @@ class BotDatabase:
             )
         ''')
         
-        # Add exchange_trade_id column to existing table if it doesn't exist
         try:
-            cursor.execute("ALTER TABLE trade_history ADD COLUMN exchange_trade_id TEXT UNIQUE")
+            cursor.execute("ALTER TABLE trade_history ADD COLUMN pnl_pct REAL")
         except sqlite3.OperationalError:
-            pass # Column already exists
+            pass # Colonna già esistente
             
         self.conn.commit()
 
@@ -82,13 +82,13 @@ class BotDatabase:
             logger.error(f"Errore caricamento database: {e}")
             return None
 
-    def log_trade(self, symbol, side, price, amount, pnl=0, reason="", exchange_trade_id=None):
+    def log_trade(self, symbol, side, price, amount, pnl=0, pnl_pct=0, reason="", exchange_trade_id=None):
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT INTO trade_history (symbol, side, price, amount, pnl, reason, exchange_trade_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (symbol, side, price, amount, pnl, reason, exchange_trade_id))
+                INSERT INTO trade_history (symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id))
             self.conn.commit()
         except sqlite3.IntegrityError:
             pass # Ignoriamo duplicati basati su exchange_trade_id

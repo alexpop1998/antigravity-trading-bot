@@ -904,7 +904,7 @@ class CryptoBot:
                 reason = "EXIT" if partial_pct >= 1.0 else "PARTIAL_EXIT"
             
             # Log with exchange_trade_id to prevent duplicates in sync_binance_trades
-            self.db.log_trade(symbol, "CLOSE" if partial_pct >= 1.0 else "CLOSE_PARTIAL", execution_price, amount_to_close, pnl, reason, exchange_trade_id=order_id)
+            self.db.log_trade(symbol, "CLOSE" if partial_pct >= 1.0 else "CLOSE_PARTIAL", execution_price, amount_to_close, pnl, pnl_pct_leveraged, reason, exchange_trade_id=order_id)
             
             self.notifier.notify_trade(symbol, "CLOSE", execution_price, amount_to_close, reason, pnl=pnl, pnl_pct=pnl_pct_leveraged)
             
