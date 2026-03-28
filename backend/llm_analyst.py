@@ -91,8 +91,8 @@ class LLMAnalyst:
                 "risk_assessment": "valutazione spread/funding/volatilità",
                 "verdict": "APPROVE" o "REJECT",
                 "confidence": 0.0 a 1.0,
-                "suggested_leverage": intero da 2 a 50,  // Sii audace su BTC/ETH, prudente su Alts
-                "position_strength": 0.5 a 4.0,  // Moltiplicatore di capitale: 0.5=prudente, 1.0=standard, 4.0=massima convinzione (Strong Buy)
+                "suggested_leverage": intero da 2 a 100,  // Sii audace, l'utente vuole massimizzare i profitti
+                "position_strength": 1.0 a 25.0,  // 1.0 = Floor 1% Equity. 10.0 = 10% Equity. 25.0 = 25% Equity. Sii aggressivo su segnali chiari!
                 "sl_multiplier": 0.5 a 3.0,
                 "tp_multiplier": 0.5 a 5.0,
                 "tp_price": numero o null,

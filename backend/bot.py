@@ -1095,10 +1095,11 @@ class CryptoBot:
             logger.warning(f"📏 [SIZING FLOOR] Boosting {symbol} margin from {adjusted_usdt:.2f} to {min_margin_floor} USDT.")
             adjusted_usdt = min_margin_floor
 
-        # Global Safety Cap: 15% of equity per trade (Upgraded from 10%)
-        max_limit = current_equity * 0.15
+        # Global Safety Cap: 25% of equity per trade (Increased for High Conviction AI trades)
+        max_limit = current_equity * 0.25
         if adjusted_usdt > max_limit:
-            adjusted_usdt = max_limit
+             logger.warning(f"🛡️ [SIZING CAP] Capping extreme conviction buy to 25% of equity: {max_limit:.2f} USDT.")
+             adjusted_usdt = max_limit
 
         # --- DYNAMIC FLOOR (1% Equity) ---
         # Garantisce 100$ su un conto da 10k, ma resta scalabile (2$) su un conto da 200$.
