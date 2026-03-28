@@ -59,6 +59,11 @@ class BotDatabase:
         except sqlite3.OperationalError:
             pass # Colonna già esistente
             
+        try:
+            cursor.execute("ALTER TABLE trade_history ADD COLUMN real_price REAL")
+        except sqlite3.OperationalError:
+            pass # Colonna già esistente
+            
         self.conn.commit()
 
     def save_state(self, key, data):
@@ -82,13 +87,13 @@ class BotDatabase:
             logger.error(f"Errore caricamento database: {e}")
             return None
 
-    def log_trade(self, symbol, side, price, amount, pnl=0, pnl_pct=0, reason="", exchange_trade_id=None):
+    def log_trade(self, symbol, side, price, amount, pnl=0, pnl_pct=0, reason="", exchange_trade_id=None, real_price=None):
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
-                INSERT INTO trade_history (symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id))
+                INSERT INTO trade_history (symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id, real_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id, real_price))
             self.conn.commit()
         except sqlite3.IntegrityError:
             pass # Ignoriamo duplicati basati su exchange_trade_id

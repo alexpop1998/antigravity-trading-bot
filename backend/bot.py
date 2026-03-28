@@ -959,7 +959,32 @@ class CryptoBot:
                 reason = "EXIT" if partial_pct >= 1.0 else "PARTIAL_EXIT"
             
             # Log with exchange_trade_id to prevent duplicates in sync_binance_trades
-            self.db.log_trade(symbol, "CLOSE" if partial_pct >= 1.0 else "CLOSE_PARTIAL", execution_price, amount_to_close, pnl, pnl_pct_leveraged, reason, exchange_trade_id=order_id)
+            # Capture Real Exit Price for Shadow PnL
+            real_exit_price = 0.0
+            if hasattr(self, 'data_fetcher'):
+                try:
+                    rt = await self.data_fetcher.fetch_ticker(symbol)
+                    real_exit_price = float(rt.get('last') or rt.get('close') or 0)
+                except: pass
+
+            self.db.log_trade(
+                symbol, 
+                "CLOSE" if partial_pct >= 1.0 else "CLOSE_PARTIAL", 
+                execution_price, 
+                amount_to_close, 
+                pnl, 
+                pnl_pct_leveraged, 
+                reason, 
+                exchange_trade_id=order_id,
+                real_price=real_exit_price
+            )
+            
+            # Log Shadow Comparison
+            if real_exit_price > 0 and self.trade_levels[symbol] and self.trade_levels[symbol].get('real_entry_price'):
+                r_entry = self.trade_levels[symbol]['real_entry_price']
+                side = self.trade_levels[symbol]['side']
+                shadow_pnl_pct = ((real_exit_price - r_entry) / r_entry) * 100 if side == 'long' else ((r_entry - real_exit_price) / r_entry) * 100
+                logger.warning(f"📊 [Shadow PnL] {symbol} | Mainnet: {shadow_pnl_pct:+.2f}% | Testnet: {pnl_pct_leveraged:+.2f}%")
             
             self.notifier.notify_trade(symbol, "CLOSE", execution_price, amount_to_close, reason, pnl=pnl, pnl_pct=pnl_pct_leveraged)
             
@@ -1322,9 +1347,32 @@ class CryptoBot:
             # --- AI MEMORY SNAPSHOT ---
             snapshot_id = self.db.save_trade_snapshot(symbol, signal_type, 'long' if is_long else 'short', current_price, self.latest_data[symbol])
 
+            # Capture Real Entry Price for Shadow PnL
+            real_entry_price = 0.0
+            if hasattr(self, 'data_fetcher'):
+                try:
+                    rt = await self.data_fetcher.fetch_ticker(symbol)
+                    real_entry_price = float(rt.get('last') or rt.get('close') or 0)
+                    logger.info(f"🛡️ [Shadow Entry] {symbol} Mainnet Price: {real_entry_price}")
+                except Exception as e:
+                    logger.error(f"⚠️ Failed to catch Shadow Entry price for {symbol}: {e}")
+
+            # Log to DB with Real Price
+            self.db.log_trade(
+                symbol, 
+                side.upper(), 
+                current_price, 
+                amount_to_buy, 
+                0, 
+                0, 
+                f"{signal_type} ({consensus_score:.2f})",
+                real_price=real_entry_price
+            )
+
             self.trade_levels[symbol] = {
                 'side': 'buy' if is_long else 'sell',
                 'entry_price': current_price,
+                'real_entry_price': real_entry_price, # STORE REAL ENTRY
                 'sl': sl_price,
                 'sl_distance': sl_distance,
                 'tp1': tp1_price,

@@ -85,21 +85,51 @@ async def async_generate():
         
         # Prepare Chart Data
         cumulative_pnl = 0
+        shadow_cumulative_pnl = 0
         trade_data_json = []
+        open_trades_map = {} # symbol -> {real_price, side}
+
         for t in trades:
             try:
+                symbol = t.get('symbol', 'UNKNOWN')
+                side = str(t.get('side', 'N/A')).upper()
                 p = float(t.get('pnl') or 0)
+                real_p = float(t.get('real_price') or 0)
+                
                 cumulative_pnl += p
+                shadow_pnl = 0
+                
+                # Shadow PnL Calculation Logic
+                if side in ['BUY', 'SELL']:
+                    open_trades_map[symbol] = {
+                        'price': real_p if real_p > 0 else float(t.get('price') or 0),
+                        'side': side
+                    }
+                elif "CLOSE" in side:
+                    if symbol in open_trades_map:
+                        entry_data = open_trades_map[symbol]
+                        exit_price = real_p if real_p > 0 else float(t.get('price') or 0)
+                        entry_price = entry_data['price']
+                        
+                        if entry_price > 0:
+                            direction = 1 if entry_data['side'] == 'BUY' else -1
+                            # Simple price-delta based PnL (ignoring leverage for clean benchmarking)
+                            shadow_pnl_pct = ((exit_price - entry_price) / entry_price) * direction
+                            shadow_pnl = shadow_pnl_pct * (float(t.get('amount') or 0) * entry_price)
+                            shadow_cumulative_pnl += shadow_pnl
+                
                 trade_data_json.append({
                     "timestamp": str(t.get('timestamp', 'N/A')),
-                    "symbol": str(t.get('symbol', 'UNKNOWN')),
-                    "side": str(t.get('side', 'N/A')).upper(),
+                    "symbol": symbol,
+                    "side": side,
                     "price": float(t.get('price') or 0),
                     "amount": float(t.get('amount') or 0),
                     "pnl": p,
+                    "shadow_pnl": round(shadow_pnl, 2),
                     "pnl_pct": float(t.get('pnl_pct') or 0),
                     "reason": str(t.get('reason', 'N/A')),
-                    "cum_pnl": round(cumulative_pnl, 2)
+                    "cum_pnl": round(cumulative_pnl, 2),
+                    "shadow_cum_pnl": round(shadow_cumulative_pnl, 2)
                 })
             except Exception as loop_e:
                 print(f"⚠️ [Report] Skipping malformed trade row for {t.get('symbol')}: {loop_e}")
@@ -205,8 +235,9 @@ async def async_generate():
                     <th>Data (UTC)</th>
                     <th>Asset</th>
                     <th>Lat.</th>
-                    <th>Prezzo Entry</th>
-                    <th>PnL Netto</th>
+                    <th>Entry (Test/Real)</th>
+                    <th>PnL Netto (Testnet)</th>
+                    <th>PnL Shadow (Mainnet)</th>
                     <th>ROI %</th>
                     <th>Strategia</th>
                 </tr>
@@ -274,8 +305,9 @@ async def async_generate():
                     <td>${{t.timestamp}}</td>
                     <td><strong>${{t.symbol}}</strong></td>
                     <td style="color: ${{t.side === 'BUY' || t.side === 'LONG' || t.side === 'SHORT' ? (t.side === 'SHORT' ? 'var(--danger)' : 'var(--success)') : 'var(--text)'}}">${{t.side}}</td>
-                    <td>$${{t.price.toLocaleString(undefined, {{minimumFractionDigits: 4}})}}</td>
+                    <td style="font-size: 11px;">$${{t.price.toFixed(4)}} / $${{(t.real_price || 0).toFixed(4)}}</td>
                     <td class="${{pnlClass}}">${{t.pnl >= 0 ? '+' : ''}}$${{t.pnl.toFixed(2)}}</td>
+                    <td style="color: var(--success); font-weight: bold;">${{t.shadow_pnl >= 0 ? '+' : ''}}$${{t.shadow_pnl.toFixed(2)}}</td>
                     <td><span class="roi-badge ${{roiClass}}">${{t.pnl_pct >= 0 ? '+' : ''}}${{(t.pnl_pct).toFixed(2)}}%</span></td>
                     <td style="opacity: 0.6; font-size: 11px;">${{t.reason}}</td>
                 `;
@@ -289,11 +321,17 @@ async def async_generate():
             const ctx = canvas.getContext('2d');
             
             let cum = 0;
-            // Use date + time for clearer labels
-            const points = data.map(t => {{
+            let shadowCum = 0;
+            const labels = [];
+            const testnetData = [];
+            const shadowData = [];
+
+            data.forEach(t => {{
                 cum += t.pnl;
-                const timePart = t.timestamp.includes(' ') ? t.timestamp.split(' ')[1] : t.timestamp;
-                return {{ x: timePart, y: cum.toFixed(2) }};
+                shadowCum += (t.shadow_pnl || 0);
+                labels.push(t.timestamp.includes(' ') ? t.timestamp.split(' ')[1] : t.timestamp);
+                testnetData.push(cum.toFixed(2));
+                shadowData.push(shadowCum.toFixed(2));
             }});
 
             if (chart) chart.destroy();
@@ -301,18 +339,28 @@ async def async_generate():
             chart = new Chart(ctx, {{
                 type: 'line',
                 data: {{
-                    labels: points.map(p => p.x),
-                    datasets: [{{
-                        label: 'Equity (PnL Cumulativo)',
-                        data: points.map(p => p.y),
-                        borderColor: '#ff9f43',
-                        backgroundColor: 'rgba(255, 159, 67, 0.1)',
-                        borderWidth: 2,
-                        fill: true,
-                        tension: 0.1,
-                        pointRadius: points.length > 50 ? 1 : 4,
-                        pointBackgroundColor: '#ff9f43'
-                    }}]
+                    labels: labels,
+                    datasets: [
+                        {{
+                            label: 'Shadow Performance (REAL MARKET)',
+                            data: shadowData,
+                            borderColor: '#28c76f',
+                            backgroundColor: 'rgba(40, 199, 111, 0.1)',
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.2,
+                            pointRadius: data.length > 50 ? 0 : 3
+                        }},
+                        {{
+                            label: 'Testnet Balance (SANDBOX)',
+                            data: testnetData,
+                            borderColor: '#ea5455',
+                            borderWidth: 2,
+                            fill: false,
+                            tension: 0.2,
+                            pointRadius: 0
+                        }}
+                    ]
                 }},
                 options: {{
                     responsive: true,
