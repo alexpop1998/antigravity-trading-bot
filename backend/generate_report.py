@@ -9,8 +9,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Reset date: Start Fresh from the emergency fix (Today 08:41 UTC)
-START_DATE = "2026-03-28 08:41:00"
+# Reset date: Start Fresh from this moment (2026-03-28 08:48:00 UTC)
+START_DATE = "2026-03-28 08:48:00"
 
 # --- HELPER FUNCTIONS ---
 def get_base64_image(path):
