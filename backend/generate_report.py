@@ -9,8 +9,8 @@ DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
 # Reset d'inizio Sessione (Session Zero)
-START_DATE = "2026-03-28 20:47:00" 
-INITIAL_CAPITAL = 9400.0
+START_DATE = "2026-03-27 00:00:00" 
+INITIAL_CAPITAL = 10000.0
 
 def calculate_metrics(trades):
     if not trades:
