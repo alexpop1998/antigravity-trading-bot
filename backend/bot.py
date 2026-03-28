@@ -1138,6 +1138,22 @@ class CryptoBot:
         return final_lev
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
+        # --- EMERGENCY PRICE RECOVERY ---
+        # If price is 0 (can happen with news signals before scanner sync), fetch it now
+        if current_price <= 0:
+            logger.warning(f"🔍 [Price Recovery] Current price for {symbol} is 0. Fetching fresh price from Mainnet...")
+            try:
+                provider = self._get_data_provider(symbol)
+                ticker = await provider.fetch_ticker(symbol)
+                current_price = float(ticker.get('last') or ticker.get('close') or 0)
+                if current_price <= 0:
+                    logger.error(f"❌ [Price Recovery] Failed to fetch price for {symbol}. Aborting order.")
+                    return
+                logger.info(f"✅ [Price Recovery] Successfully fetched price for {symbol}: {current_price}")
+            except Exception as e:
+                logger.error(f"❌ [Price Recovery] Error fetching price for {symbol}: {e}")
+                return
+
         # --- GLOBAL RISK CHECKS ---
         if symbol in self.symbol_blacklist:
             logger.warning(f"🚫 Skipping {symbol}: In blacklist.")
