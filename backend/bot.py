@@ -730,13 +730,16 @@ class CryptoBot:
                 existing_side = 'buy' if existing_pos == 'LONG' else 'sell'
                 if existing_side != side.lower():
                     # --- REVERSAL PRIORITY ---
-                    # If it's a Black Swan or Gatekeeper news, we MUST flip the position
-                    if is_black_swan or type in ["GATEKEEPER", "NEWS", "NEW_LISTING"]:
+                    # If it's a Black Swan, Gatekeeper, high-priority event, or strong AI reversal
+                    reversal_signals = ["GATEKEEPER", "NEWS", "NEW_LISTING", "EVENT_PUMP", "EVENT_DUMP", "LIQUIDATION"]
+                    if is_black_swan or type in reversal_signals or (type == "AI" and ai_confidence > 0.85):
                         if not self._is_startup_shield_active():
                             logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
-                            await self.close_position(symbol, self.trade_levels[symbol])
+                            # Fetch current level to ensure we close the right amount
+                            current_level = self.trade_levels.get(symbol)
+                            await self.close_position(symbol, current_level, reason=f"REVERSAL_{type}")
                         else:
-                            logger.info(f"🛡️ [Shield] Skipping Emergency Reversal for {symbol} (Startup Protection activo)")
+                            logger.info(f"🛡️ [Shield] Skipping Emergency Reversal for {symbol} (Startup Protection active)")
                             return
                     else:
                         logger.warning(f"🚫 [MASTER CONTROLLER] Conflicting signal for {symbol}: Already in {existing_pos}. Skipping {side.upper()} {type}.")
@@ -777,7 +780,7 @@ class CryptoBot:
         
         # Technical Stop: 3x ATR (Active Exit)
         # DeepSeek Scaling Out: Tighten to 1.5x ATR after TP1 hit
-        tech_multiplier = 1.5 if trade.get('tp1_hit', False) else 3.0
+        tech_multiplier = 2.0 if trade.get('tp1_hit', False) else 4.0
         survival_multiplier = 5.0
         
         latest = self.latest_data.get(symbol, {})
@@ -790,9 +793,9 @@ class CryptoBot:
             sl_distance = float(trade.get('sl_distance', current_price * self.stop_loss_pct))
             survival_sl_dist = sl_distance * 2.5
             
-        # Floor for Black Swans (at least 1.2% away to avoid noise)
-        if trade.get('is_black_swan'):
-            min_dist = current_price * 0.012
+        # Floor for Black Swans (at least 1.5% away to avoid noise)
+        if trade.get('is_black_swan') or trade.get('signal_type') == "GATEKEEPER":
+            min_dist = current_price * 0.015
             if sl_distance < min_dist:
                 sl_distance = min_dist
         
@@ -804,8 +807,8 @@ class CryptoBot:
             entry_price = float(trade.get('entry_price', current_price))
             pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
             
-            # Logic: Require RSI to cross 55/45 (stronger neutral) AND have at least 0.5% profit to cover fees
-            if (is_long and current_rsi > 55 and pnl_pct > 0.005) or (not is_long and current_rsi < 45 and pnl_pct > 0.005):
+            # Logic: Require RSI to cross 55/45 (stronger neutral) AND have at least 1.2% profit to cover fees
+            if (is_long and current_rsi > 55 and pnl_pct > 0.012) or (not is_long and current_rsi < 45 and pnl_pct > 0.012):
                 logger.warning(f"🏁 [{sig_type}] Closing {symbol} - RSI {current_rsi} reached exit threshold with profit {pnl_pct:.2%}")
                 asyncio.create_task(self.close_position(symbol, trade))
                 return
@@ -919,8 +922,19 @@ class CryptoBot:
             is_long = side in ['buy', 'long']
             close_side = 'sell' if is_long else 'buy'
             
-            # --- BUG FIX: Ensure amount is formatted as a clean string for ccxt/decimal ---
-            total_amount = float(trade.get('amount', 0))
+            # --- ROBUST AMOUNT EXTRACTION (Binance/Bitget Compat) ---
+            total_amount = 0.0
+            if trade and 'amount' in trade:
+                total_amount = float(trade['amount'])
+            
+            # If trade state is missing or corrupted, try to fetch from exchange directly
+            if total_amount <= 0:
+                logger.warning(f"⚠️ [RECOVERY] Trade state for {symbol} is missing amount. Fetching from exchange...")
+                positions = await self.exchange.fetch_positions([symbol])
+                if positions:
+                    pos = positions[0]
+                    total_amount = abs(float(pos.get('amount', pos.get('positionAmt', 0)) or 0))
+
             amount_to_close = total_amount * partial_pct
             
             # Precision adjustment using ccxt helper
@@ -1246,22 +1260,27 @@ class CryptoBot:
                     return
 
                 # Initial defaults
-                approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = True, 1.0, self.leverage, 1.0, 1.0, None, "Auto-approved"
+                approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = False, 1.0, self.leverage, 1.0, 1.0, None, "Pending Review"
 
-                if is_news_signal:
-                    logger.info(f"🛡️ [NEWS PASS] Bypassing secondary LLM review for {symbol} (Trusting Gatekeeper)")
-                else:
-                    # Retrieve current indicators for context
-                    indicators = self.latest_data.get(symbol, {})
-                    # Ask the LLM to analyze the setup
-                    approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = await self.analyst.decide_strategy(
-                        symbol, side, signal_type, indicators, mtf_context=mtf_context, news_context=self.current_news
-                    )
+                # --- NEW: STARTUP NEWS SHIELD (10m) ---
+                if is_news_signal and (time.time() - self.start_time) < 600:
+                    logger.warning(f"🛡️ [STARTUP SHIELD] News Signal ignored for {symbol}: Waiting for fresh data (elapsed: {int(time.time() - self.start_time)}s)")
+                    self.active_positions[symbol] = None
+                    self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                    return
+
+                # --- REFINED: Force LLM Review even for News (Bypass Removed) ---
+                # Retrieve current indicators for context
+                indicators = self.latest_data.get(symbol, {})
+                # Ask the LLM to analyze the setup
+                approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = await self.analyst.decide_strategy(
+                    symbol, side, signal_type, indicators, mtf_context=mtf_context, news_context=self.current_news
+                )
                     
-                    # Update Cooldown state
-                    # If REJECTED, set a longer cooldown (900s) to avoid spamming the same setup
-                    self.llm_cooldowns[symbol] = now if approved else now + 600 # +600 makes it 15m total (300+600)
-                    self.last_llm_side[symbol] = side.lower()
+                # Update Cooldown state
+                # If REJECTED, set a longer cooldown (900s) to avoid spamming the same setup
+                self.llm_cooldowns[symbol] = now if approved else now + 600 # +600 makes it 15m total (300+600)
+                self.last_llm_side[symbol] = side.lower()
                 
                 if not approved:
                     logger.warning(f"🧠 [LLM STRATEGIC REVIEW] REJECTED {symbol} {side.upper()}: {reason}")
@@ -1867,9 +1886,15 @@ class CryptoBot:
             
             for pos in active_pos:
                 symbol = pos['symbol']
-                side = pos['side'].lower()
+                # Support both CCXT normalized components and Binance native names
+                amount = abs(float(pos.get('amount', pos.get('positionAmt', 0)) or 0))
+                # Side detection
+                raw_side = pos.get('side', '') # 'long' or 'short'
+                if not raw_side:
+                    raw_side = 'long' if float(pos.get('amount', pos.get('positionAmt', 0)) or 0) > 0 else 'short'
+                
+                side = raw_side.lower()
                 close_side = 'sell' if side == 'long' else 'buy'
-                amount = float(pos.get('amount', pos.get('contracts', 0)))
                 
                 logger.warning(f"🆘 Emergency closing {symbol} ({amount} {side})")
                 current_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
