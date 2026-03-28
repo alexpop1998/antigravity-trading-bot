@@ -1113,11 +1113,7 @@ class CryptoBot:
         # Adjust for exchange precision rules
         amount = self.exchange.amount_to_precision(symbol, amount)
         return float(amount)
-sted_usdt:.2f} USDT Margin (Score: {consensus_score})")
-        
-        # Adjust for exchange precision rules
-        amount = self.exchange.amount_to_precision(symbol, amount)
-        return float(amount)
+
 
     def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price, **kwargs):
         """Calculates dynamic leverage based on AI suggestions and risk factors."""
