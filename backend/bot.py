@@ -218,6 +218,10 @@ class CryptoBot:
             available_symbols = []
             for s in self.symbols:
                 if s in self.exchange.markets:
+                    # Filter for Mainnet if in Shadow Mode
+                    if hasattr(self, 'data_fetcher') and s not in self.data_fetcher.markets:
+                        logger.warning(f"🛡️ [Shadow Mode] Filtering out {s}: Not on Mainnet.")
+                        continue
                     available_symbols.append(s)
                 else:
                     logger.warning(f"⚠️ Symbol {s} not available on this exchange. Skipping.")
