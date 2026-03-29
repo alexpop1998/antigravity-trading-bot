@@ -2233,7 +2233,7 @@ class CryptoBot:
                 # Run daily audit
                 logger.warning("📊 [DAILY AUDIT] Initiating 24h performance review...")
                 # Get last 50 closed trades (within the day)
-                history = self.db.get_all_trades(limit=50)
+                history = self.db.get_trades(limit=50)
                 await self.analyst.perform_self_audit(history)
                 
                 # Check every 24 hours
