@@ -1294,18 +1294,51 @@ class CryptoBot:
                 # --- NEW SAFETY GUARD: Total Symbol Exposure Cap ---
                 current_equity = self.latest_account_data.get('equity', 0)
                 if current_equity > 0:
-                    matching_position = next((p for p in confirmed_positions if p.get('symbol') == symbol or p.get('symbol') == symbol.replace('/', '').split(':')[0]), None)
-                    if matching_position:
-                        # Estimate total value in USD
-                        pos_value = abs(float(matching_position.get('notional', 0)))
-                        # If already more than 25% of equity, don't add more
-                        if pos_value > (current_equity * 0.25):
-                            logger.warning(f"🚫 [SAFETY] Symbol {symbol} already at max allowed exposure ({pos_value:.2f} > 25% of {current_equity:.2f}). Skipping.")
-                            self.active_positions[symbol] = None
-                            self.pending_orders_count = max(0, self.pending_orders_count - 1)
-                            return
+                    # --- [UPGRADED] ANTI-PYRAMIDING & DYNAMIC CAP (v9.7.6) ---
+                    matching_position = next((p for p in self.latest_account_data.get('positions', []) if p['symbol'] == symbol), None)
+                    is_already_trading = symbol in self.trade_levels or (matching_position and abs(float(matching_position.get('amount', 0))) > 0)
+                    
+                    # Profile Context
+                    risk_pct = getattr(self, 'percent_per_trade', 3.0)
+                    is_aggressive = risk_pct > 5.0
+                    
+                    # Standard Caps vs Extended Caps (v9.7.6)
+                    std_cap = 25.0 if is_aggressive else 10.0
+                    ext_cap = 35.0 if is_aggressive else 15.0
+                    
+                    if is_already_trading:
+                        # 1. Pyramiding Guard: Skip unless high conviction
+                        if consensus_score < 8.5 and not is_black_swan:
+                             logger.warning(f"🚫 [ANTI-PYRAMID] Symbol {symbol} already trading. Score {consensus_score:.1f} too low for second entry. Skipping.")
+                             self.active_positions[symbol] = None
+                             self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                             return
+                        
+                        # 2. Cumulative Margin Check
+                        current_margin_usdt = 0
+                        if matching_position:
+                             # Calc current margin (Notional / Leverage)
+                             notional = abs(float(matching_position.get('notional', 0)))
+                             pos_lev = abs(float(matching_position.get('leverage', 10)))
+                             current_margin_usdt = notional / pos_lev if pos_lev > 0 else 0
+                        
+                        current_equity = self.latest_account_data.get('equity', 10000)
+                        total_margin_pct = (current_margin_usdt / current_equity) * 100 if current_equity > 0 else 0
+                        
+                        # Determine current allowed cap for this symbol
+                        # If AI is extremely sure (9.2+) or Black Swan, use extended cap
+                        effective_cap = ext_cap if (consensus_score >= 9.2 or is_black_swan) else std_cap
+                        
+                        if total_margin_pct >= effective_cap:
+                             logger.warning(f"🚫 [CUMULATIVE CAP] {symbol} already at {total_margin_pct:.1f}% margin. Cap is {effective_cap}%. Selection rejected.")
+                             self.active_positions[symbol] = None
+                             self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                             return
+                        
+                        if consensus_score >= 8.5:
+                             logger.info(f"🔥 [PYRAMID SCAN] High Conviction ({consensus_score:.1f}) detected for {symbol}. Allowing secondary entry within {effective_cap}% cap.")
 
-                # Switch to margin ratio guard
+                # Switch to global margin ratio guard
                 if self.current_margin_ratio >= self.max_global_margin_ratio and not is_black_swan:
                     logger.warning(f"🚫 [ORDER] Global Margin Limit Reached ({self.current_margin_ratio*100:.1f}% >= {self.max_global_margin_ratio*100:.1f}%). Skipping {symbol}.")
                     self.active_positions[symbol] = None
