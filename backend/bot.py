@@ -643,11 +643,8 @@ class CryptoBot:
             
             # --- SENTIMENT SIGNAL GENERATION ---
             try:
-                # Normalize symbol for dictionary lookup
-                lookup_symbol = symbol.split(':')[0] if ':' in symbol else symbol
-                
                 # 1. OI Expansion (More participation)
-                prev_oi = self.latest_data[lookup_symbol].get('open_interest', 0) if lookup_symbol in self.latest_data else 0
+                prev_oi = self.latest_data[symbol].get('open_interest', 0) if symbol in self.latest_data else 0
                 oi_delta = (current_oi - prev_oi) / prev_oi if prev_oi > 0 else 0
                 
                 # 2. Bullish Confluence: Price up + OI up + L/S not extreme
