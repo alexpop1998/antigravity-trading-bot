@@ -2043,11 +2043,11 @@ class CryptoBot:
         """
         try:
             # 1. Get high-potential candidates (volume/volatility filtered)
-            # Reduce candidate volume (100 -> 50) for cost optimization
-            scored_assets = await self.scanner.get_top_performing_assets(limit=50)
+            # Fetch 100 candidates to let Gemini pick the Final 60 (v9.7.7 Wide Radar)
+            scored_assets = await self.scanner.get_top_performing_assets(limit=100)
             
-            # 2. AI Refinement: Let Gemini pick the Final 50
-            new_symbols = await self.analyst.refine_market_selection(scored_assets, limit=50)
+            # 2. AI Refinement: Let Gemini pick the Final 60
+            new_symbols = await self.analyst.refine_market_selection(scored_assets, limit=60)
             
             # --- NEW: STICKY SYMBOLS PROTECTION (v3.5) ---
             # Ensure any symbol with an active position is KEPT in the list
