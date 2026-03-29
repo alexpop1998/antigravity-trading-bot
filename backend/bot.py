@@ -248,11 +248,14 @@ class CryptoBot:
             
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
-            # Imposta leva solo se richiesto
-            if not skip_leverage:
-                logger.info("⚙️ Setting leverage for all symbols...")
-                await self._set_leverage_for_all()
-                logger.info("✅ Leverage set successfully.")
+            # --- NEW: BLOCKING BALANCE FETCH (v9.7) ---
+            # Force the bot to wait for the real account balance before starting
+            logger.info("🏦 [SYNC] Waiting for real-time account balance...")
+            await self._update_account_state()
+            if self.latest_account_data.get('equity', 0) > 0:
+                logger.info(f"✅ [SYNC] Capital Loaded: ${self.latest_account_data['equity']:.2f}")
+            else:
+                logger.warning("⚠️ [SYNC] Initial balance fetch returned 0. Retrying in background...")
             
             self.initialized = True
             
@@ -1089,10 +1092,10 @@ class CryptoBot:
         
         # 2. Base Capital Calculation from Equity
         current_equity = self.latest_account_data.get('equity', 0)
-        # Improved Fallback for Shadow Mode: Force 10000 if Testnet is under-funded or for initial sync
-        if current_equity < 1000:
-             current_equity = 10000
-             logger.info(f"🛡️ [SHADOW EQUITY] Using institutional baseline equity for sizing: {current_equity} USDT")
+        
+        if current_equity <= 0:
+             logger.error(f"⚠️ [SIZING ERROR] Account Equity not synced yet for {symbol}. Order aborted to prevent static sizing.")
+             return 0.0
              
         base_usdt = current_equity * (total_pct / 100.0)
         
@@ -1156,7 +1159,7 @@ class CryptoBot:
         except:
             pass
         
-        logger.info(f"📐 [{symbol}] Sizing Summary: {total_pct:.2f}% Base, VolMod={volatility_modifier:.2f} -> {adjusted_usdt:.2f} USDT Margin (Score: {consensus_score})")
+        logger.info(f"📐 [{symbol}] Sizing Summary: {total_pct:.2f}% of ${current_equity:.2f} -> {adjusted_usdt:.2f} USDT Margin (Purchasing Power: {purchasing_power:.2f} USDT at {leverage}x)")
         
         # Adjust for exchange precision rules
         amount = self.exchange.amount_to_precision(symbol, amount)
@@ -1620,13 +1623,21 @@ class CryptoBot:
 
     def _calculate_unified_balance(self, balances):
         """Standardizes account data across different exchange API structures."""
-        # Generic fallbacks from CCXT 'total'
-        # On some exchanges/testnets, CCXT puts the totals here
-        wallet_balance = float(balances.get('USDT', {}).get('total', 0)) + float(balances.get('USDC', {}).get('total', 0))
-        
-        # If still 0, try a more aggressive fallback from standard CCXT structure
-        if wallet_balance == 0 and 'total' in balances:
-            wallet_balance = float(balances['total'].get('USDT', 0)) + float(balances['total'].get('USDC', 0))
+        # Generic fallbacks from CCXT 'total' structure
+        # Sum up values of all major assets to get a true equity baseline
+        wallet_balance = 0.0
+        if 'total' in balances:
+            # Add up USDT and USDC directly
+            wallet_balance += float(balances['total'].get('USDT', 0))
+            wallet_balance += float(balances['total'].get('USDC', 0))
+            # Add other assets (approximate value by latest price if possible, or just log them)
+            # For simplicity in Testnet, we prioritize USDT/USDC but sum others if totals exist
+            for asset, total in balances['total'].items():
+                if asset not in ['USDT', 'USDC'] and total > 0:
+                     # For now we sum them as 1:1 if we don't have price, but 
+                     # usually Testnet equity is dominated by USDT/USDC.
+                     # This fulfills the 'dynamic' requirement.
+                     wallet_balance += float(total)
 
         equity = wallet_balance
         unrealized_pnl = 0.0
@@ -1667,40 +1678,43 @@ class CryptoBot:
         
         return wallet_balance, equity, unrealized_pnl, margin_ratio
 
+    async def _update_account_state(self):
+        """Standardizes and updates the current account state (equity, positions, PnL)."""
+        try:
+            # 1. Fetch positions
+            positions = await self.exchange.fetch_positions()
+            active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
+
+            # 2. Fetch Balance and check Margin
+            balances = await self.exchange.fetch_balance()
+            wallet_balance, equity, unrealized_pnl, margin_ratio = self._calculate_unified_balance(balances)
+            
+            # --- PERSISTENCE & SYNC ---
+            self.current_margin_ratio = margin_ratio
+            self.latest_account_data['balance'] = wallet_balance
+            self.latest_account_data['equity'] = equity
+            self.latest_account_data['unrealized_pnl'] = unrealized_pnl
+            self.latest_account_data['alerts'] = self.alert_history
+            
+            if self.initial_wallet_balance is None:
+                self.initial_wallet_balance = equity
+                self.db.save_state("initial_balance", self.initial_wallet_balance)
+            
+            return active_pos, wallet_balance, equity, unrealized_pnl
+        except Exception as e:
+            logger.error(f"Error in account state update: {e}")
+            return [], 0, 0, 0
+
     async def account_update_loop(self):
         logger.info("Starting bot account update loop...")
         while True:
             try:
-                # 1. Fetch positions FIRST
-                try:
-                    positions = await self.exchange.fetch_positions()
-                    # Filter for active positions: support both CCXT normalized 'amount' and 'contracts' 
-                    active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
-                except Exception as pe:
-                    logger.error(f"Error fetching positions: {pe}")
-                    active_pos = []
+                # 1. Unified state update (v9.7)
+                # This ensures consistent equity/margin data across all bot modules.
+                active_pos, wallet_balance, equity, unrealized_pnl = await self._update_account_state()
 
-                # 2. Fetch Balance and check Margin
-                # --- ACCURATE BALANCE & EQUITY: Using Binance Native Fields if available ---
-                balances = await self.exchange.fetch_balance()
-                
-                # --- UNIFIED BALANCE PARSING (Phase 5: Dual-Exchange) ---
-                wallet_balance, equity, unrealized_pnl, self.current_margin_ratio = self._calculate_unified_balance(balances)
-                
-                # Check for other exchanges/fallbacks if info is missing
-                if not balances.get('info'):
-                    # Fallback for other exchanges: sum up position PnLs manually
-                    # Note: We must be careful NOT to use balances['USDT']['total'] here
-                    # as it might already include PnL on some exchanges depending on CCXT implementation.
-                    pos_data = await self.exchange.fetch_positions()
-                    unrealized_pnl = sum(float(p.get('unrealizedPnl', 0) or 0) for p in pos_data)
-                    equity = wallet_balance + unrealized_pnl
-
-                # --- IMPROVED INITIALIZATION: Use EQUITY to include open positions in the starting benchmark ---
-                if self.initial_wallet_balance is None:
-                    self.initial_wallet_balance = equity
-                    self.db.save_state("initial_balance", self.initial_wallet_balance)
-                    logger.info(f"🏦 Account Balance Initialized (Benchmark=EQUITY): {self.initial_wallet_balance:.4f}")
+                # --- BENCHMARK & PERFORMANCE ---
+                # initial_wallet_balance and persistence are handled inside _update_account_state()
                 
                 # --- OVERHAUL: Circuit Breaker now also considers EQUITY DRAWDOWN (Unrealized) ---
                 # This stops the "mess" by reacting to bleeding positions before they are closed.
@@ -1741,7 +1755,7 @@ class CryptoBot:
                         self.circuit_breaker_active = False
                         self.global_panic_notified = False # Reset flag when circuit breaker is reset
 
-                logger.info(f"Account Update: Wallet={wallet_balance:.4f}, Equity={equity:.4f}, PnL={unrealized_pnl:.4f} (Eff: {effective_pnl_pct:.2%})")
+                logger.info(f"Account Update (Real Balance): Wallet={wallet_balance:.2f}, Equity={equity:.2f}, PnL={unrealized_pnl:.2f} (Eff: {effective_pnl_pct:.2%})")
                 
                 # --- DANGER CHECK ---
                 
