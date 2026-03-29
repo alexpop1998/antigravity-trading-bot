@@ -2259,12 +2259,12 @@ class CryptoBot:
 
         indicators = self.latest_data.get(symbol, {})
         
-        # --- NEW: STAGNATION SHIELD (v10.0 Time Stop) ---
+        # --- STAGNATION SHIELD (v10.0 Time Stop) ---
         open_time = level.get('open_time')
         if open_time:
             age_hours = (time.time() - open_time) / 3600
-            stagnation_limit = self.config.get('trading_parameters', {}).get('stagnation_max_hours', 3)
-            stagnation_pnl = self.config.get('trading_parameters', {}).get('stagnation_pnl_threshold', 0.005) * 100 # Convert to %
+            stagnation_limit = self.risk_profile.get('trading_parameters', {}).get('stagnation_max_hours', 3)
+            stagnation_pnl = self.risk_profile.get('trading_parameters', {}).get('stagnation_pnl_threshold', 0.005) * 100 # Convert to %
             
             if age_hours >= stagnation_limit and abs(pnl_pct) < stagnation_pnl:
                 logger.warning(f"🛡️ [STAGNATION SHIELD] Closing {symbol} (Open for {age_hours:.1f}h, PnL: {pnl_pct:+.2f}%) | Freeing equity for new signals.")
