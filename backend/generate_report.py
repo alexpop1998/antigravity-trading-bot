@@ -17,12 +17,18 @@ def _load_dynamic_config():
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+            # 1. Load Initial Capital
             cursor.execute("SELECT value FROM bot_state WHERE key='initial_balance'")
             row = cursor.fetchone()
-            if row: INITIAL_CAPITAL = float(json.loads(row[0]))
+            if row: 
+                val = json.loads(row[0])
+                INITIAL_CAPITAL = float(val) if val else INITIAL_CAPITAL
             
-            # Use a recent baseline for "Clean Start" if requested
-            # For now, we stick to the user's request for 'now'
+            # 2. Load Start Date (Clean Session Start)
+            cursor.execute("SELECT value FROM bot_state WHERE key='report_start_date'")
+            row = cursor.fetchone()
+            if row: 
+                START_DATE = row[0].strip('"') or START_DATE
     except:
         pass
 

@@ -1024,7 +1024,6 @@ class CryptoBot:
             entry_price = float(trade.get('entry_price', execution_price))
             pnl = (execution_price - entry_price) * amount_to_close if is_long else (entry_price - execution_price) * amount_to_close
             
-            # ROI (Price Change %) and ROE (Leverage adjusted %)
             pnl_pct_raw = (execution_price - entry_price) / entry_price if is_long else (entry_price - execution_price) / entry_price
             pnl_pct_leveraged = pnl_pct_raw * getattr(self, 'leverage', 1.0)
             
@@ -1117,21 +1116,14 @@ class CryptoBot:
         
         adjusted_usdt = base_usdt * volatility_modifier * regime_mult * funding_mult
         
-        # --- INSTITUTIONAL FLOOR (Avoid Micro-Positions) ---
-        # Garantiamo un investimento minimo di 100 USDT di margine (circa 1000$ notizionale a 10x)
-        min_margin_floor = 100.0
-        if adjusted_usdt < min_margin_floor and not self.circuit_breaker_active:
-            logger.warning(f"📏 [SIZING FLOOR] Boosting {symbol} margin from {adjusted_usdt:.2f} to {min_margin_floor} USDT.")
-            adjusted_usdt = min_margin_floor
-
         # Global Safety Cap: 25% of equity per trade (Increased for High Conviction AI trades)
         max_limit = current_equity * 0.25
         if adjusted_usdt > max_limit:
              logger.warning(f"🛡️ [SIZING CAP] Capping extreme conviction buy to 25% of equity: {max_limit:.2f} USDT.")
              adjusted_usdt = max_limit
 
-        # --- DYNAMIC FLOOR (1% Equity) ---
-        # Garantisce 100$ su un conto da 10k, ma resta scalabile (2$) su un conto da 200$.
+        # --- DYNAMIC FLOOR (v9.7 Final Cleanup) ---
+        # Garantiamo un investimento minimo dell'1% dell'Equity reale (Scalabile)
         min_margin = max(5.0, current_equity * 0.01) 
         if adjusted_usdt < min_margin and not self.circuit_breaker_active:
              adjusted_usdt = min_margin
