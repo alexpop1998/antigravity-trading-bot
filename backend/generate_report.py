@@ -97,12 +97,13 @@ def generate():
             # LOGIC: Shadow PnL still needs entries to calculate benchmark
             price = float(t.get('price') or 0)
             real_p = float(t.get('real_price') or 0)
-            if any(x in side for x in ['BUY', 'SELL', 'LONG', 'SHORT']) and "CLOSE" not in side:
+            if any(x in side for x in ['BUY', 'SELL', 'LONG', 'SHORT']) and "CLOSE" not in side and p == 0:
                 open_trades_map[symbol] = {'price': real_p if real_p > 0 else price, 'side': side, 'amount': float(t.get('amount') or 0)}
             
-            # FILTRO VISUALIZZAZIONE: In tabella solo operazioni CHIUSE con PnL > 0.05
-            if "CLOSE" not in side: continue
-            if abs(p) < 0.05: continue
+            # FILTRO VISUALIZZAZIONE (v9.7.5): In tabella se CHIUSURA (parola CLOSE) o PnL rilevato (>0.05)
+            # Questo permette di vedere anche i trade manuali sincronizzati da Binance
+            is_close = "CLOSE" in side or abs(p) > 0.05
+            if not is_close: continue
 
             cumulative_pnl += p
             

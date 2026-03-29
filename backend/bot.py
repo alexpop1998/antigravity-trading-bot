@@ -1697,6 +1697,14 @@ class CryptoBot:
 
     async def account_update_loop(self):
         logger.info("Starting bot account update loop...")
+        
+        # --- INITIAL STARTUP SYNC (v9.7.5) ---
+        # Force a deep synchronization of all known symbols to align history immediately.
+        try:
+            logger.info("⚡ [DEEP SYNC] Initializing startup trade synchronization...")
+            await asyncio.sleep(5) # Wait for initial account fetch to settle
+        except: pass
+        
         while True:
             try:
                 # 1. Unified state update (v9.7)
@@ -1848,38 +1856,39 @@ class CryptoBot:
                 # 3. Fetch recent trades (Slow part, do it in chunks)
                 # We check ALL symbols in monitor list to ensure manual trades are captured
                 all_trades = []
-                # --- GLOBAL SCAN: Identify ANY symbol with activity (even manual trades) ---
-                # 1. Fetch current positions symbols
+                # --- [UPGRADED] GLOBAL SCAN (v9.7.5 Deep Sync) ---
+                # Symbols to monitor: Default + Active Positions + Wallet Balances + Bot Internal State
                 pos_symbols = [p['symbol'] for p in self.latest_account_data.get('positions', []) if abs(float(p.get('amount', 0) or 0)) > 0]
                 
-                # 2. Fetch all symbols with non-zero balance (potential recent activity)
+                # Internal bot state (symbols that the bot 'thinks' are open)
+                state_symbols = list(self.trade_levels.keys())
+                
                 bal_symbols = []
                 try:
                     balance = self.latest_account_data.get('full_balance', {})
                     if 'info' in balance and 'assets' in balance['info']: # Binance
                         bal_symbols = [f"{a['asset']}/USDT:USDT" for a in balance['info']['assets'] if float(a.get('walletBalance', 0)) > 0]
-                    elif 'info' in balance and isinstance(balance['info'], list): # Bitget
-                        bal_symbols = [f"{b['symbol']}" for b in balance['info'] if float(b.get('available', 0)) > 0]
-                except:
-                    pass
+                except: pass
                 
-                # Standard symbols + Active symbols + Balance symbols
-                symbols_to_check = list(set(self.symbols + pos_symbols + bal_symbols))
+                # Combine all sources of signal activity
+                symbols_to_check = list(set(self.symbols + pos_symbols + state_symbols + bal_symbols))
                 
-                # Limit to 30 symbols to avoid API ban
-                symbols_to_check = symbols_to_check[:30]
-                
-                for i in range(0, len(symbols_to_check), 10): # Chunk of 10 for faster sync
-                    chunk = symbols_to_check[i:i+10]
-                    tasks = []
-                    for symbol in chunk:
-                        tasks.append(self.exchange.fetch_my_trades(symbol, limit=20)) # Increased limit to 20
+                # Stricter: Always check symbols that are in trade_levels but NOT in pos_symbols (POTENTIAL MANUAL CLOSE)
+                manual_check_targeted = [s for s in state_symbols if s not in pos_symbols]
+                if manual_check_targeted:
+                     logger.info(f"🔍 [GAP DETECTED] Missing positions on Binance: {manual_check_targeted}. Force linking manual history.")
+
+                # Increase chunked scanning to ensure no trade is missed
+                for i in range(0, len(symbols_to_check), 15): 
+                    chunk = symbols_to_check[i:i+15]
+                    tasks = [self.exchange.fetch_my_trades(symbol, limit=20) for symbol in chunk if symbol in self.exchange.markets]
                     
+                    if not tasks: continue
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     for res in results:
                         if isinstance(res, list):
                             all_trades.extend(res)
-                    await asyncio.sleep(0.3) # Slightly reduced sleep for faster initial sync
+                    await asyncio.sleep(0.5) 
                 
                 # Sync trades to local database for history tracking
                 if all_trades:
