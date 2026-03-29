@@ -261,10 +261,25 @@ class CryptoBot:
             
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
-            # --- [FIX] SYMBOL STATE SYNCHRONIZATION (v9.8.1) ---
-            # Re-initialize dictionaries or migrate keys to match the bridged/filtered symbols.
-            # This prevents KeyError when symbols are mapped (e.g. OP/USDT -> OP/USDT:USDT)
+            # --- [FIX] SYMBOL STATE SYNCHRONIZATION (v9.8.5) ---
+            # Migration: Preserve trade memory when symbols are bridged (e.g. HEMI/USDT -> HEMI/USDT:USDT)
+            migrated_count = 0
             for s in self.symbols:
+                # 1. Detect and Migrate Keys
+                base_symbol = s.split(':')[0] if ':' in s else s
+                unslashed = base_symbol.replace('/', '')
+                
+                # Check for various formats in existing trade_levels (loaded from DB)
+                potential_old_keys = [base_symbol, unslashed, base_symbol.lower(), s.lower()]
+                for old_key in potential_old_keys:
+                    if old_key != s and old_key in self.trade_levels and self.trade_levels[old_key] is not None:
+                        logger.warning(f"📦 [MEMORY RECOVERY] Migrating levels for {s} from old key {old_key}.")
+                        self.trade_levels[s] = self.trade_levels[old_key]
+                        # Don't delete the old key yet to stay robust, but prioritize 's'
+                        migrated_count += 1
+                        break
+
+                # 2. Default Initialization if still missing
                 if s not in self.latest_data:
                     self.latest_data[s] = {
                         'price': 0.0, 'change': 0.0, 'changePercent': 0.0, 'rsi': 0.0, 
@@ -281,6 +296,10 @@ class CryptoBot:
                 if s not in self.hft_locks: self.hft_locks[s] = 0.0
                 if s not in self.price_windows: self.price_windows[s] = deque(maxlen=30)
                 if s not in self.price_history_2m: self.price_history_2m[s] = deque(maxlen=12)
+
+            if migrated_count > 0:
+                self.db.save_state("trade_levels", self.trade_levels)
+                logger.info(f"✅ [MEMORY] {migrated_count} symbols successfully migrated to primary bridged keys.")
             
             # --- NEW: BLOCKING BALANCE FETCH (v9.7) ---
             # Force the bot to wait for the real account balance before starting
@@ -2193,37 +2212,53 @@ class CryptoBot:
             
             for pos in active_pos:
                 symbol = pos['symbol']
-                if self.trade_levels.get(symbol) is None:
-                    logger.warning(f"🧟 [ZOMBIE FOUND] Rediscovered untracked position for {symbol}. Restoring monitoring...")
-                    
-                    # Ensure symbol is in our monitor list
-                    if symbol not in self.symbols:
-                        self.symbols.append(symbol)
-                        # Initialize structures for this symbol if missing
-                        if symbol not in self.latest_data:
-                            self.latest_data[symbol] = {'price': float(pos.get('markPrice', 0)), 'prediction': 'Syncing...'}
-                        if symbol not in self.trade_levels:
-                            self.trade_levels[symbol] = None
+                
+                # Check if already tracked (possibly migrated)
+                if self.trade_levels.get(symbol) is not None:
+                    continue
 
-                    # Reconstruct a basic trade state
-                    side = pos['side'].lower()
-                    entry_price = float(pos['entryPrice'])
-                    current_price = float(pos.get('markPrice', entry_price))
-                    amount = float(pos.get('amount', pos['contracts']))
-                    
-                    # Initialize trade levels with RE-INITIALIZED recovery SL/TP
-                    # RELAXED SL/TP for recovered zombies (12% and 25% to allow sync)
-                    self.trade_levels[symbol] = {
-                        'entry_price': entry_price,
-                        'sl': current_price * (1.12 if side == 'short' else 0.88),
-                        'tp1': current_price * (0.75 if side == 'short' else 1.25),
-                        'tp2': current_price * (0.70 if side == 'short' else 1.30),
-                        'side': 'long' if side == 'long' else 'short',
-                        'amount': amount,
-                        'open_time': time.time(), # v10.0: Initialized at sync time
-                        'status': 'RECOVERED_ZOMBIE'
-                    }
-                    logger.warning(f"🛡️ [RECOVERY] {symbol} restored with RELAXED SL @ {self.trade_levels[symbol]['sl']}")
+                logger.warning(f"🧟 [ZOMBIE FOUND] Rediscovered untracked position for {symbol}. Restoring monitoring...")
+                
+                # Ensure symbol is in our monitor list
+                if symbol not in self.symbols:
+                    self.symbols.append(symbol)
+                    # Initialize structures for this symbol if missing
+                    if symbol not in self.latest_data:
+                        self.latest_data[symbol] = {
+                            'price': float(pos.get('markPrice', 0)), 
+                            'prediction': 'Syncing...',
+                            'change': 0.0, 'changePercent': 0.0, 'rsi': 0.0, 'macd': 0.0, 'macd_hist': 0.0, 'bb_upper': 0.0, 'bb_lower': 0.0, 'imbalance': 1.0, 'atr': 0.0, 'ema200': 0.0, 'volume24h': 0.0
+                        }
+                    if symbol not in self.trade_levels:
+                        self.trade_levels[symbol] = None
+
+                # Reconstruct a basic trade state
+                side = pos['side'].lower()
+                entry_price = float(pos['entryPrice'])
+                current_price = float(pos.get('markPrice', entry_price))
+                amount = abs(float(pos.get('amount', pos.get('positionAmt', 0))))
+                
+                # Fallback to Risk Profile defaults for recovered positions
+                # v9.8.5: Uses actual config instead of arbitrary 25% TP
+                def_sl = self.stop_loss_pct or 0.02
+                def_tp = self.take_profit_pct or 0.05
+                
+                sl_price = entry_price * (1 + def_sl if side == 'short' else 1 - def_sl)
+                tp1_price = entry_price * (1 - def_tp/2 if side == 'short' else 1 + def_tp/2) # Partial TP at half final TP
+                tp2_price = entry_price * (1 - def_tp if side == 'short' else 1 + def_tp)
+                
+                self.trade_levels[symbol] = {
+                    'side': 'long' if side == 'long' else 'short',
+                    'entry_price': entry_price,
+                    'sl': sl_price,
+                    'tp1': tp1_price,
+                    'tp2': tp2_price,
+                    'amount': amount,
+                    'open_time': time.time(), 
+                    'status': 'RECOVERED_ZOMBIE',
+                    'tp1_hit': False
+                }
+                logger.warning(f"🛡️ [RECOVERY] {symbol} restored with Profile Defaults: SL @ {sl_price:.4f}, TP1 @ {tp1_price:.4f}")
             
             # Save state to DB
             self.db.save_state("trade_levels", self.trade_levels)
