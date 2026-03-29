@@ -1855,8 +1855,9 @@ class CryptoBot:
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
                 # --- NEW: STARTUP PROTECTION SHIELD (v4.2) ---
-                # v9.8.5: Reduced to 5s for exit triggers to allow immediate recovery/closure
-                is_startup_protected = (time.time() - self.start_time) < 5
+                # v9.8.5.2: 15s shield to allow Binance API to return full active_pos list
+                # before we assume manual closures (Anti-Pyramid).
+                is_startup_protected = (time.time() - self.start_time) < 15
 
                 if effective_pnl_pct <= -self.daily_loss_limit:
                     if not self.circuit_breaker_active:
@@ -1973,8 +1974,9 @@ class CryptoBot:
                 
                 # v10.5 [ADAPTIVE ANTI-PYRAMID]
                 # Stricter: Always check symbols that are in trade_levels but NOT in pos_symbols (POTENTIAL MANUAL CLOSE)
+                # v9.8.5.2: Safeguard with is_startup_protected to avoid clearing recovered zombies during initial sync
                 manual_check_targeted = [s for s in state_symbols if s not in pos_symbols and self.trade_levels.get(s)]
-                if manual_check_targeted:
+                if manual_check_targeted and not is_startup_protected:
                      logger.warning(f"🔓 [PYRAMID UNLOCKED] Manual closure detected on Binance for {manual_check_targeted}. Freeing internal state.")
                      for s in manual_check_targeted:
                          self.trade_levels[s] = None
