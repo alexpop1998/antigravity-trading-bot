@@ -267,14 +267,21 @@ async def get_history(start: Optional[str] = None, end: Optional[str] = None):
     if not trading_bot or not trading_bot.db:
         return {"status": "error", "message": "Bot non inizializzato"}
     
+    # Se le date non sono fornite, carichiamo gli ultimi 3 giorni per default
+    if not start or not end:
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        start = (now - timedelta(days=3)).strftime('%Y-%m-%d')
+        end = now.strftime('%Y-%m-%d')
+        
     trades = trading_bot.db.get_trades(start_date=start, end_date=end)
-    
     total_pnl = sum(float(t.get('pnl', 0) or 0) for t in trades)
     
     return {
         "status": "success",
         "count": len(trades),
         "total_pnl": round(total_pnl, 2),
+        "profile": os.getenv("CONFIG_PROFILE", "aggressive").upper(),
         "trades": trades
     }
 

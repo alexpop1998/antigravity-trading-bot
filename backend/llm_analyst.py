@@ -76,8 +76,11 @@ class LLMAnalyst:
             --- LESSONS FROM PREVIOUS AUDITS ---
             {self.lessons_learned}
             
-            MISSIONE:
-            Basandoti sui dati tecnici e sullo storico dei risultati (se presenti), decidi se questa operazione ha un'alta probabilità di successo. 
+            --- MISSIONE SNIPER ---
+            Sei un Cecchino Istituzionale. Non aver paura delle monete meno capitalizzate, ma esigi prove schiaccianti:
+            1. Per monete a bassa capitalizzazione/volume: Richiedi CONVINCENZA > 0.95.
+            2. Per le Major (BTC, ETH, SOL): Richiedi CONVINCENZA > 0.85.
+            3. ANALISI OVEREXTENSION: Non entrare mai LONG se il prezzo è troppo lontano dalla EMA200 o se l'RSI è già in ipercomprato estremo (>75).
             
             DEVI SEGUIRE QUESTO PROCESSO LOGICO (Chain-of-Thought):
             1. ANALISI MACRO: Valuta le news e il trend dominante.
@@ -90,9 +93,9 @@ class LLMAnalyst:
                 "technical_analysis": "analisi degli indicatori",
                 "risk_assessment": "valutazione spread/funding/volatilità",
                 "verdict": "APPROVE" o "REJECT",
-                "confidence": 0.0 a 1.0,
-                "suggested_leverage": intero da 2 a 100,  // Sii audace, l'utente vuole massimizzare i profitti
-                "position_strength": 1.0 a 25.0,  // 1.0 = Floor 1% Equity. 10.0 = 10% Equity. 25.0 = 25% Equity. Sii aggressivo su segnali chiari!
+                "confidence": 0.0 a 1.0, 
+                "suggested_leverage": intero tra 8 e 25,  // Sii dinamico ma prudente su monete volatili
+                "position_strength": 1.0 a 25.0,  // 1.0 = Floor 1% Equity. 10.0 = 10% Equity. 25.0 = 25% Equity. 
                 "sl_multiplier": 0.5 a 3.0,
                 "tp_multiplier": 0.5 a 5.0,
                 "tp_price": numero o null,
@@ -108,19 +111,28 @@ class LLMAnalyst:
                     temperature=0.2
                 )
                 
-                result = json.loads(response.choices[0].message.content)
-                verdict = result.get("verdict", "APPROVE").upper()
-                confidence = float(result.get("confidence", 0.8))
-                leverage = int(result.get("suggested_leverage", self.bot.leverage))
-                strength = float(result.get("position_strength", 1.0))
-                sl_mult = float(result.get("sl_multiplier", 1.0))
-                tp_mult = float(result.get("tp_multiplier", 1.0))
-                tp_price = result.get("tp_price")
-                reasoning = result.get("reasoning", "Analisi standard.")
+                response_json = json.loads(response.choices[0].message.content)
+            
+            # Verdetto basato sulla soglia dinamica della configurazione
+            verdict = response_json.get("verdict", "REJECT")
+            confidence = response_json.get("confidence", 0.0)
+            
+            if verdict == "APPROVE" and confidence < self.bot.gemini_min_confidence:
+                logger.warning(f"🛡️ [LLM GUARD] AI approved with {confidence}, but config requires {self.bot.gemini_min_confidence}. REJECTING.")
+                verdict = "REJECT"
+                reasoning = f"Confidence threshold not met ({confidence} < {self.bot.gemini_min_confidence})"
+            else:
+                reasoning = response_json.get("reasoning", "No reason provided.")
 
-                logger.info(f"🧠 [LLM ANALYST] {symbol} {side.upper()} -> {verdict} (Lev: {leverage}x, Strength: {strength:.2f}, SL_m: {sl_mult:.2f}, TP_m: {tp_mult:.2f}, TP_p: {tp_price}) | Reason: {reasoning}")
-                
-                return (verdict == "APPROVE"), strength, leverage, sl_mult, tp_mult, tp_price, reasoning
+            leverage = int(response_json.get("suggested_leverage", self.bot.leverage))
+            strength = float(response_json.get("position_strength", 1.0))
+            sl_mult = float(response_json.get("sl_multiplier", 1.0))
+            tp_mult = float(response_json.get("tp_multiplier", 1.0))
+            tp_price = response_json.get("tp_price")
+
+            logger.info(f"🧠 [LLM ANALYST] {symbol} {side.upper()} -> {verdict} (Lev: {leverage}x, Strength: {strength:.2f}, SL_m: {sl_mult:.2f}, TP_m: {tp_mult:.2f}, TP_p: {tp_price}) | Reason: {reasoning}")
+            
+            return (verdict == "APPROVE"), strength, leverage, sl_mult, tp_mult, tp_price, reasoning
 
         except Exception as e:
             logger.error(f"Errore durante la decisione LLM per {symbol}: {e}")

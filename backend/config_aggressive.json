@@ -1,0 +1,17 @@
+{
+    "profile_name": "AGGRESSIVE Sniper",
+    "trading_parameters": {
+        "timeframe": "15m",
+        "rsi_period": 14,
+        "leverage": 15,
+        "usdt_per_trade": 250,
+        "percent_per_trade": 2.5,
+        "consensus_threshold": 2.5,
+        "gemini_min_confidence": 0.92,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.08,
+        "max_concurrent_positions": 20,
+        "max_global_margin_ratio": 0.85,
+        "daily_loss_limit": 5.0
+    }
+}

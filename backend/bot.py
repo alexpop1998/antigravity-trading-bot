@@ -26,8 +26,14 @@ load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("TradingBot")
 class CryptoBot:
-    def __init__(self, config_file="client_config.json"):
+    def __init__(self, config_file=None):
         # Load SaaS Client Risk Profiles
+        load_dotenv(override=True)
+        if config_file is None:
+            profile = os.getenv("CONFIG_PROFILE", "aggressive").lower()
+            config_file = f"config_{profile}.json"
+            logger.warning(f"🎯 [INIT] Loading Active Profile: {profile.upper()} ({config_file})")
+            
         self.config_file = config_file
         self.risk_profile = self._load_risk_profile()
         
@@ -43,8 +49,7 @@ class CryptoBot:
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
         self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
         self.daily_loss_limit = params.get("daily_loss_limit", 1.0)
-        self.consensus_threshold = params.get("consensus_threshold", 3.0)
-        self.panic_drawdown_threshold = max(0.15, self.daily_loss_limit + 0.05)
+        self.gemini_min_confidence = float(params.get("gemini_min_confidence", 0.90))
         self.current_margin_ratio = 0.0
         
         # Select active exchange from environment
@@ -217,23 +222,24 @@ class CryptoBot:
                 
             logger.info("✅ Markets loaded successfully.")
             
-            # Filter symbols to only include those available on the current exchange
-            available_symbols = []
-            for s in self.symbols:
-                if s in self.exchange.markets:
-                    # Filter for Mainnet if in Shadow Mode
-                    if hasattr(self, 'data_fetcher') and s not in self.data_fetcher.markets:
-                        logger.warning(f"🛡️ [Shadow Mode] Filtering out {s}: Not on Mainnet.")
-                        continue
-                    available_symbols.append(s)
-                else:
-                    logger.warning(f"⚠️ Symbol {s} not available on this exchange. Skipping.")
+            # --- DYNAMIC SYMBOL BRIDGE ---
+            # Maps human-readable config symbols to exchange-specific ones (e.g. BTC/USDT -> BTCUSDT)
+            self.symbols = self._apply_symbol_bridge(self.symbols)
             
-            if not available_symbols:
+            # Filter for Shadow Mode (Mainnet check)
+            if hasattr(self, 'data_fetcher'):
+                available = []
+                for s in self.symbols:
+                    if s in self.data_fetcher.markets:
+                        available.append(s)
+                    else:
+                        logger.warning(f"🛡️ [Shadow Mode] Filtering out {s}: Not on Mainnet.")
+                self.symbols = available
+            
+            if not self.symbols:
                 logger.error("❌ NO VALID SYMBOLS FOUND ON THIS EXCHANGE!")
             
-            logger.info(f"🎯 Validated {len(available_symbols)} symbols.")
-            self.symbols = available_symbols
+            logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
             # Imposta leva solo se richiesto
             if not skip_leverage:
@@ -258,6 +264,10 @@ class CryptoBot:
             asyncio.create_task(self.daily_self_audit_loop())
             asyncio.create_task(self.news_sentiment_loop())
             asyncio.create_task(self.automated_report_loop())
+            
+            # 2. [TEMP DISABLED] Snipping/Arbitrage Loop (For Bitget future)
+            # self.dex_sniper = DEXSniper(self)
+            # asyncio.create_task(self.dex_sniper.monitor_arbitrage())
             
             logger.warning("🤖 [PHASE 4] Institutional Intelligence Loops Active (MTF + Sector + Audit + News)")
             
@@ -1146,6 +1156,34 @@ class CryptoBot:
         return float(amount)
 
 
+    def _apply_symbol_bridge(self, symbols: List[str]) -> List[str]:
+        """Maps human-readable symbols to exchange-specific ones (e.g. BTC/USDT -> BTCUSDT)."""
+        if not hasattr(self.exchange, 'markets') or not self.exchange.markets:
+            try:
+                # Synchronous load markets for bridge if needed (rare)
+                import ccxt
+                self.exchange.load_markets()
+            except:
+                return symbols
+                
+        validated: List[str] = []
+        for s in symbols:
+            if s in self.exchange.markets:
+                validated.append(s)
+            else:
+                # Try variations
+                alts = [s.replace('/', ''), f"{s}:USDT", s.split('/')[0] + "USDT"]
+                found = False
+                for alt in alts:
+                    if alt in self.exchange.markets:
+                        logger.info(f"Bridgeing {s} -> {alt}")
+                        validated.append(alt)
+                        found = True
+                        break
+                if not found:
+                    logger.warning(f"Bridge: Symbol {s} not found.")
+        return validated
+
     def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price, **kwargs):
         """Calculates dynamic leverage based on AI suggestions and risk factors."""
         latest = self.latest_data.get(symbol, {})
@@ -1333,9 +1371,12 @@ class CryptoBot:
                 else:
                     active_leverage = self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price, ai_leverage=ai_leverage)
                 
+                # REINFORCE: set_leverage is CRITICAL before order
                 try:
                     market = self.exchange.market(symbol)
-                    await self.exchange.set_leverage(active_leverage, market['id'])
+                    # Force update the leverage for this specific trade
+                    await self.exchange.set_leverage(int(active_leverage), market['id'])
+                    logger.info(f"⚙️ [LEVERAGE SET] {symbol} adjusted to {active_leverage}x for this trade.")
                 except Exception as e:
                     logger.error(f"Failed to set leverage for {symbol}: {e}")
                 
@@ -1541,29 +1582,8 @@ class CryptoBot:
                             self.max_concurrent_positions = int(params.get("max_concurrent_positions", self.max_concurrent_positions) or self.max_concurrent_positions)
                             self.max_global_margin_ratio = float(params.get("max_global_margin_ratio", self.max_global_margin_ratio) or self.max_global_margin_ratio)
                             
-                            # Filter new symbols too
-                            validated_symbols: List[str] = []
-                            for symbol in new_symbols:
-                                if symbol in self.exchange.markets:
-                                    validated_symbols.append(symbol)
-                                    
-                                    if symbol not in self.latest_data:
-                                        self.latest_data[symbol] = {
-                                            'price': 0.0, 'change': 0.0, 'changePercent': 0.0, 'rsi': 0.0, 
-                                            'macd': 0.0, 'macd_hist': 0.0, 'bb_upper': 0.0, 'bb_lower': 0.0,
-                                            'imbalance': 1.0, 'atr': 0.0, 'ema200': 0.0, 'volume24h': 0.0,
-                                            'prediction': "Syncing..."
-                                        }
-                                    if symbol not in self.active_positions:
-                                        self.active_positions[symbol] = None
-                                    if symbol not in self.trade_levels:
-                                        self.trade_levels[symbol] = None
-                                    if symbol not in self.ml_cooldowns:
-                                        self.ml_cooldowns[symbol] = 0.0
-                                else:
-                                    logger.warning(f"⚠️ Hot-reload: Symbol {symbol} not available on this exchange. Skipping.")
-                                    
-                            self.symbols = validated_symbols
+                            # --- DYNAMIC SYMBOL BRIDGE ---
+                            self.symbols = self._apply_symbol_bridge(new_symbols)
                             
                         last_mtime = current_mtime
                         await self._set_leverage_for_all()
@@ -2019,8 +2039,8 @@ class CryptoBot:
                 if s not in self.ml_cooldowns:
                      self.ml_cooldowns[s] = 0.0
 
-            # Apply new list
-            self.symbols = final_symbols
+            # Apply new list with bridge
+            self.symbols = self._apply_symbol_bridge(final_symbols)
             
             # Set leverage for NEW symbols
             await self._set_leverage_for_all()
@@ -2158,6 +2178,16 @@ class CryptoBot:
             
             # 3. Salva stato e notifica
             self.db.save_state("trade_levels", self.trade_levels)
+            
+            # --- NEW: TP1 NOTIFICATION ---
+            msg = f"🎯 *[AI DYNAMIC TP1] TARGET HIT*\n\n" \
+                  f"Symbol: `{symbol}`\n" \
+                  f"Action: `CLOSE 50%`\n" \
+                  f"Price: `${current_price}`\n" \
+                  f"Profit: `+{pnl_pct:.2%}`\n" \
+                  f"🛡️ *Break-Even Protective SL activated.*"
+            asyncio.create_task(self.notifier.send_message(msg))
+            self.notifier.notify_trade(symbol, "CLOSE_PARTIAL", current_price, amount_to_close, "AI_TP1")
             logger.warning(f"🛡️ [BREAK-EVEN] AI-Triggered: SL for {symbol} moved to {level['sl']} (Entry+Costs)")
             self.notifier.notify_alert("AI DYNAMIC TP1", f"Gemini ha anticipato il TP1 su {symbol} (+{pnl_pct:.2%})", f"SL spostato in Break-Even.")
             
