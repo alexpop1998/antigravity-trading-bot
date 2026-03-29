@@ -2132,12 +2132,16 @@ class CryptoBot:
             # Merge new_symbols with active_symbols_in_trade, ensuring uniqueness
             final_symbols = list(set(new_symbols) | set(active_symbols_in_trade))
             
-            added = set(final_symbols) - set(self.symbols)
-            removed = set(self.symbols) - set(final_symbols)
+            # [FIX v9.8.3] Apply symbol bridge BEFORE initializing dictionaries
+            final_symbols_bridged = self._apply_symbol_bridge(final_symbols)
+            
+            added = set(final_symbols_bridged) - set(self.symbols)
+            removed = set(self.symbols) - set(final_symbols_bridged)
             
             # Explicitly log if we are keeping a symbol because it has an active position
             for s in active_symbols_in_trade:
-                if s not in new_symbols:
+                unbridged = s.split(':')[0]
+                if unbridged not in new_symbols and s not in new_symbols:
                     logger.warning(f"🛡️ [STICKY SYMBOL] Preserving {s} in monitor list due to active position.")
 
             if not added and not removed:
@@ -2168,8 +2172,8 @@ class CryptoBot:
                 if s not in self.ml_cooldowns:
                      self.ml_cooldowns[s] = 0.0
 
-            # Apply new list with bridge
-            self.symbols = self._apply_symbol_bridge(final_symbols)
+            # Apply new list to active state
+            self.symbols = final_symbols_bridged
             
             # Set leverage for NEW symbols
             await self._set_leverage_for_all()
