@@ -48,7 +48,10 @@ class CryptoBot:
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
         self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
-        self.daily_loss_limit = params.get("daily_loss_limit", 1.0)
+        self.daily_loss_limit = float(params.get("daily_loss_limit", 1.0)) / 100.0
+        self.panic_drawdown_threshold = self.daily_loss_limit * 2.5 # Panic selling at 2.5x the daily limit
+        if self.panic_drawdown_threshold < 0.05:
+            self.panic_drawdown_threshold = 0.05 # Minimum 5% hard ceiling
         self.gemini_min_confidence = float(params.get("gemini_min_confidence", 0.90))
         self.current_margin_ratio = 0.0
         
