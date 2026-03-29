@@ -955,6 +955,14 @@ class CryptoBot:
                     if pnl_tp1 < 0.010: # 1% Minimum
                          logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < 1.00%")
                     else:
+                        # Aggressive Recovery Exit (v9.8.5)
+                        # If it's a recovered zombie and ROI > 20%, close 100% immediately
+                        roe_pct = pnl_tp1 * getattr(self, 'leverage', 1.0)
+                        if trade.get('status') == 'RECOVERED_ZOMBIE' and roe_pct > 0.20:
+                             logger.warning(f"🆘 [AGGRESSIVE ZOMBIE EXIT] {symbol} at {roe_pct:.2%} ROE (>20%). Closing 100% (TP2).")
+                             asyncio.create_task(self.close_position(symbol, trade, partial_pct=1.0, reason="AGGRESSIVE_ZOMBIE_EXIT"))
+                             return # Exit fully
+                        
                         logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price} (+{pnl_tp1:.2%})")
                         asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT_TP1"))
                         trade['tp1_hit'] = True
@@ -1001,6 +1009,14 @@ class CryptoBot:
                     if pnl_tp1 < 0.010: # 1% Minimum
                          logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < 1.00%")
                     else:
+                        # Aggressive Recovery Exit (v9.8.5)
+                        # If it's a recovered zombie and ROI > 20%, close 100% immediately
+                        roe_pct = pnl_tp1 * getattr(self, 'leverage', 1.0)
+                        if trade.get('status') == 'RECOVERED_ZOMBIE' and roe_pct > 0.20:
+                             logger.warning(f"🆘 [AGGRESSIVE ZOMBIE EXIT] {symbol} at {roe_pct:.2%} ROE (>20%). Closing 100% (TP2).")
+                             asyncio.create_task(self.close_position(symbol, trade, partial_pct=1.0, reason="AGGRESSIVE_ZOMBIE_EXIT"))
+                             return # Exit fully
+
                         logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price} (+{pnl_tp1:.2%})")
                         asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT_TP1"))
                         trade['tp1_hit'] = True
@@ -1842,8 +1858,8 @@ class CryptoBot:
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
                 # --- NEW: STARTUP PROTECTION SHIELD (v4.2) ---
-                # We skip panic closures for the first 30 seconds of operation to allow sync to settle.
-                is_startup_protected = (time.time() - self.start_time) < 30
+                # v9.8.5: Reduced to 5s for exit triggers to allow immediate recovery/closure
+                is_startup_protected = (time.time() - self.start_time) < 5
 
                 if effective_pnl_pct <= -self.daily_loss_limit:
                     if not self.circuit_breaker_active:
@@ -1921,45 +1937,10 @@ class CryptoBot:
                             self.active_positions[symbol] = side.upper()
                             
                             # --- IMPROVED RE-SYNC: Only sync if not already in state ---
-                            if self.trade_levels.get(symbol) is None:
-                                # Double check active_positions to avoid re-syncing something currently being closed
-                                if self.active_positions.get(symbol) is not None:
-                                    entry_price = float(pos.get('entryPrice', 0))
-                                    amount = float(pos.get('amount', pos.get('contracts', 0)))
-                                    if entry_price > 0:
-                                        logger.info(f"🔄 Re-syncing trade levels for {symbol} from existing position @ {entry_price}")
-                                        current_atr = self.latest_data[symbol].get('atr', entry_price * 0.01) if symbol in self.latest_data else entry_price * 0.01
-                                        if current_atr == "N/A" or not current_atr:
-                                            current_atr = entry_price * 0.01
-
-                                        # --- TIGHTER RISK MANAGEMENT FOR RECOVERED POSITIONS ---
-                                        # Use a standard 3.0x ATR for SL to ensure we stop the bleeding
-                                        # based on the original entry price if possible.
-                                        sl_distance = current_atr * 3.0
-                                        tp1_distance = current_atr * 5.0
-                                        tp2_distance = current_atr * 10.0
-                                        
-                                        if side == 'long':
-                                            sl = entry_price - sl_distance
-                                            tp1 = entry_price + tp1_distance
-                                            tp2 = entry_price + tp2_distance
-                                        else:
-                                            sl = entry_price + sl_distance
-                                            tp1 = entry_price - tp1_distance
-                                            tp2 = entry_price - tp2_distance
-                                        
-                                        self.trade_levels[symbol] = {
-                                            'side': side,
-                                            'entry_price': entry_price,
-                                            'sl': float(self.exchange.price_to_precision(symbol, sl)),
-                                            'sl_distance': sl_distance,
-                                            'tp1': float(self.exchange.price_to_precision(symbol, tp1)),
-                                            'tp2': float(self.exchange.price_to_precision(symbol, tp2)),
-                                            'amount': amount,
-                                            'tp1_hit': False,
-                                            'highest_price': entry_price if side == 'long' else 0,
-                                            'lowest_price': entry_price if side != 'long' else 0
-                                        }
+                            # --- DEPRECATED SYNC (v9.8.5) ---
+                            # Logic moved to initial sync_zombie_positions to avoid race conditions and redundant param calc.
+                            # Sync is now handled early in sync_zombie_positions.
+                            pass
                         else:
                             # Only clear if we not currently in a pending closure
                             if symbol not in self.active_positions or self.active_positions[symbol] is not None:
@@ -2254,11 +2235,20 @@ class CryptoBot:
                     'tp1': tp1_price,
                     'tp2': tp2_price,
                     'amount': amount,
-                    'open_time': time.time(), 
+                    'open_time': time.time() - 3600, # Fake an hour age to allow stagnation check if needed
                     'status': 'RECOVERED_ZOMBIE',
-                    'tp1_hit': False
+                    'tp1_hit': False,
+                    'highest_price': current_price if side == 'long' else 0,
+                    'lowest_price': current_price if side == 'short' else 999999
                 }
                 logger.warning(f"🛡️ [RECOVERY] {symbol} restored with Profile Defaults: SL @ {sl_price:.4f}, TP1 @ {tp1_price:.4f}")
+                
+                # --- IMMEDIATE AUDIT (v9.8.5) ---
+                # Check if we should close this right now (e.g. if already deep in profit)
+                try:
+                    self._check_soft_stop_loss(symbol, current_price)
+                except Exception as audit_err:
+                    logger.error(f"⚠️ Initial audit failed for recovered {symbol}: {audit_err}")
             
             # Save state to DB
             self.db.save_state("trade_levels", self.trade_levels)
