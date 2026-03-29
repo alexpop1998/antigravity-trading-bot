@@ -101,9 +101,16 @@ def generate():
             if any(x in side for x in ['BUY', 'SELL', 'LONG', 'SHORT']) and "CLOSE" not in side and p == 0:
                 open_trades_map[symbol] = {'price': real_p if real_p > 0 else price, 'side': side, 'amount': float(t.get('amount') or 0)}
             
-            # FILTRO VISUALIZZAZIONE (v9.7.5): In tabella se CHIUSURA (parola CLOSE) o PnL rilevato (>0.05)
-            # Questo permette di vedere anche i trade manuali sincronizzati da Binance
-            is_close = "CLOSE" in side or abs(p) > 0.01
+            # FILTRO VISUALIZZAZIONE (v9.8.3): Solo eventi di chiusura (CLOSE) o Sync Binance con PnL reale
+            reason_str = str(t.get('reason', '')).upper()
+            side_str = str(side).upper()
+            
+            is_close = "CLOSE" in side_str or ("SYNC" in reason_str and abs(p) > 0.01)
+            
+            # Non includiamo i "GATEKEEPER" o aperture AI anche se hanno fees (PnL < 0 iniziale)
+            if "GATEKEEPER" in reason_str or "TRADER" in reason_str or "EVENT" in reason_str:
+                is_close = False
+
             if not is_close: continue
 
             cumulative_pnl += p
