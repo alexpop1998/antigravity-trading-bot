@@ -44,6 +44,7 @@ class CryptoBot:
         self.leverage = params.get("leverage", 10)
         self.usdt_per_trade = params.get("usdt_per_trade", 100)
         self.percent_per_trade = params.get("percent_per_trade", 2.5) # % of equity per trade
+        self.max_margin_pct = params.get("max_margin_pct", 15.0) # Absolute cap for AI boosting
         self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
@@ -1063,100 +1064,106 @@ class CryptoBot:
             
             # Save state immediately to persist closure
             self.db.save_state("trade_levels", self.trade_levels)
-                
         except Exception as e:
             logger.error(f"Failed to close position for {symbol}: {e}")
             logger.error(traceback.format_exc())
 
     def _calculate_order_amount(self, symbol, current_price, custom_leverage=None, consensus_score=3.5, **kwargs):
+        """Calculates the optimal order amount based on dynamic risk parameters (v9.7.4)."""
         leverage = custom_leverage if custom_leverage else self.leverage
         
-        # 1. Dynamic % Sizing based on Consensus (Phase 4: Synced with Config)
-        # Base: From risk_profile (User 2.5%)
-        risk_pct = self.risk_profile.get("trading_parameters", {}).get("percent_per_trade", 2.5)
+        # 1. Base Risk Sizing from risk_profile (v9.7.4 Pondered Logic)
+        risk_pct = getattr(self, 'percent_per_trade', 3.0)
         
+        # --- NEW: AI PONDERED SIZING (v9.7.4) ---
+        raw_ai_mod = kwargs.get('ai_strength', 1.0)
+        score_weight = consensus_score / 10.0
+        
+        is_aggressive = risk_pct > 5.0
+        dampening_factor = 0.8 if is_aggressive else 0.5 
+        
+        ai_mod = 1.0 + (raw_ai_mod - 1.0) * dampening_factor * score_weight
+        ai_mod = max(0.8, min(1.8 if is_aggressive else 1.4, ai_mod))
+        
+        total_pct = risk_pct * ai_mod
+        
+        # --- CIRCUIT BREAKER PROTECTIONS ---
         if self.circuit_breaker_active:
              total_pct = 0.5
-             logger.warning(f"☢️ [SIZING] Circuit Breaker Exception sizing: 0.5% for {symbol}.")
+             logger.warning(f"☢️ [SIZING] Circuit Breaker active: 0.5% for {symbol}.")
         elif self.is_macro_paused:
              total_pct = 0.5
-             logger.warning(f"🛡️ [SIZING] Macro Volatility Shield active: Capping size to 0.5% for {symbol}.")
-        else:
-            # --- NEW: GEMINI DYNAMIC RISK SIZING ---
-            # Gemini returns 'position_strength' (0.5 - 4.0). 
-            ai_mod = kwargs.get('ai_strength', 1.0)
-            total_pct = risk_pct * ai_mod
-            if ai_mod != 1.0:
-                logger.info(f"🧠 [AI RISK SIZING] Dynamic size for {symbol}: {total_pct:.2f}% (Strength: {ai_mod:.2f}x)")
+             logger.warning(f"🛡️ [SIZING] Macro Volatility Shield: 0.5% for {symbol}.")
         
         # 2. Base Capital Calculation from Equity
         current_equity = self.latest_account_data.get('equity', 0)
-        
         if current_equity <= 0:
-             logger.error(f"⚠️ [SIZING ERROR] Account Equity not synced yet for {symbol}. Order aborted to prevent static sizing.")
+             logger.error(f"⚠️ [SIZING ERROR] Account Equity not synced. Aborting.")
              return 0.0
-             
+              
         base_usdt = current_equity * (total_pct / 100.0)
         
-        # 3. Volatility-based capital allocation (ATR modifier)
+        # 3. Market Multipliers (STRONGLY DAMPERED v9.7.4)
         current_atr = self.latest_data[symbol].get('atr', current_price * 0.01)
         if current_atr == "N/A" or not current_atr:
             current_atr = current_price * 0.01
             
         atr_pct = (current_atr / current_price) if current_price > 0 else 0.01
-        baseline_atr_pct = 0.01  # Baseline expected volatility per candle
+        baseline_atr_pct = 0.01
         
-        # Floor at 0.8 (DEEPSEEK REFACTOR) - Less aggressive sizing reduction for high volatility assets
-        volatility_modifier = baseline_atr_pct / atr_pct if atr_pct > 0 else 1.0
-        volatility_modifier = max(0.8, min(2.0, volatility_modifier))
+        # Cap multipliers to 1.1x (Conservative) or 1.15x (Aggressive) to avoid cap-hitting
+        market_cap_val = 1.15 if is_aggressive else 1.10
+        volatility_modifier = max(0.9, min(market_cap_val, baseline_atr_pct / atr_pct if atr_pct > 0 else 1.0))
+        regime_mult = min(market_cap_val, self.latest_data.get(symbol, {}).get('regime_multiplier', 1.0))
         
-        # 4. Final Allocation with Regime & Funding Multipliers
-        regime_mult = self.latest_data.get(symbol, {}).get('regime_multiplier', 1.0)
-        funding_mult = self.latest_data.get(symbol, {}).get('funding_multiplier', 1.0)
+        adjusted_usdt = base_usdt * volatility_modifier * regime_mult
         
-        adjusted_usdt = base_usdt * volatility_modifier * regime_mult * funding_mult
+        # --- GLOBAL SAFETY CAP (DYNAMIC v9.7.4) ---
+        max_limit_val = getattr(self, 'max_margin_pct', 15.0)
+        max_limit_usdt = current_equity * (max_limit_val / 100.0)
         
-        # Global Safety Cap: 25% of equity per trade (Increased for High Conviction AI trades)
-        max_limit = current_equity * 0.25
-        if adjusted_usdt > max_limit:
-             logger.warning(f"🛡️ [SIZING CAP] Capping extreme conviction buy to 25% of equity: {max_limit:.2f} USDT.")
-             adjusted_usdt = max_limit
+        if adjusted_usdt > max_limit_usdt:
+             logger.warning(f"🛡️ [SIZING CAP] Capping margin to {max_limit_val}%: {max_limit_usdt:.2f} USDT.")
+             adjusted_usdt = max_limit_usdt
 
-        # --- DYNAMIC FLOOR (v9.7 Final Cleanup) ---
-        # Garantiamo un investimento minimo dell'1% dell'Equity reale (Scalabile)
+        # --- DYNAMIC FLOOR (1% Equity) ---
         min_margin = max(5.0, current_equity * 0.01) 
         if adjusted_usdt < min_margin and not self.circuit_breaker_active:
              adjusted_usdt = min_margin
-             logger.info(f"🚀 [DYNAMIC BOOST] Pushing {symbol} margin to {min_margin} USD (1% Equity Floor).")
 
-        purchasing_power = adjusted_usdt * leverage
+        # --- DYNAMIC LEVERAGE CLAMP ---
+        # Standard range 5x - 20x as requested
+        clamped_leverage = max(5, min(25 if is_aggressive else 20, leverage))
         
-        # Safety Check: Never below $5 notional
+        if raw_ai_mod >= 1.5 and leverage > 20:
+             clamped_leverage = min(25, leverage)
+             logger.info(f"🔥 [AI LEVERAGE BOOST] Conviction High: Allowing {clamped_leverage}x leverage for {symbol}.")
+        
+        purchasing_power = adjusted_usdt * clamped_leverage
+        
         if purchasing_power < 5.0:
             purchasing_power = 5.0
 
         if current_price <= 0:
-            logger.error(f"❌ Impossibile calcolare l'ordine per {symbol}: prezzo zero o non pervenuto.")
+            logger.error(f"❌ Impossibile calcolare l'ordine per {symbol}: prezzo zero.")
             return 0.0
             
         amount = purchasing_power / current_price
         
-        # --- ORDER SAFETY: Quantity Cap (Max Allowed by Exchange) ---
         try:
             market = self.exchange.markets.get(symbol, {})
-            max_qty = market.get('limits', {}).get('amount', {}).get('max')
+            max_qty = market.get("limits", {}).get("amount", {}).get("max")
             if max_qty and amount > max_qty:
                 logger.warning(f"⚠️ [Safety] Capping order size for {symbol}: {amount} -> {max_qty} (Exchange Max)")
                 amount = max_qty
         except:
             pass
         
-        logger.info(f"📐 [{symbol}] Sizing Summary: {total_pct:.2f}% of ${current_equity:.2f} -> {adjusted_usdt:.2f} USDT Margin (Purchasing Power: {purchasing_power:.2f} USDT at {leverage}x)")
+        logger.info(f"📐 [{symbol}] Sizing Summary: {total_pct:.2f}% of ${current_equity:.2f} -> {adjusted_usdt:.2f} USDT Margin (Purchasing Power: {purchasing_power:.2f} USDT at {clamped_leverage}x)")
         
         # Adjust for exchange precision rules
         amount = self.exchange.amount_to_precision(symbol, amount)
         return float(amount)
-
 
     def _apply_symbol_bridge(self, symbols: List[str]) -> List[str]:
         """Maps human-readable symbols to exchange-specific ones (e.g. BTC/USDT -> BTCUSDT)."""
@@ -1187,56 +1194,47 @@ class CryptoBot:
         return validated
 
     def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price, **kwargs):
-        """Calculates dynamic leverage based on AI suggestions and risk factors."""
+        """Calculates dynamic leverage weighted by AI conviction (v9.7.4)."""
         latest = self.latest_data.get(symbol, {})
         if not latest or current_price <= 0:
             return self.leverage
             
-        # 1. Base leverage (PRIORITY: Gemini Suggested Leverage)
-        ai_lev = kwargs.get('ai_leverage')
-        if ai_lev:
-            logger.info(f"🧠 [AI LEVERAGE] Using AI Suggested Leverage Target: {ai_lev}x")
-            base_lev = ai_lev
-        else:
-            base_lev = self.leverage
+        # Adaptive Profile Check
+        risk_pct = getattr(self, 'percent_per_trade', 3.0)
+        is_aggressive = risk_pct > 5.0
+
+        # 1. AI Suggested vs Base (Pondered v9.7.4)
+        score_trust = consensus_score / 10.0
+        ai_lev = kwargs.get('ai_leverage', 0)
         
-        # 2. Consensus Scaling (Aggressive Scaling: +2 lev per 1.0 score above 5)
-        score_bonus = (consensus_score - 5.0) * 2.0 if consensus_score > 5.0 else 0
+        base_lev = self.leverage
+        if ai_lev > 0:
+            # AI Suggestion is weighted by its own confidence score
+            # If score is 10/10, we use ai_lev. If 5/10, we use base_lev.
+            base_lev = base_lev + (ai_lev - base_lev) * score_trust
         
-        # 3. Volatility Penalty (Normalized)
+        # 2. Volatility Penalty (Harder in Conservative)
         atr = latest.get('atr', current_price * 0.01)
         vol_pct = (atr / current_price) * 100 if current_price > 0 else 0
-        vol_penalty = vol_pct * 1.0 # Reduced penalty (1% vol = -1 leverage)
+        vol_penalty = vol_pct * (0.5 if is_aggressive else 1.2)
         
-        # 4. Trend Safety Bonus (+5 if opening in trend direction)
+        # 3. Dynamic Trend Bonus (Selective v9.7.4)
+        # Bonus is smaller and requires high conviction
         trend_bonus = 0
-        ema200 = latest.get('ema200')
-        if isinstance(ema200, (int, float)):
-            is_long = side.lower() in ['buy', 'long']
-            if (is_long and current_price > ema200) or (not is_long and current_price < ema200):
-                trend_bonus = 5
-                logger.info(f"🛡️ [Leverage] Strong Trend Bonus applied for {symbol} (+5)")
+        if consensus_score >= 7.0: 
+            ema200 = latest.get('ema200')
+            if isinstance(ema200, (int, float)):
+                is_long = side.lower() in ['buy', 'long']
+                if (is_long and current_price > ema200) or (not is_long and current_price < ema200):
+                    trend_bonus = 4 if is_aggressive else 2
         
-        lev = base_lev + score_bonus - vol_penalty + trend_bonus
+        lev_calc = base_lev - vol_penalty + trend_bonus
         
-        # --- [UPGRADED] DYNAMIC CAPS (v5.5) ---
-        sector = self.sector_manager.get_sector(symbol)
-        # Increased freedom for Gemini as per User Request
-        max_cap = 50 if sector == "MAJOR" else (30 if sector == "ALTS" else 20)
+        # 4. Hard Caps [5x - 20x] or [5x - 25x]
+        final_max = 25 if is_aggressive else 20
+        final_lev = max(5, min(final_max, round(lev_calc)))
         
-        # High Conviction "Bullish" Override
-        if consensus_score >= 8.5:
-            max_cap = min(75, max_cap + 15)
-            logger.warning(f"🔥 [Leverage] Ultra-High Conviction Bonus applied for {symbol} (Max Cap: {max_cap})")
-
-        # ATR-BASED VOLATILITY CAP (Less aggressive - let it run)
-        if vol_pct > 8.0:
-             max_cap = 10
-             logger.warning(f"⚠️ [VOLATILITY LIMIT] Extreme Volatility ({vol_pct:.2f}%) on {symbol}. CAPPING TO 10x.")
-        
-        final_lev = max(self.min_leverage, min(max_cap, round(lev)))
-        logger.info(f"📐 [Leverage] {symbol} Calculation: AI_Base={base_lev}, ScoreBonus={score_bonus:.1f}, VolPenalty={vol_penalty:.1f}, TrendBonus={trend_bonus} -> Final={final_lev}x")
-        
+        logger.info(f"📐 [Leverage] {symbol} (v9.7.4): AI={ai_lev}, Trust={score_trust:.2f}, Trend={trend_bonus} -> Final={final_lev}x")
         return final_lev
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
