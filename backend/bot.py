@@ -261,6 +261,27 @@ class CryptoBot:
             
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
+            # --- [FIX] SYMBOL STATE SYNCHRONIZATION (v9.8.1) ---
+            # Re-initialize dictionaries or migrate keys to match the bridged/filtered symbols.
+            # This prevents KeyError when symbols are mapped (e.g. OP/USDT -> OP/USDT:USDT)
+            for s in self.symbols:
+                if s not in self.latest_data:
+                    self.latest_data[s] = {
+                        'price': 0.0, 'change': 0.0, 'changePercent': 0.0, 'rsi': 0.0, 
+                        'macd': 0.0, 'macd_hist': 0.0, 'bb_upper': 0.0, 'bb_lower': 0.0,
+                        'imbalance': 1.0, 'atr': 0.0, 'ema200': 0.0, 'volume24h': 0.0,
+                        'prediction': "Syncing..."
+                    }
+                if s not in self.active_positions: self.active_positions[s] = None
+                if s not in self.trade_levels: self.trade_levels[s] = None
+                if s not in self.ml_cooldowns: self.ml_cooldowns[s] = 0.0
+                if s not in self.llm_cooldowns: self.llm_cooldowns[s] = 0.0
+                if s not in self.last_llm_side: self.last_llm_side[s] = ""
+                if s not in self.previous_prices: self.previous_prices[s] = 0.0
+                if s not in self.hft_locks: self.hft_locks[s] = 0.0
+                if s not in self.price_windows: self.price_windows[s] = deque(maxlen=30)
+                if s not in self.price_history_2m: self.price_history_2m[s] = deque(maxlen=12)
+            
             # --- NEW: BLOCKING BALANCE FETCH (v9.7) ---
             # Force the bot to wait for the real account balance before starting
             logger.info("🏦 [SYNC] Waiting for real-time account balance...")
