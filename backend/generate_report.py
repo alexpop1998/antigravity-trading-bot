@@ -8,11 +8,26 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Reset d'inizio Sessione (Session Zero)
-START_DATE = "2026-03-27 00:00:00" 
-INITIAL_CAPITAL = 10000.0
+# Reset d'inizio Sessione (v9.7 Clean Start)
+START_DATE = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+INITIAL_CAPITAL = 10127.96
+
+def _load_dynamic_config():
+    global INITIAL_CAPITAL, START_DATE
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM bot_state WHERE key='initial_balance'")
+            row = cursor.fetchone()
+            if row: INITIAL_CAPITAL = float(json.loads(row[0]))
+            
+            # Use a recent baseline for "Clean Start" if requested
+            # For now, we stick to the user's request for 'now'
+    except:
+        pass
 
 def calculate_metrics(trades):
+    _load_dynamic_config()
     if not trades:
         return {
             "total_pnl": 0, "win_rate": 0, "profit_factor": 0, 
@@ -48,6 +63,10 @@ def calculate_metrics(trades):
         "total_pnl": total_pnl, "win_rate": win_rate, "profit_factor": profit_factor,
         "max_drawdown": max_dd, "total_trades": total_trades, "portfolio_roi": portfolio_roi
     }
+
+async def async_generate():
+    """Wrapper for bot.py compatibility"""
+    return generate()
 
 def generate():
     try:
