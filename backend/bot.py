@@ -151,7 +151,11 @@ class CryptoBot:
         self.db = BotDatabase()
         self.notifier = TelegramNotifier()
         self.signal_manager = SignalManager(self)
-        self.scanner = AssetScanner(self.exchange)
+        
+        # --- SHADOW SCANNER (v9.6) ---
+        # Ensure scanner looks at REAL Mainnet data even on Testnet
+        scan_provider = self.data_fetcher if hasattr(self, 'data_fetcher') else self.exchange
+        self.scanner = AssetScanner(scan_provider)
         
         # Resource management
         self.ml_semaphore = asyncio.Semaphore(1) 
