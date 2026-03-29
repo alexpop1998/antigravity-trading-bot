@@ -16,6 +16,7 @@ from llm_analyst import LLMAnalyst
 from sector_manager import SectorManager
 import feedparser
 import generate_report
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from asset_scanner import AssetScanner
 from regime_detector import RegimeDetector
@@ -171,7 +172,18 @@ class CryptoBot:
         
         # --- NEW: Time-Domain Lock (DeepSeek Refinement) ---
         self.hft_locks: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
-        self.start_time = time.time() # To filter trades in sync
+        
+        # v10.4: Hard Session Lockdown Start Time
+        self.session_start_time = time.time()
+        saved_start = self.db.load_state("session_start_time")
+        if saved_start:
+            self.session_start_time = float(saved_start)
+            logger.info(f"⏳ Session Lockdown attivo da: {datetime.fromtimestamp(self.session_start_time).strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            self.db.save_state("session_start_time", self.session_start_time)
+
+        # Legacy start_time for compatibility
+        self.start_time = self.session_start_time 
         
         # 5-minute rolling window
         self.price_windows: Dict[str, deque] = {symbol: deque(maxlen=30) for symbol in self.symbols}
@@ -399,6 +411,9 @@ class CryptoBot:
             current_adx = df['adx'].iloc[-1] if 'adx' in df.columns else 0
             
             # Store in latest data
+            if symbol not in self.latest_data:
+                self.latest_data[symbol] = {}
+                
             self.latest_data[symbol]['regime'] = regime
             self.latest_data[symbol]['regime_multiplier'] = multiplier
             
@@ -458,23 +473,24 @@ class CryptoBot:
                     ref_2m = history_2m[0]
                     change_2m_pct = (current_close - ref_2m) / ref_2m
                     
-                    # --- DYNAMIC SOS THRESHOLD (ATR-based) ---
-                    # We use ATR/Price as a proxy for 'normal' volatility.
-                    # Threshold is 1x the 15m ATR, capped between 0.6% and 3.5%
+                    # --- [UPGRADED] DYNAMIC SOS THRESHOLD (v9.8.0 - Sniper Resilience) ---
+                    # Floor raised to 1.2% to avoid noise closures at -4/5% ROE
                     atr_val = current_atr if isinstance(current_atr, (int, float)) else (current_close * 0.015)
                     atr_pct = (atr_val / current_close) if current_close > 0 else 0.015
-                    sos_threshold = max(0.006, min(0.035, atr_pct * 1.0))
+                    sos_threshold = max(0.012, min(0.040, atr_pct * 1.5))
                     
                     active_pos = self.active_positions.get(symbol)
                     if active_pos:
-                        # If LONG and price drops > sos_threshold in 2m
-                        if active_pos == 'LONG' and change_2m_pct < -sos_threshold:
-                            logger.critical(f"🆘 [VELOCITY EXIT] Closing LONG {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%} < -{sos_threshold:.2%})")
-                            asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
-                        # If SHORT and price pumps > sos_threshold in 2m
-                        elif active_pos == 'SHORT' and change_2m_pct > sos_threshold:
-                            logger.critical(f"🆘 [VELOCITY EXIT] Closing SHORT {symbol}: Volatility Spike Against Position ({change_2m_pct:.2%} > {sos_threshold:.2%})")
-                            asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
+                        abs_change = abs(change_2m_pct)
+                        is_against = (active_pos == 'LONG' and change_2m_pct < 0) or (active_pos == 'SHORT' and change_2m_pct > 0)
+                        
+                        if is_against and abs_change > (sos_threshold * 0.7):
+                            if abs_change >= (sos_threshold * 1.5):
+                                logger.critical(f"🆘 [HARD VELOCITY EXIT] Closing {active_pos} {symbol}: Panic Spike ({change_2m_pct:.2%}).")
+                                asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
+                            else:
+                                logger.warning(f"🗯️ [VOLATILITY ALERT] {symbol} {active_pos} spike ({change_2m_pct:.2%}). Requesting AI Priority Audit.")
+                                self.llm_cooldowns[symbol] = 0 # Force AI review in next cycle
                     else:
                         # --- PROACTIVE VELOCITY ENTRIES ---
                         # 1. Momentum Entry: Ride the wave if move > 1.2 * SOS threshold
@@ -586,22 +602,29 @@ class CryptoBot:
             }
             
             # --- SENTIMENT SIGNAL GENERATION ---
-            # 1. OI Expansion (More participation)
-            prev_oi = self.latest_data[symbol].get('open_interest', 0) if symbol in self.latest_data else 0
-            oi_delta = (current_oi - prev_oi) / prev_oi if prev_oi > 0 else 0
-            
-            # 2. Bullish Confluence: Price up + OI up + L/S not extreme
-            if change_5m_pct > 0.005 and oi_delta > 0.005 and current_ls < 1.3:
-                asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "buy", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
-            # 3. Bearish Confluence: Price down + OI up + L/S not extreme
-            elif change_5m_pct < -0.005 and oi_delta > 0.005 and current_ls > 0.7:
-                asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "sell", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
+            try:
+                # Normalize symbol for dictionary lookup
+                lookup_symbol = symbol.split(':')[0] if ':' in symbol else symbol
+                
+                # 1. OI Expansion (More participation)
+                prev_oi = self.latest_data[lookup_symbol].get('open_interest', 0) if lookup_symbol in self.latest_data else 0
+                oi_delta = (current_oi - prev_oi) / prev_oi if prev_oi > 0 else 0
+                
+                # 2. Bullish Confluence: Price up + OI up + L/S not extreme
+                if change_5m_pct > 0.005 and oi_delta > 0.005 and current_ls < 1.3:
+                    asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "buy", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
+                # 3. Bearish Confluence: Price down + OI up + L/S not extreme
+                elif change_5m_pct < -0.005 and oi_delta > 0.005 and current_ls > 0.7:
+                    asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "sell", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
 
-            self._check_soft_stop_loss(symbol, current_close)
-            self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx, mtf_context, change_5m_pct)
-            
+                self._check_soft_stop_loss(symbol, current_close)
+                self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx, mtf_context, change_5m_pct)
+                
+            except Exception as e:
+                logger.error(f"Error analyzing {symbol}: {e}")
+                
         except Exception as e:
-            logger.error(f"Error analyzing {symbol}: {e}")
+            logger.error(f"FATAL error profiling {symbol}: {e}")
 
     def _check_trading_signals(self, symbol, price, rsi, macd_hist, bb_lower, bb_upper, imbalance, ema200, volume24h, atr, adx, mtf_context, change_5m_pct):
         if pd.isna(rsi) or pd.isna(macd_hist) or pd.isna(bb_lower) or pd.isna(ema200):
@@ -610,9 +633,8 @@ class CryptoBot:
         if self.is_macro_paused:
             return
 
-        # --- TREND GUARD: BTC Correlation Check ---
-        # If BTC is dumping, don't open LONGs on alts
-        if "BTC/USDT" in self.latest_data and symbol != "BTC/USDT":
+        # Normalize BTC lookup
+        if "BTC/USDT" in self.latest_data and symbol.split(':')[0] != "BTC/USDT":
             btc_data = self.latest_data["BTC/USDT"]
             btc_change = float(btc_data.get('changePercent', 0))
             if btc_change < -1.5: # Market-wide dump protection
@@ -980,7 +1002,8 @@ class CryptoBot:
                 positions = await self.exchange.fetch_positions([symbol])
                 if positions:
                     pos = positions[0]
-                    total_amount = abs(float(pos.get('amount', pos.get('positionAmt', 0)) or 0))
+                # v10.5 Fix: Binance raw position key is 'positionAmt'
+                total_amount = abs(float(pos.get('positionAmt', pos.get('amount', 0)) or 0))
 
             amount_to_close = total_amount * partial_pct
             
@@ -1026,7 +1049,8 @@ class CryptoBot:
             pnl = (execution_price - entry_price) * amount_to_close if is_long else (entry_price - execution_price) * amount_to_close
             
             pnl_pct_raw = (execution_price - entry_price) / entry_price if is_long else (entry_price - execution_price) / entry_price
-            pnl_pct_leveraged = pnl_pct_raw * getattr(self, 'leverage', 1.0)
+            # v10.3: Multiply by 100 to store as % (e.g. 5.0 instead of 0.05)
+            pnl_pct_leveraged = pnl_pct_raw * getattr(self, 'leverage', 1.0) * 100
             
             # Use provided reason or fallback to default
             if not reason:
@@ -1083,7 +1107,8 @@ class CryptoBot:
         dampening_factor = 0.8 if is_aggressive else 0.5 
         
         ai_mod = 1.0 + (raw_ai_mod - 1.0) * dampening_factor * score_weight
-        ai_mod = max(0.8, min(1.8 if is_aggressive else 1.4, ai_mod))
+        # v10.5 Conservative refinement: 3% base, up to 10% max (mod 3.33)
+        ai_mod = max(0.8, min(1.8 if is_aggressive else 3.33, ai_mod))
         
         total_pct = risk_pct * ai_mod
         
@@ -1130,6 +1155,13 @@ class CryptoBot:
         min_margin = max(5.0, current_equity * 0.01) 
         if adjusted_usdt < min_margin and not self.circuit_breaker_active:
              adjusted_usdt = min_margin
+
+        # --- EMERGENCY GLOBAL MARGIN CAP (v10.5) ---
+        # Hard stop if we are already using > 85% of the account as margin
+        current_used_margin = self.latest_account_data.get('used_margin', 0)
+        if current_used_margin > (current_equity * 0.85):
+             logger.error(f"☢️ [EMERGENCY] Global Margin Usage is too high ({current_used_margin:.2f} / {current_equity:.2f}). Blocking NEW entry.")
+             return 0.0
 
         # --- DYNAMIC LEVERAGE CLAMP ---
         # Standard range 5x - 20x as requested
@@ -1272,7 +1304,8 @@ class CryptoBot:
             # FIX #1: Acquire lock to serialize order execution and prevent position count race condition
             async with self.order_lock:
                 # Re-check limit inside the lock with latest confirmed info
-                confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('amount', 0) or 0) != 0]
+                # v10.5 Fix: Using 'positionAmt' for Binance raw positions
+                confirmed_positions = [p for p in self.latest_account_data.get('positions', []) if float(p.get('positionAmt', p.get('amount', 0)) or 0) != 0]
                 
                 # --- [REMOVED] Global Position Count Limit ---
                 # User requested to trade purely based on margin ratio instead of position count.
@@ -1295,16 +1328,28 @@ class CryptoBot:
                 current_equity = self.latest_account_data.get('equity', 0)
                 if current_equity > 0:
                     # --- [UPGRADED] ANTI-PYRAMIDING & DYNAMIC CAP (v9.7.6) ---
+                    # --- [UPGRADED] ADAPTIVE ANTI-PYRAMIDING (v10.5) ---
                     matching_position = next((p for p in self.latest_account_data.get('positions', []) if p['symbol'] == symbol), None)
-                    is_already_trading = symbol in self.trade_levels or (matching_position and abs(float(matching_position.get('amount', 0))) > 0)
+                    
+                    # Self-Healing: Trust Binance over local state if they disagree
+                    # v10.5 Fix: Using 'positionAmt' for Binance raw positions
+                    is_p_active = matching_position and abs(float(matching_position.get('positionAmt', matching_position.get('amount', 0)))) > 0
+                    if not is_p_active and self.trade_levels.get(symbol):
+                         # Internal state says active but Binance says empty -> Manual closure recovery
+                         logger.warning(f"🔓 [RECOVERY] {symbol} found empty on Binance. Clearing internal state for entry.")
+                         self.trade_levels[symbol] = None
+                         self.active_positions[symbol] = None
+                    
+                    is_already_trading = is_p_active or (self.trade_levels.get(symbol) is not None)
                     
                     # Profile Context
                     risk_pct = getattr(self, 'percent_per_trade', 3.0)
                     is_aggressive = risk_pct > 5.0
                     
                     # Standard Caps vs Extended Caps (v9.7.6)
+                    # Conservative: strictly 10.0% max exposure per symbol
                     std_cap = 25.0 if is_aggressive else 10.0
-                    ext_cap = 35.0 if is_aggressive else 15.0
+                    ext_cap = 35.0 if is_aggressive else 10.0
                     
                     if is_already_trading:
                         # 1. Pyramiding Guard: Skip unless high conviction
@@ -1537,6 +1582,7 @@ class CryptoBot:
                 'side': 'buy' if is_long else 'sell',
                 'entry_price': current_price,
                 'real_entry_price': real_entry_price, # STORE REAL ENTRY
+                'open_time': time.time(), # v10.0: Stagnation Shield support
                 'sl': sl_price,
                 'sl_distance': sl_distance,
                 'tp1': tp1_price,
@@ -1756,8 +1802,8 @@ class CryptoBot:
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
                 # --- NEW: STARTUP PROTECTION SHIELD (v4.2) ---
-                # We skip panic closures for the first 120 seconds of operation to allow sync to settle.
-                is_startup_protected = (time.time() - self.start_time) < 120
+                # We skip panic closures for the first 30 seconds of operation to allow sync to settle.
+                is_startup_protected = (time.time() - self.start_time) < 30
 
                 if effective_pnl_pct <= -self.daily_loss_limit:
                     if not self.circuit_breaker_active:
@@ -1780,7 +1826,7 @@ class CryptoBot:
                             logger.warning(f"🛡️ [STARTUP SHIELD] Global Panic suppressed during sync ({effective_pnl_pct:.2%}).")
                             return # Avoid proceeding to margin dangerous check if we are in protection
                 
-                elif effective_pnl_pct > -0.03: # Reset if we recover or restart with better balance
+                elif effective_pnl_pct > -0.06: # Reset if we recover or restart with better balance (v9.9.11: relaxed for volatility)
                     if self.circuit_breaker_active:
                         logger.warning(f"🟢 Circuit Breaker Reset: Current loss at {effective_pnl_pct:.2%}")
                         self.circuit_breaker_active = False
@@ -1891,7 +1937,8 @@ class CryptoBot:
                 all_trades = []
                 # --- [UPGRADED] GLOBAL SCAN (v9.7.5 Deep Sync) ---
                 # Symbols to monitor: Default + Active Positions + Wallet Balances + Bot Internal State
-                pos_symbols = [p['symbol'] for p in self.latest_account_data.get('positions', []) if abs(float(p.get('amount', 0) or 0)) > 0]
+                # v10.5 Fix: Using 'positionAmt' for Binance raw positions
+                pos_symbols = [p['symbol'] for p in self.latest_account_data.get('positions', []) if abs(float(p.get('positionAmt', p.get('amount', 0)) or 0)) > 0]
                 
                 # Internal bot state (symbols that the bot 'thinks' are open)
                 state_symbols = list(self.trade_levels.keys())
@@ -1906,10 +1953,17 @@ class CryptoBot:
                 # Combine all sources of signal activity
                 symbols_to_check = list(set(self.symbols + pos_symbols + state_symbols + bal_symbols))
                 
+                # v10.5 [ADAPTIVE ANTI-PYRAMID]
                 # Stricter: Always check symbols that are in trade_levels but NOT in pos_symbols (POTENTIAL MANUAL CLOSE)
-                manual_check_targeted = [s for s in state_symbols if s not in pos_symbols]
+                manual_check_targeted = [s for s in state_symbols if s not in pos_symbols and self.trade_levels.get(s)]
                 if manual_check_targeted:
-                     logger.info(f"🔍 [GAP DETECTED] Missing positions on Binance: {manual_check_targeted}. Force linking manual history.")
+                     logger.warning(f"🔓 [PYRAMID UNLOCKED] Manual closure detected on Binance for {manual_check_targeted}. Freeing internal state.")
+                     for s in manual_check_targeted:
+                         self.trade_levels[s] = None
+                         self.active_positions[s] = None
+                     
+                     # Force state save
+                     self.db.save_state("trade_levels", self.trade_levels)
 
                 # Increase chunked scanning to ensure no trade is missed
                 for i in range(0, len(symbols_to_check), 15): 
@@ -1925,13 +1979,14 @@ class CryptoBot:
                 
                 # Sync trades to local database for history tracking
                 if all_trades:
-                    # Filter: Sync trades happened in the last 24 hours (86400s)
-                    # This ensures all trades from 'today' are captured even after multiple restarts.
-                    sync_cutoff = time.time() - 86400
-                    recent_only = [t for t in all_trades if (t.get('timestamp', 0) / 1000.0) >= sync_cutoff]
+                    # v10.4: Session Lockdown - Only sync trades happened in the CURRENT session
+                    # This prevents 'ghost' trades from blocking new entries (Anti-Pyramid)
+                    session_start = getattr(self, 'session_start_time', time.time())
+                    recent_only = [t for t in all_trades if (t.get('timestamp', 0) / 1000.0) >= session_start]
+                    
                     if recent_only:
-                        await asyncio.to_thread(self.db.sync_binance_trades, recent_only)
-                        logger.info(f"Account Update: Synced {len(recent_only)} trades found in 24h history.")
+                        await asyncio.to_thread(self.db.sync_binance_trades, recent_only, min_timestamp_ms=int(session_start * 1000))
+                        logger.info(f"Account Update: Synced {len(recent_only)} NEW session trades found on Binance.")
                     
                 # Sort trades by timestamp descending and keep top 20
                 all_trades.sort(key=lambda x: x.get('timestamp', 0) or 0, reverse=True)
@@ -2140,6 +2195,7 @@ class CryptoBot:
                         'tp2': current_price * (0.70 if side == 'short' else 1.30),
                         'side': 'long' if side == 'long' else 'short',
                         'amount': amount,
+                        'open_time': time.time(), # v10.0: Initialized at sync time
                         'status': 'RECOVERED_ZOMBIE'
                     }
                     logger.warning(f"🛡️ [RECOVERY] {symbol} restored with RELAXED SL @ {self.trade_levels[symbol]['sl']}")
@@ -2181,6 +2237,19 @@ class CryptoBot:
             pnl_pct = (entry_price - current_price) / entry_price * 100
 
         indicators = self.latest_data.get(symbol, {})
+        
+        # --- NEW: STAGNATION SHIELD (v10.0 Time Stop) ---
+        open_time = level.get('open_time')
+        if open_time:
+            age_hours = (time.time() - open_time) / 3600
+            stagnation_limit = self.config.get('trading_parameters', {}).get('stagnation_max_hours', 3)
+            stagnation_pnl = self.config.get('trading_parameters', {}).get('stagnation_pnl_threshold', 0.005) * 100 # Convert to %
+            
+            if age_hours >= stagnation_limit and abs(pnl_pct) < stagnation_pnl:
+                logger.warning(f"🛡️ [STAGNATION SHIELD] Closing {symbol} (Open for {age_hours:.1f}h, PnL: {pnl_pct:+.2f}%) | Freeing equity for new signals.")
+                await self.close_position(symbol, level, reason="STAGNATION EXIT")
+                return
+
         action, confidence, reason = await self.analyst.evaluate_active_position(symbol, side, indicators, pnl_pct)
 
         if action == "HOLD":

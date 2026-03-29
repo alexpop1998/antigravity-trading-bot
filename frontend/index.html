@@ -249,7 +249,21 @@
 
         .account-summary {
             display: flex;
-            gap: 40px;
+            gap: 25px;
+            align-items: center;
+        }
+
+        .active-profile-badge {
+            background: linear-gradient(135deg, var(--accent), #e14eca);
+            color: #fff;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            box-shadow: 0 4px 15px rgba(115, 103, 240, 0.4);
+            border: 1px solid rgba(255,255,255,0.1);
         }
 
         .stat-item {
@@ -656,6 +670,7 @@
                 <span></span><span></span><span></span>
             </button>
             <div class="account-summary">
+                <div id="profile-badge" class="active-profile-badge">PROFILE: --</div>
                 <div class="stat-item">
                     <span class="stat-label">Portafoglio Totale (USDT)</span>
                     <span class="stat-value" id="total-balance">0.00</span>
@@ -814,6 +829,12 @@
             // Auto-close sidebar on mobile after navigation
             closeSidebar();
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateMacroCalendar();
+            // Auto-fetch history on load (defaults to 3 days in backend)
+            fetchHistory();
+        });
 
         function renderDashboard(data) {
             const dashboard = document.getElementById('dashboard');
@@ -1006,6 +1027,10 @@
                 if (data.status === "success") {
                     pnlElem.innerText = `$${data.total_pnl.toFixed(2)}`;
                     pnlElem.className = 'm-value ' + (data.total_pnl >= 0 ? 'positive' : 'negative');
+                    
+                    if (data.profile) {
+                        document.getElementById('profile-badge').innerText = `PROFILE: ${data.profile}`;
+                    }
 
                     if (data.trades && data.trades.length > 0) {
                         let thtml = '<table><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Size</th><th>PnL</th><th>Reason</th></tr>';

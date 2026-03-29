@@ -180,8 +180,11 @@ class BotDatabase:
             logger.error(f"Errore calcolo statistiche AI: {e}")
             return {}
             
-    def sync_binance_trades(self, trades_list):
-        """Syncs an array of CCXT trade objects to the local SQLite database"""
+    def sync_binance_trades(self, trades_list, min_timestamp_ms=0):
+        """
+        Syncs an array of CCXT trade objects to the local SQLite database.
+        v10.4: Added min_timestamp_ms to prevent old data from sync-locking the session.
+        """
         if not trades_list:
             return
             
@@ -190,58 +193,87 @@ class BotDatabase:
         try:
             cursor = self.conn.cursor()
             inserted_count = 0
-            
+            aggregated_trades = {}
             for t in trades_list:
-                # Basic CCXT trade properties
                 exchange_trade_id = t.get('id')
+                order_id = t.get('order') # v9.9.5: Usiamo OrderID per un raggruppamento infallibile
                 if not exchange_trade_id:
                     continue
                     
                 symbol = t.get('symbol', 'UNKNOWN')
-                side = t.get('side', 'unknown')
+                side = t.get('side', 'unknown').upper()
                 price = float(t.get('price', 0) or 0)
                 amount = float(t.get('amount', 0) or 0)
+                timestamp_ms = t.get('timestamp')
                 
-                # Realized PnL detection (Multi-Exchange Support)
-                pnl = 0.0
+                if not timestamp_ms or timestamp_ms < min_timestamp_ms:
+                    # Skip trades before the current session start to avoid ghosting
+                    continue
+                
+                dt_str = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                
+                # --- [REFINED] Raggruppamento Fills (v10.5) ---
+                # Usiamo OrderID per raggruppare i parziali. Se OrderID è mancante, 
+                # usiamo il timestamp al secondo (dt_str) per evitare duplicazioni nello stesso istante.
+                key = f"order_{order_id}" if order_id else f"time_{dt_str}_{symbol}_{side}"
+                
+                if key not in aggregated_trades:
+                    aggregated_trades[key] = {
+                        'timestamp': dt_str,
+                        'symbol': symbol,
+                        'side': side,
+                        'total_price_volume': price * amount,
+                        'total_amount': amount,
+                        'total_pnl': 0,
+                        'exchange_trade_id': exchange_trade_id, 
+                        'order_id': order_id
+                    }
+                else:
+                    aggregated_trades[key]['total_price_volume'] += (price * amount)
+                    aggregated_trades[key]['total_amount'] += amount
+                
+                # Somma PnL
                 info = t.get('info', {})
-                # Binance: 'realizedPnl', Bitget: 'pnl', generic: 'pnl' or 'profit'
                 pnl_fields = ['realizedPnl', 'pnl', 'profit', 'realized_pnl', 'income']
                 for field in pnl_fields:
                     if field in info and info[field] is not None:
-                        pnl = float(info[field])
+                        aggregated_trades[key]['total_pnl'] += float(info[field])
                         break
-                    
-                timestamp_ms = t.get('timestamp')
-                dt_str = None
-                if timestamp_ms:
-                    # Convert to YYYY-MM-DD HH:MM:SS string
-                    dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
-                    dt_str = dt.strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    continue # Skip trades without time
+
+            for key, data in aggregated_trades.items():
+                avg_price = data['total_price_volume'] / data['total_amount'] if data['total_amount'] > 0 else 0
                 
                 try:
-                    # Usiamo INSERT OR IGNORE per assicurarci di non duplicare righe con lo stesso exchange_trade_id.
-                    # Se il trade esiste già (loggato dal bot), NON lo sovrascriviamo con i dati "vuoti" di Binance,
-                    # ma aggiorniamo solo i campi necessari (pnl).
+                    # v10.2: Calculate PnL % (ROI) during sync
+                    cost = avg_price * data['total_amount']
+                    pnl_pct = (data['total_pnl'] / cost * 100) if cost > 0 else 0
+                    
+                    # Usiamo l'ID del primo fill come chiave unica nel DB
+                    # --- [REFINED] Deduplicazione Preventiva (v10.5) ---
+                    # Verifichiamo se esiste già un trade identico (stesso tempo, simbolo, side) 
+                    # per evitare duplicati logici se Binance non restituisce OrderID o IDs coerenti.
                     cursor.execute('''
-                        INSERT OR IGNORE INTO trade_history 
-                        (timestamp, symbol, side, price, amount, pnl, reason, exchange_trade_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (dt_str, symbol, side, price, amount, pnl, "BINANCE_SYNC", exchange_trade_id))
+                        SELECT 1 FROM trade_history 
+                        WHERE timestamp = ? AND symbol = ? AND side = ? AND amount = ?
+                    ''', (data['timestamp'], data['symbol'], data['side'], data['total_amount']))
                     
-                    # Se la riga esisteva già, aggiorniamo solo il PnL se è diverso da 0 (es: trade chiuso)
-                    if pnl != 0:
+                    if cursor.fetchone():
+                        # Già presente, aggiorniamo solo il PnL se è diverso da 0
+                        if data['total_pnl'] != 0:
+                            cursor.execute('''
+                                UPDATE trade_history SET pnl = ?, pnl_pct = ? 
+                                WHERE timestamp = ? AND symbol = ? AND side = ? AND pnl = 0
+                            ''', (data['total_pnl'], pnl_pct, data['timestamp'], data['symbol'], data['side']))
+                    else:
                         cursor.execute('''
-                            UPDATE trade_history SET pnl = ? 
-                            WHERE exchange_trade_id = ? AND pnl = 0
-                        ''', (pnl, exchange_trade_id))
-                    
-                    if cursor.rowcount > 0:
-                        inserted_count = inserted_count + 1
+                            INSERT OR IGNORE INTO trade_history 
+                            (timestamp, symbol, side, price, amount, pnl, pnl_pct, reason, exchange_trade_id)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (data['timestamp'], data['symbol'], data['side'], avg_price, data['total_amount'], data['total_pnl'], pnl_pct, "BINANCE_SYNC", data['exchange_trade_id']))
+                        if cursor.rowcount > 0:
+                            inserted_count += 1
                 except Exception as row_error:
-                    logger.error(f"Error syncing individual trade {exchange_trade_id}: {row_error}")
+                    logger.error(f"Error syncing individual group {data['exchange_trade_id']}: {row_error}")
                     
             self.conn.commit()
             if inserted_count > 0:

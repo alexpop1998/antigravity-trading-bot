@@ -107,23 +107,34 @@ async def startup_event():
 
     # Start the bot's background update loop
     safe_run(trading_bot.update_loop(), "Bot Update Loop")
+    await asyncio.sleep(2)
     safe_run(trading_bot.account_update_loop(), "Account Update Loop")
+    await asyncio.sleep(2)
     safe_run(trading_bot.funding_rate_loop(), "Funding Rate Loop")
+    await asyncio.sleep(2)
     
     # Start the websocket broadcaster
     safe_run(broadcast_market_data(), "Market Broadcaster")
     safe_run(broadcast_account_data(), "Account Broadcaster")
+    await asyncio.sleep(2)
     
     # Start the news radar loop
     safe_run(news_radar.poll_news(), "News Radar")
+    await asyncio.sleep(2)
     
     # Start the institutional edge tools
     safe_run(whale_tracker.monitor_whales(), "Whale Tracker")
+    await asyncio.sleep(2)
     safe_run(social_scraper.monitor_socials(), "Social Scraper")
+    await asyncio.sleep(2)
     safe_run(liquidation_hunter.monitor_liquidations(), "Liquidation Hunter")
+    await asyncio.sleep(2)
     safe_run(macro_calendar.monitor_calendar(), "Macro Calendar")
+    await asyncio.sleep(2)
     safe_run(rl_tuner.run_optimization_loop(), "RL Tuner")
+    await asyncio.sleep(2)
     safe_run(dex_sniper.monitor_arbitrage(), "DEX Sniper")
+    await asyncio.sleep(2)
     safe_run(listing_radar.start_polling(), "Listing Radar")
 
 @app.on_event("shutdown")

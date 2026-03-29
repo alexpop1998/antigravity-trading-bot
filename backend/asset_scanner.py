@@ -43,8 +43,8 @@ class AssetScanner:
                     continue
                 
                 # Extract metrics
-                volume = float(data.get('quoteVolume', 0)) # 24h Volume in USDT
-                change_pct = abs(float(data.get('percentage', 0))) # 24h Absolute change
+                volume = float(data.get('quoteVolume') or 0) # 24h Volume in USDT
+                change_pct = abs(float(data.get('percentage') or 0)) # 24h Absolute change
                 
                 # Rule: Minimum Liquidity (20M USDT) to avoid pump & dumps without exit liquidity
                 if volume < 20_000_000:

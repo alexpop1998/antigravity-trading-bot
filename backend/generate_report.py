@@ -8,8 +8,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "bot_data.db")
 REPORT_PATH = os.path.join(BASE_DIR, "investor_report.html")
 
-# Reset d'inizio Sessione (v9.7 Clean Start)
-START_DATE = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+# START_DATE fissata a OGGI (29/03/2026) per escludere vecchi test (v9.8.2)
+START_DATE = "2026-03-29 00:00:00"
 INITIAL_CAPITAL = 10127.96
 
 def _load_dynamic_config():
@@ -79,6 +79,7 @@ def generate():
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            # Ripristinato in v9.8.2: Filtra per data d'inizio (Oggi 29/03)
             cursor.execute("SELECT * FROM trade_history WHERE timestamp >= ? ORDER BY timestamp ASC", (START_DATE,))
             rows = cursor.fetchall()
         
@@ -102,7 +103,7 @@ def generate():
             
             # FILTRO VISUALIZZAZIONE (v9.7.5): In tabella se CHIUSURA (parola CLOSE) o PnL rilevato (>0.05)
             # Questo permette di vedere anche i trade manuali sincronizzati da Binance
-            is_close = "CLOSE" in side or abs(p) > 0.05
+            is_close = "CLOSE" in side or abs(p) > 0.01
             if not is_close: continue
 
             cumulative_pnl += p
@@ -236,7 +237,7 @@ def generate():
         }}
         
         const tbody = document.getElementById('table-body');
-        tbody.innerHTML = [...tradeData].reverse().slice(0, 40).map(t => {{
+        tbody.innerHTML = [...tradeData].reverse().slice(0, 100).map(t => {{
             const pClass = t.pnl >= 0 ? 'pos' : 'neg';
             return `<tr>
                 <td style="opacity:0.5">${{t.timestamp.split(' ')[1]}}</td>

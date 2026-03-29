@@ -8,11 +8,13 @@
         "percent_per_trade": 3.0,
         "max_margin_pct": 10.0,
         "consensus_threshold": 2.5,
-        "gemini_min_confidence": 0.80,
+        "gemini_min_confidence": 0.82,
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.05,
-        "max_concurrent_positions": 15,
-        "max_global_margin_ratio": 0.60,
-        "daily_loss_limit": 2.0
+        "max_concurrent_positions": 20,
+        "max_global_margin_ratio": 0.85,
+        "daily_loss_limit": 1.0,
+        "stagnation_max_hours": 3,
+        "stagnation_pnl_threshold": 0.005
     }
 }
