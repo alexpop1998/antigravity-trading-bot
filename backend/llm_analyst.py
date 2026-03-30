@@ -140,6 +140,47 @@ class LLMAnalyst:
             logger.error(f"Errore durante la decisione LLM per {symbol}: {e}")
             return True, 1.0, self.bot.leverage, 1.0, 1.0, None, f"ERROR: {str(e)}"
 
+    async def decide_listing_strategy(self, symbol, current_price, spread_pct):
+        """
+        Specialized 'Flash Audit' for new coin listings (v11.5).
+        Designed for maximum speed (sub-2s) to capture listing pumps safely.
+        """
+        if not self.ai_client:
+            return True, 1.0, self.bot.leverage, 1.0, 1.0, "API_KEY_MISSING"
+
+        try:
+            prompt = f"""
+            ANALISI FLASH LISTING: {symbol}
+            Prezzo: {current_price}
+            Spread Rilevato: {spread_pct:.2f}%
+            
+            REGOLE SNIPER:
+            1. Se lo Spread > 2.5%, REJECT (Troppo rischioso/Slippage).
+            2. Se lo Spread < 1.0%, APPROVE (Opportunità eccellente).
+            3. Altrimenti valuta la volatilità iniziale.
+            
+            RISPONDI JSON:
+            {{ "verdict": "APPROVE" o "REJECT", "confidence": 0.0-1.0, "reasoning": "max 5 parole" }}
+            """
+            
+            response = await self.ai_client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={ "type": "json_object" },
+                temperature=0.0,
+                timeout=1.5 # Ultra-strict timeout
+            )
+            
+            res = json.loads(response.choices[0].message.content)
+            verdict = res.get("verdict", "REJECT")
+            
+            # Use fixed multipliers for listings to minimize latency
+            return (verdict == "APPROVE"), 1.0, self.bot.leverage, 1.0, 1.5, None, res.get("reasoning")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Flash Audit fallito per {symbol}: {e}. Eseguo REJECT per sicurezza.")
+            return False, 0.0, 0, 0, 0, None, "Flash Audit Timeout/Error"
+
     async def evaluate_active_position(self, symbol, side, indicators, current_pnl_pct):
         """
         Evaluates the health of an active position and suggests Scaling/Pivot.

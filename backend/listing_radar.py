@@ -26,8 +26,8 @@ class ListingRadar:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Listing Radar: {e}")
 
-    async def start_polling(self, interval_seconds: int = 20):
-        """Periodically polls for new market listings."""
+    async def start_polling(self, interval_seconds: int = 10):
+        """Periodically polls for new market listings (v11.5 Optimized)."""
         self.is_running = True
         logger.info(f"🚀 Listing Radar polling started (Interval: {interval_seconds}s)")
         
@@ -45,13 +45,13 @@ class ListingRadar:
                 if new_listings:
                     for symbol in new_listings:
                         logger.warning(f"🚨 [NEW LISTING DETECTED] {symbol} is now available!")
-                        # Trigger immediate HIGH PRIORITY signal
-                        # Listing scalps bypass standard consensus
+                        
+                        # v11.5: Trigger dedicated FLASH LISTING flow
+                        # This will run a ultra-fast AI check and a liquidity spread guard
                         asyncio.create_task(self.bot.handle_signal(
                             symbol, 
                             "NEW_LISTING", 
-                            "buy", 
-                            is_black_swan=True # Bypasses AI review and some filters
+                            "buy"
                         ))
                     
                     # Update cache to include new ones

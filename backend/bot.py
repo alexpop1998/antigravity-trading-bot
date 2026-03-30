@@ -1361,6 +1361,30 @@ class CryptoBot:
                 if current_equity > 0:
                     # --- [UPGRADED] ANTI-PYRAMIDING & DYNAMIC CAP (v9.7.6) ---
                     # --- [UPGRADED] ADAPTIVE ANTI-PYRAMIDING (v10.5) ---
+                
+                # v11.5: LIQUIDITY GUARD - Check spread for listings and high-risk entries
+                if signal_type == "NEW_LISTING" or is_black_swan:
+                    try:
+                        orderbook = await self.exchange.fetch_order_book(symbol, limit=5)
+                        bids = orderbook['bids']
+                        asks = orderbook['asks']
+                        if bids and asks:
+                            best_bid = bids[0][0]
+                            best_ask = asks[0][0]
+                            real_spread = (best_ask - best_bid) / best_bid * 100
+                            if real_spread > 2.5:
+                                logger.warning(f"🚫 [LIQUIDITY GUARD] Rejecting {symbol}: Spread too high ({real_spread:.2f}% > 2.50%)")
+                                self.active_positions[symbol] = None
+                                self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                                return
+                            logger.info(f"✅ [LIQUIDITY GUARD] {symbol} spread is safe: {real_spread:.2f}%")
+                    except Exception as e:
+                        logger.error(f"⚠️ Liquidity Guard Error for {symbol}: {e}")
+                        # If we can't check liquidity, safe-reject the listing
+                        if signal_type == "NEW_LISTING":
+                            self.active_positions[symbol] = None
+                            self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                            return
                     # v11.4.1: Atomic Position Check (Bitget V2 / Binance Universal)
                     logger.info(f"🔍 [ATOMIC CHECK] Verifying real-time exchange position for {symbol}...")
                     fresh_bal = await self.exchange.fetch_balance()
@@ -1470,12 +1494,28 @@ class CryptoBot:
                     return
 
                 # --- REFINED: Force LLM Review even for News (Bypass Removed) ---
-                # Retrieve current indicators for context
-                indicators = self.latest_data.get(symbol, {})
                 # Ask the LLM to analyze the setup
-                approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = await self.analyst.decide_strategy(
-                    symbol, side, signal_type, indicators, mtf_context=mtf_context, news_context=self.current_news
-                )
+                if signal_type == "NEW_LISTING":
+                    # v11.5: Optimized Flash Audit for New Listings
+                    try:
+                        ticker = await self.exchange.fetch_ticker(symbol)
+                        current_price = ticker.get('last', 0)
+                        bid = ticker.get('bid', 0)
+                        ask = ticker.get('ask', 0)
+                        spread_pct = ((ask - bid) / bid * 100) if bid > 0 else 0
+                        
+                        approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = await self.analyst.decide_listing_strategy(
+                            symbol, current_price, spread_pct
+                        )
+                    except Exception as e:
+                        logger.error(f"⚠️ Listing Ticker Error for {symbol}: {e}")
+                        approved = False
+                        reason = "Failed to fetch ticker for listing"
+                else:
+                    # Standard Multi-Indicator Strategy
+                    approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = await self.analyst.decide_strategy(
+                        symbol, side, signal_type, indicators, mtf_context=mtf_context, news_context=self.current_news
+                    )
                     
                 # Update Cooldown state
                 # If REJECTED, set a longer cooldown (900s) to avoid spamming the same setup
