@@ -590,8 +590,8 @@ class CryptoBot:
                     predicted_price = "ML Error"
                 self.ml_cooldowns[symbol] = current_time
             else:
-                # Use cached prediction if available
-                predicted_price = self.latest_data[symbol].get('prediction', "Syncing ML...")
+                # Use cached prediction if available, safely
+                predicted_price = self.latest_data[symbol].get('prediction', "Syncing ML...") if symbol in self.latest_data else "Syncing..."
             
             # --- INSTITUTIONAL DATA FETCH (OI & L/S Ratio) ---
             current_oi = 0

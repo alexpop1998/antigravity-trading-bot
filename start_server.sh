@@ -17,7 +17,15 @@ if [ ! -f "$VENV_PYTHON" ]; then
     exit 1
 fi
 
-# 2. Check for .env Configuration
+# 2. Strict Process Cleanup (Prevent Ghost Instances)
+# Kill any existing main.py, bot.py or uvicorn instances to avoid port 8000 conflicts and dual-trading.
+echo "🧹 Cleaning up existing processes..."
+pkill -9 -f "main.py" 2>/dev/null
+pkill -9 -f "python3 bot.py" 2>/dev/null
+pkill -9 -f "uvicorn" 2>/dev/null
+sleep 2
+
+# 3. Check for .env Configuration
 if [ ! -f "$ENV_FILE" ]; then
     echo "❌ Error: .env configuration file missing in $BACKEND_DIR"
     echo "💡 Run './setup_env.sh' to create a template, then fill in your API keys."
@@ -28,4 +36,8 @@ echo "🐍 Using Interpreter: $VENV_PYTHON"
 
 # Run the server
 cd "$BACKEND_DIR"
-"$VENV_PYTHON" main.py
+# Use nohup or just backgrounding to ensure it stays up
+nohup "$VENV_PYTHON" main.py > ../start_output.log 2>&1 &
+
+echo "✅ Antigravity Terminal started in background (PID: $!)"
+echo "📂 Logs available at start_output.log"
