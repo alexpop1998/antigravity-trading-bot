@@ -261,6 +261,30 @@ class CryptoBot:
             
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
+            # --- [FIX] REAL-TIME POSITION RECOVERY (v9.9.0) ---
+            try:
+                logger.info("🏦 [SYNC] Recovering active positions from Binance...")
+                # Fetch positions with float values for comparison
+                all_positions = await self.exchange.fetch_positions()
+                recovered_count = 0
+                for pos in all_positions:
+                    p_symbol = pos.get('symbol')
+                    p_amt = float(pos.get('positionAmt', 0))
+                    p_notional = abs(float(pos.get('notional', 0)))
+                    
+                    if p_amt != 0:
+                        # Normalize symbol for matching if needed
+                        match_symbol = next((s for s in self.symbols if s == p_symbol or s.split(':')[0] == p_symbol), None)
+                        if match_symbol:
+                            side = 'LONG' if p_amt > 0 else 'SHORT'
+                            self.active_positions[match_symbol] = side
+                            logger.info(f"📦 [RECOVERED] Found {side} position for {match_symbol} (${p_notional:.2f} notional)")
+                            recovered_count += 1
+                if recovered_count > 0:
+                    logger.warning(f"✅ [RECOVERY] Successfully synced {recovered_count} active positions from account.")
+            except Exception as e:
+                logger.error(f"⚠️ [RECOVERY ERROR] Could not sync positions on startup: {e}")
+
             # --- [FIX] SYMBOL STATE SYNCHRONIZATION (v9.8.5) ---
             # Migration: Preserve trade memory when symbols are bridged (e.g. HEMI/USDT -> HEMI/USDT:USDT)
             migrated_count = 0
@@ -1150,6 +1174,31 @@ class CryptoBot:
              clamped_leverage = min(25, leverage)
              logger.info(f"🔥 [AI LEVERAGE BOOST] Conviction High: Allowing {clamped_leverage}x leverage for {symbol}.")
 
+        # --- [FIX] PORTFOLIO-AWARE SIZING (v9.9.0) ---
+        # 1. Get existing notional for this symbol
+        positions = self.latest_account_data.get('positions', [])
+        current_notional = 0.0
+        for p in positions:
+            p_sym = p.get('symbol')
+            # Match both direct symbol and base symbol (USDT-M conventions)
+            if p_sym == symbol or p_sym == symbol.split(':')[0]:
+                 current_notional = abs(float(p.get('notional', 0)))
+                 break
+
+        # 2. Calculate Max Notional Allowed (e.g. 10% of equity * leverage)
+        max_notional_allowed = current_equity * (max_limit_val / 100.0) * clamped_leverage
+        
+        # 3. Check and Clamp New Order
+        potential_notional = adjusted_usdt * clamped_leverage
+        if (current_notional + potential_notional) > max_notional_allowed:
+             remaining_notional = max(0.0, max_notional_allowed - current_notional)
+             if remaining_notional <= 5.0: # Too small to trade
+                  logger.warning(f"🛡️ [EXPOSURE LIMIT] Maximum capacity reached for {symbol} (${current_notional:.2f}). Blocking NEW entry.")
+                  return 0.0
+             
+             adjusted_usdt = remaining_notional / clamped_leverage
+             logger.warning(f"🛡️ [SIZING CAP] Global Exposure limit reached for {symbol}. Reducing new order to ${remaining_notional:.2f} Notional.")
+
         # RE-CALCULATE amount with final leverage (v9.8.9 Fix)
         amount_to_buy = (adjusted_usdt * clamped_leverage) / current_price
         
@@ -1634,6 +1683,40 @@ class CryptoBot:
         last_mtime = os.path.getmtime(config_path) if os.path.exists(config_path) else 0
         
         while True:
+            # --- [FIX] AUTO-CLEANUP AUDIT (v9.9.0) ---
+            # Periodically sync internal memory with exchange reality to avoid Ghost Locks
+            try:
+                real_positions = self.latest_account_data.get('positions', [])
+                real_symbols = {p.get('symbol') for p in real_positions}
+                # Also include base symbols for matching
+                real_base_symbols = {s.split(':')[0] for s in real_symbols if s}
+                
+                # Check internal memory against reality
+                for symbol in list(self.active_positions.keys()):
+                    if self.active_positions[symbol] is not None:
+                        # If symbol is not in exchange positions, clear it
+                        base_symbol = symbol.split(':')[0]
+                        if symbol not in real_symbols and base_symbol not in real_base_symbols:
+                             logger.warning(f"🧹 [GHOST CLEANUP] Position for {symbol} no longer exists. Clearing internal lock.")
+                             self.active_positions[symbol] = None
+                             # Also clear trade levels if they weren't cleared by order completion
+                             if self.trade_levels.get(symbol):
+                                  self.trade_levels[symbol] = None
+                
+                # Inverse sync: If a new position is found but not in memory, add it
+                for pos in real_positions:
+                    p_sym = pos.get('symbol')
+                    p_amt = float(pos.get('positionAmt', 0))
+                    if p_amt != 0:
+                        match_symbol = next((s for s in self.symbols if s == p_sym or s.split(':')[0] == p_sym), None)
+                        if match_symbol and self.active_positions.get(match_symbol) is None:
+                             side = 'LONG' if p_amt > 0 else 'SHORT'
+                             logger.info(f"📦 [SYNC] Found background position for {match_symbol} ({side}). Updating memory.")
+                             self.active_positions[match_symbol] = side
+
+            except Exception as e:
+                logger.error(f"⚠️ [AUDIT ERROR] Position sync failed: {e}")
+
             # 0. Hot-Reload Config if RL Tuner modified it
             try:
                 if os.path.exists(config_path):
