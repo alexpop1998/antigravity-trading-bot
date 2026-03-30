@@ -9,7 +9,7 @@
         "max_margin_pct": 80.0,
         "consensus_threshold": 2.0,
         "gemini_min_confidence": 0.70,
-        "stop_loss_pct": 0.04,
+        "stop_loss_pct": 0.015,
         "take_profit_pct": 0.15,
         "max_concurrent_positions": 10,
         "max_global_margin_ratio": 0.90,

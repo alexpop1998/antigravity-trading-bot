@@ -48,6 +48,7 @@ class CryptoBot:
         self.max_margin_pct = params.get("max_margin_pct", 15.0) # Absolute cap for AI boosting
         self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
+        self.breakeven_pct = 0.012
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
         self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
         self.daily_loss_limit = float(params.get("daily_loss_limit", 1.0)) / 100.0
@@ -847,7 +848,13 @@ class CryptoBot:
                         sl = new_sl
                         logger.info(f"📈 TRAILING TECHNICAL STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
             
-            # 2. Check Exit Conditions
+            # v12.0.2: [BLITZ BREAKEVEN] Move SL to entry at 1.2% profit for high leverage
+            pnl_pct = (current_price - entry_price) / entry_price
+            if self.leverage >= 20 and pnl_pct >= 0.012 and not trade.get('blitz_be_hit', False):
+                trade['sl'] = entry_price * 1.001 # Entry + 0.1% buffer
+                trade['blitz_be_hit'] = True
+                logger.warning(f"🛡️ [BLITZ BE] {symbol} profit reached 1.2%. SL moved to entry ({trade['sl']}) to protect capital.")
+
             # Ultimate Safety: Survival Stop (5x ATR)
             survival_sl = trade.get('entry_price') - survival_sl_dist
             if current_price <= survival_sl:
@@ -898,6 +905,13 @@ class CryptoBot:
                         sl = new_sl
                         logger.info(f"📉 TRAILING TECHNICAL STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
             
+            # v12.0.2: [BLITZ BREAKEVEN] Move SL to entry at 1.2% profit for high leverage (SHORT)
+            pnl_pct = (entry_price - current_price) / entry_price
+            if self.leverage >= 20 and pnl_pct >= 0.012 and not trade.get('blitz_be_hit', False):
+                trade['sl'] = entry_price * 0.999 # Entry - 0.1% buffer
+                trade['blitz_be_hit'] = True
+                logger.warning(f"🛡️ [BLITZ BE SHORT] {symbol} profit reached 1.2%. SL moved to entry ({trade['sl']}) to protect capital.")
+
             # 2. Check Exit Conditions
             # Ultimate Safety: Survival Stop (5x ATR)
             survival_sl = trade.get('entry_price', current_price) + survival_sl_dist
@@ -1623,6 +1637,13 @@ class CryptoBot:
                 
                 if ai_sl_mult != 1.0 or ai_tp_mult != 1.0:
                     logger.info(f"🧠 [AI TP/SL] Applied AI Multipliers: SL={ai_sl_mult:.2f}x, TP={ai_tp_mult:.2f}x")
+
+                # v12.0.2: [BLITZ SURVIVAL] Hard safety cap for high-leverage positions (>= 20x)
+                if self.leverage >= 20:
+                    max_sl_dist = current_price * 0.018 # Hard cap at 1.8%
+                    if sl_distance > max_sl_dist:
+                         logger.warning(f"🛡️ [BLITZ CAP] Reducing too-wide SL for {symbol} from {sl_distance/current_price:.2%} to 1.80% (Survival Cap).")
+                         sl_distance = max_sl_dist
             
             is_long = side.lower() in ['buy', 'long']
             if is_long:
