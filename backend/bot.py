@@ -261,10 +261,12 @@ class CryptoBot:
             
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
-            # --- [FIX] AGGRESSIVE POSITION RECOVERY (v9.9.1) ---
+            # --- [FIX] AGGRESSIVE PORTFOLIO ADOPTION (v9.9.2) ---
             try:
-                logger.info("🏦 [SYNC] Recovering active positions from Binance...")
-                all_positions = await self.exchange.fetch_positions()
+                logger.info("🏦 [SYNC] Recovering active positions from Binance Balance...")
+                # fetch_balance['info']['positions'] is the most reliable way on Testnet
+                balance_data = await self.exchange.fetch_balance()
+                all_positions = balance_data.get('info', {}).get('positions', [])
                 recovered_count = 0
                 
                 # Pre-fetch market mappings to link ID (CRVUSDT) to Symbol (CRV/USDT:USDT)
@@ -273,9 +275,9 @@ class CryptoBot:
                 for pos in all_positions:
                     p_id = pos.get('symbol') # e.g. CRVUSDT
                     p_amt = float(pos.get('positionAmt', 0))
-                    p_notional = abs(float(pos.get('notional', 0)))
                     
                     if p_amt != 0:
+                        p_notional = abs(float(pos.get('notional', 0)))
                         # Find the corresponding symbol in exchange markets
                         full_symbol = id_to_symbol.get(p_id)
                         if full_symbol:
@@ -292,7 +294,7 @@ class CryptoBot:
                             recovered_count += 1
                 
                 if recovered_count > 0:
-                    logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions from account.")
+                    logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions from account balance.")
             except Exception as e:
                 logger.error(f"⚠️ [RECOVERY ERROR] Could not sync positions on startup: {e}")
 
@@ -1840,12 +1842,26 @@ class CryptoBot:
     async def _update_account_state(self):
         """Standardizes and updates the current account state (equity, positions, PnL)."""
         try:
-            # 1. Fetch positions
-            positions = await self.exchange.fetch_positions()
-            active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
-
-            # 2. Fetch Balance and check Margin
+            # 1. Fetch Balance (The ultimate source of truth for all positions on Binance)
             balances = await self.exchange.fetch_balance()
+            
+            # 2. Derive active positions from balance info
+            raw_positions = balances.get('info', {}).get('positions', [])
+            active_pos = []
+            
+            # Pre-fetch market mappings to link ID (CRVUSDT) to Symbol (CRV/USDT:USDT)
+            id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
+            
+            for p in raw_positions:
+                p_amt = float(p.get('positionAmt', 0))
+                if p_amt != 0:
+                    # Enrich position data for bot logic
+                    p_id = p.get('symbol')
+                    full_symbol = id_to_symbol.get(p_id, p_id)
+                    p['symbol'] = full_symbol
+                    p['amount'] = p_amt
+                    active_pos.append(p)
+
             wallet_balance, equity, unrealized_pnl, margin_ratio = self._calculate_unified_balance(balances)
             
             # --- PERSISTENCE & SYNC ---
@@ -1853,6 +1869,7 @@ class CryptoBot:
             self.latest_account_data['balance'] = wallet_balance
             self.latest_account_data['equity'] = equity
             self.latest_account_data['unrealized_pnl'] = unrealized_pnl
+            self.latest_account_data['positions'] = active_pos # CRITICAL: Update the position list used by Sizing/Audit
             self.latest_account_data['alerts'] = self.alert_history
             
             if self.initial_wallet_balance is None:
