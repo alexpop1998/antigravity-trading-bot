@@ -61,8 +61,10 @@ class LLMAnalyst:
             Direzione: {side.upper()}
             Tipo Segnale: {signal_type}
             
-            DATI TECNICI ATTUALI:
-            {json.dumps(indicators, indent=2)}
+            CRITICAL METRICS:
+            RSI: {indicators.get('rsi', 'N/D')}, MACD_Hist: {indicators.get('macd_hist', 'N/D')}, 
+            Vol_Change: {indicators.get('volume_change', 'N/D')}, ATR_Volatility: {indicators.get('atr', 'N/D')},
+            Price_vs_EMA200: {indicators.get('price_vs_ema200', 'N/D')}
             
             --- MULTI-TIMEFRAME ANALYSIS (MACRO TREND) ---
             Trend Context: {mtf_context}
@@ -154,8 +156,9 @@ class LLMAnalyst:
             Direzione: {side.upper()}
             PnL Attuale: {current_pnl_pct:.2f}%
             
-            DATI TECNICI ATTUALI:
-            {json.dumps(indicators, indent=2)}
+            CRITICAL METRICS:
+            PnL: {current_pnl_pct:.2f}%, RSI: {indicators.get('rsi', 'N/D')}, 
+            MACD_Hist: {indicators.get('macd_hist', 'N/D')}, Trend: {indicators.get('trend_adx', 'N/D')}
             
             MISSIONE:
             1. HOLD: Mantieni tutto invariato. Punta al TP2 (grande profitto). 
@@ -307,6 +310,10 @@ class LLMAnalyst:
             return
 
         try:
+            # Skip minor noise trades to save tokens (Threshold: |0.3%|)
+            if abs(pnl) < 0.003:
+                return
+                
             outcome = "WIN" if pnl > 0.005 else ("LOSS" if pnl < -0.005 else "NEUTRAL/PARTIAL")
             
             # --- Capture indicators context from bot ---
@@ -323,8 +330,8 @@ class LLMAnalyst:
             - Esito: {outcome}
             - Reasoning Entrata: {trade.get('reasoning', 'N/D')}
             
-            CONTESTO INDICATORI (CHIUSURA):
-            {json.dumps(indicators, indent=2)}
+            CONTESTO INDICATORI:
+            RSI: {indicators.get('rsi')}, MACD: {indicators.get('macd')}, Vol: {indicators.get('volume_change')}
             
             MISSIONE:
             1. Identifica il 'Fatal Flaw' (errore fatale) o il 'Success Pattern'.

@@ -1040,6 +1040,10 @@ class CryptoBot:
             # v10.3: Multiply by 100 to store as % (e.g. 5.0 instead of 0.05)
             pnl_pct_leveraged = pnl_pct_raw * getattr(self, 'leverage', 1.0) * 100
             
+            # Finalize AI Memory (Outcome learning)
+            if trade and 'snapshot_id' in trade:
+                self.db.update_trade_outcome(trade['snapshot_id'], execution_price, pnl)
+            
             # Use provided reason or fallback to default
             if not reason:
                 reason = "EXIT" if partial_pct >= 1.0 else "PARTIAL_EXIT"
@@ -1872,6 +1876,10 @@ class CryptoBot:
         
         while True:
             try:
+                # v11.2: Added 2s settlement delay at the start of loop
+                # This prevents 'Ghost Exits' (BINANCE_SYNC) by giving the API time to register orders.
+                await asyncio.sleep(2)
+                
                 # 1. Unified state update (v9.7)
                 # This ensures consistent equity/margin data across all bot modules.
                 active_pos, wallet_balance, equity, unrealized_pnl = await self._update_account_state()
