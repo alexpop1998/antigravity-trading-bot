@@ -1007,36 +1007,56 @@ class CryptoBot:
             is_long = side in ['buy', 'long']
             close_side = 'sell' if is_long else 'buy'
             
-            # --- ROBUST AMOUNT EXTRACTION (Binance/Bitget Compat) ---
+            # --- ROBUST AMOUNT EXTRACTION (Binance/Bitget/Testnet Compat v9.9.3) ---
             total_amount = 0.0
-            if trade and 'amount' in trade:
+            if trade and 'amount' in trade and trade['amount'] is not None:
                 total_amount = float(trade['amount'])
             
             # If trade state is missing or corrupted, try to fetch from exchange directly
             if total_amount <= 0:
-                logger.warning(f"⚠️ [RECOVERY] Trade state for {symbol} is missing amount. Fetching from exchange...")
-                positions = await self.exchange.fetch_positions([symbol])
-                if positions:
-                    pos = positions[0]
-                # v10.5 Fix: Binance raw position key is 'positionAmt'
-                total_amount = abs(float(pos.get('positionAmt', pos.get('amount', 0)) or 0))
+                logger.warning(f"⚠️ [RECOVERY] Trade state for {symbol} is missing amount. Fetching from Balance...")
+                # v9.9.3: Priority fetch from Balance (reliable on Testnet)
+                bal = await self.exchange.fetch_balance()
+                raw_positions = bal.get('info', {}).get('positions', [])
+                for p in raw_positions:
+                    p_id = p.get('symbol')
+                    # Match by ID or CCXT symbol
+                    market = self.exchange.markets.get(symbol, {})
+                    if p_id == symbol or p_id == market.get('id'):
+                         total_amount = abs(float(p.get('positionAmt', 0)))
+                         break
 
             amount_to_close = total_amount * partial_pct
             
-            # Precision adjustment using ccxt helper
-            amount_str = self.exchange.amount_to_precision(symbol, amount_to_close)
-            amount_to_close = float(amount_str)
+            # Precision adjustment with safety fallback (v9.9.3)
+            try:
+                amount_str = self.exchange.amount_to_precision(symbol, amount_to_close)
+                amount_to_close = float(amount_str)
+            except Exception as e:
+                logger.warning(f"⚠️ [PRECISION ERROR] {symbol} metadata broken: {e}. Falling back to raw amount.")
+                # Fallback: Round to 8 decimals as a safety ceiling
+                amount_to_close = round(amount_to_close, 8)
             
             if amount_to_close <= 0:
-                logger.warning(f"Skipping closure for {symbol}: amount too small.")
+                logger.warning(f"Skipping closure for {symbol}: amount too small ({total_amount}).")
                 return
 
-            logger.info(f"🔄 Closing position for {symbol} ({'PARTIAL' if partial_pct < 1 else 'FULL'}): {close_side} {amount_to_close}")
+            logger.info(f"🔄 Closing position for {symbol} ({'PARTIAL' if partial_pct < 1 else 'FULL'}): {close_side} {amount_to_close} (Reason: {reason})")
             
-            # --- IMPROVEMENT: Capture actual execution price from order response ---
-            # Binance MARKET orders return fill information in the 'fills' property of the response
-            # or 'average' price if unified by CCXT.
-            order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, {'reduceOnly': True})
+            # --- EMERGENCY EXECUTION BLOCK (v9.9.3) ---
+            try:
+                order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, {'reduceOnly': True})
+            except Exception as e:
+                # v9.9.3 TRIA/USDT FIX: If "greater than 0" or precision error, try integer-only fallback
+                if "precision" in str(e).lower() or "greater than 0" in str(e).lower():
+                    logger.warning(f"🆘 [FALLBACK EXIT] Attempting integer-only close for {symbol} due to API Error.")
+                    amount_to_close = int(amount_to_close)
+                    if amount_to_close > 0:
+                         order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, {'reduceOnly': True})
+                    else:
+                         raise e
+                else:
+                    raise e
             
             # Extract execution details
             order_id = order_response.get('id')
