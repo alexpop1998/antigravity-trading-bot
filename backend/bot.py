@@ -1498,10 +1498,10 @@ class CryptoBot:
                 is_startup_window = (now - self.start_time) < 300
                 
                 # v12.0.4: Blitz Profile Bypass - Force Gemini to ignore cooldowns when on the blitz profile
-                is_blitz_profile = "blitz" in str(self.config_file).lower()
+                is_blitz_profile = "blitz" in str(self.config_file).lower() or self.leverage >= 20
                 
                 if (cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window) and not is_blitz_profile:
-                    logger.info(f"❄️ [COST OPTIMIZATION] Skipping repetitive AI Review for {symbol}")
+                    logger.info(f"❄️ [COST OPTIMIZATION] Skipping repetitive AI Review for {symbol} (Config: {self.config_file}, Lev: {self.leverage})")
                     self.active_positions[symbol] = None
                     self.pending_orders_count = max(0, self.pending_orders_count - 1)
                     return
