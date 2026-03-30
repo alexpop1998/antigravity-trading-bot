@@ -1205,7 +1205,7 @@ class CryptoBot:
         return validated
 
     def calculate_dynamic_leverage(self, symbol, side, consensus_score, current_price, **kwargs):
-        """Calculates dynamic leverage weighted by AI conviction (v9.7.4)."""
+        """Calculates dynamic leverage weighted by AI conviction (v9.8.7)."""
         latest = self.latest_data.get(symbol, {})
         if not latest or current_price <= 0:
             return self.leverage
@@ -1214,23 +1214,30 @@ class CryptoBot:
         risk_pct = getattr(self, 'percent_per_trade', 3.0)
         is_aggressive = risk_pct > 5.0
 
-        # 1. AI Suggested vs Base (Pondered v9.7.4)
+        # 1. AI Suggested vs Base (Pondered v9.8.7)
         score_trust = consensus_score / 10.0
         ai_lev = kwargs.get('ai_leverage', 0)
         
         base_lev = self.leverage
         if ai_lev > 0:
             # AI Suggestion is weighted by its own confidence score
-            # If score is 10/10, we use ai_lev. If 5/10, we use base_lev.
             base_lev = base_lev + (ai_lev - base_lev) * score_trust
         
-        # 2. Volatility Penalty (Harder in Conservative)
+        # 2. Volatility Penalty (Mitigated by AI Confidence v9.8.7)
         atr = latest.get('atr', current_price * 0.01)
         vol_pct = (atr / current_price) * 100 if current_price > 0 else 0
         vol_penalty = vol_pct * (0.5 if is_aggressive else 1.2)
         
-        # 3. Dynamic Trend Bonus (Selective v9.7.4)
-        # Bonus is smaller and requires high conviction
+        # --- NEW: CONFIDENCE AUTO-BOOST ---
+        # If AI is very sure, it "protects" leverage from volatility noise
+        if consensus_score >= 9.0:
+            vol_penalty *= 0.4 # 60% reduction in penalty
+            logger.info(f"💎 [Leverage] {symbol} Extreme Confidence (9+): Volatility penalty heavily reduced.")
+        elif consensus_score >= 8.0:
+            vol_penalty *= 0.7 # 30% reduction in penalty
+            logger.info(f"💎 [Leverage] {symbol} High Confidence (8+): Volatility penalty reduced.")
+
+        # 3. Dynamic Trend Bonus
         trend_bonus = 0
         if consensus_score >= 7.0: 
             ema200 = latest.get('ema200')
@@ -1241,11 +1248,18 @@ class CryptoBot:
         
         lev_calc = base_lev - vol_penalty + trend_bonus
         
-        # 4. Hard Caps [5x - 20x] or [5x - 25x]
+        # 4. Dynamic Floor Based on Confidence (v9.8.7)
+        # Standard min is 5x. High confidence raises floor to 8x or 10x.
+        floor_lev = 5
+        if consensus_score >= 9.2:
+            floor_lev = 10
+        elif consensus_score >= 8.5:
+            floor_lev = 8
+            
         final_max = 25 if is_aggressive else 20
-        final_lev = max(5, min(final_max, round(lev_calc)))
+        final_lev = max(floor_lev, min(final_max, round(lev_calc)))
         
-        logger.info(f"📐 [Leverage] {symbol} (v9.7.4): AI={ai_lev}, Trust={score_trust:.2f}, Trend={trend_bonus} -> Final={final_lev}x")
+        logger.info(f"📐 [Leverage] {symbol} (v9.8.7): AI={ai_lev}, Trust={score_trust:.2f}, Floor={floor_lev}x -> Final={final_lev}x")
         return final_lev
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
