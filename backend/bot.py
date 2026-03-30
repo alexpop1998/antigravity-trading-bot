@@ -1361,21 +1361,31 @@ class CryptoBot:
                 if current_equity > 0:
                     # --- [UPGRADED] ANTI-PYRAMIDING & DYNAMIC CAP (v9.7.6) ---
                     # --- [UPGRADED] ADAPTIVE ANTI-PYRAMIDING (v10.5) ---
-                    # v10.0 Atomic Check: Fetch FRESH balance specifically for this symbol to avoid racing background sync
+                    # v11.4.1: Atomic Position Check (Bitget V2 / Binance Universal)
                     logger.info(f"🔍 [ATOMIC CHECK] Verifying real-time exchange position for {symbol}...")
                     fresh_bal = await self.exchange.fetch_balance()
-                    raw_positions = fresh_bal.get('info', {}).get('positions', [])
+                    info = fresh_bal.get('info', [])
+                    raw_positions = []
+                    if isinstance(info, list): raw_positions = info
+                    elif isinstance(info, dict): raw_positions = info.get('positions', [])
                     
                     market = self.exchange.markets.get(symbol, {})
                     market_id = market.get('id')
                     
+                    # Bitget V2 uses 'symbol' field in the list, but it's the internal ID
                     matching_position = next((p for p in raw_positions if p.get('symbol') == symbol or p.get('symbol') == market_id), None)
                     
                     # Self-Healing: Trust real-time exchange over local state
-                    is_p_active = matching_position and abs(float(matching_position.get('positionAmt', matching_position.get('amount', 0)))) > 0
-                    if not is_p_active and self.trade_levels.get(symbol):
-                         # Internal state says active but Binance says empty -> Manual closure recovery
-                         logger.warning(f"🔓 [RECOVERY] {symbol} found empty on Binance. Clearing internal state for entry.")
+                    if matching_position:
+                        # Extract amount (positionAmt for Binance, total/amount for Bitget)
+                        amt = float(matching_position.get('positionAmt', 0)) or float(matching_position.get('total', 0)) or float(matching_position.get('amount', 0))
+                        is_p_active = abs(amt) > 0
+                    else:
+                        is_p_active = False
+                    
+                    if not is_p_active and (self.trade_levels.get(symbol) or self.active_positions.get(symbol)):
+                         # Internal state says active but Exchange says empty -> Manual closure recovery
+                         logger.warning(f"🔓 [RECOVERY] {symbol} found empty on exchange. Clearing internal state for entry.")
                          self.trade_levels[symbol] = None
                          self.active_positions[symbol] = None
                     
