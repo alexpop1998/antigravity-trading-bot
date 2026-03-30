@@ -93,18 +93,6 @@ class CryptoBot:
 
         logger.warning(f"🚀 INITIALIZING BOT IN {mode_str} MODE")
         
-        # --- NEW: SHADOW MODE DATA FETCHER (Binance Mainnet for Clean Signals) ---
-        try:
-            self.data_fetcher = ccxt.binanceusdm({
-                'enableRateLimit': True,
-                'options': {'defaultType': 'swap'},
-                'timeout': 10000,
-            })
-            # load_markets() will be called in initialize()
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Shadow Mode Fetcher: {e}")
-            self.data_fetcher = self.exchange
-        
         # Debug: Check if keys are loaded
         if api_key:
             logger.info(f"Using {self.active_exchange_name} API Key: {api_key[:4]}...{api_key[-4:]}")
@@ -154,10 +142,8 @@ class CryptoBot:
         self.notifier = TelegramNotifier()
         self.signal_manager = SignalManager(self)
         
-        # --- SHADOW SCANNER (v9.6) ---
-        # Ensure scanner looks at REAL Mainnet data even on Testnet
-        scan_provider = self.data_fetcher if hasattr(self, 'data_fetcher') else self.exchange
-        self.scanner = AssetScanner(scan_provider)
+        # --- SCANNER (v11.0 Live) ---
+        self.scanner = AssetScanner(self.exchange)
         
         # Resource management
         self.ml_semaphore = asyncio.Semaphore(1) 
@@ -212,17 +198,7 @@ class CryptoBot:
         self.initialized = False
 
     def _get_data_provider(self, symbol):
-        """Returns the data provider (Mainnet or Testnet) for a given symbol."""
-        if hasattr(self, 'data_fetcher') and self.data_fetcher is not None:
-            # Normalize symbol to strip exchange-specific suffixes like :USDT for matching
-            normalized_symbol = symbol.split(':')[0] if ':' in symbol else symbol
-            
-            try:
-                # Check if symbol exists in Mainnet markets (primary or normalized)
-                if symbol in self.data_fetcher.markets or normalized_symbol in self.data_fetcher.markets:
-                    return self.data_fetcher
-            except:
-                pass
+        """Returns the data provider for a given symbol."""
         return self.exchange
 
     async def initialize(self, skip_leverage=False):
@@ -230,73 +206,48 @@ class CryptoBot:
             return
             
         try:
-            logger.info("📡 Loading markets from Binance (Async)...")
+            logger.info(f"📡 Loading markets from {self.active_exchange_name} (Async)...")
             await self.exchange.load_markets()
-            
-            if hasattr(self, 'data_fetcher'):
-                logger.info("🛡️ [Shadow Mode] Loading Real Binance Markets...")
-                await self.data_fetcher.load_markets()
-                mainnet_symbols = list(self.data_fetcher.markets.keys())
-                self.scanner.set_allowed_symbols(mainnet_symbols)
-                logger.info(f"✅ Shadow Mode Active: {len(self.data_fetcher.markets)} real symbols validated and synced with Scanner.")
-                
             logger.info("✅ Markets loaded successfully.")
             
             # --- DYNAMIC SYMBOL BRIDGE ---
-            # Maps human-readable config symbols to exchange-specific ones (e.g. BTC/USDT -> BTCUSDT)
+            # Maps human-readable config symbols to exchange-specific ones
             self.symbols = self._apply_symbol_bridge(self.symbols)
-            
-            # Filter for Shadow Mode (Mainnet check)
-            if hasattr(self, 'data_fetcher'):
-                available = []
-                for s in self.symbols:
-                    if s in self.data_fetcher.markets:
-                        available.append(s)
-                    else:
-                        logger.warning(f"🛡️ [Shadow Mode] Filtering out {s}: Not on Mainnet.")
-                self.symbols = available
-            
-            if not self.symbols:
-                logger.error("❌ NO VALID SYMBOLS FOUND ON THIS EXCHANGE!")
-            
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
-            # --- [FIX] AGGRESSIVE PORTFOLIO ADOPTION (v9.9.2) ---
+            # --- PORTFOLIO ADOPTION (v11.0 Live) ---
             try:
-                logger.info("🏦 [SYNC] Recovering active positions from Binance Balance...")
-                # fetch_balance['info']['positions'] is the most reliable way on Testnet
+                logger.info(f"🏦 [SYNC] Recovering active positions from {self.active_exchange_name} account...")
                 balance_data = await self.exchange.fetch_balance()
-                all_positions = balance_data.get('info', {}).get('positions', [])
+                
+                # Use ccxt unified 'positions' if available, fallback for Binance/Bitget info
+                positions = balance_data.get('positions', [])
+                if not positions and 'info' in balance_data:
+                    info = balance_data['info']
+                    if isinstance(info, list): # Bitget V2 fallback
+                        positions = info
+                    else:
+                        positions = info.get('positions', []) # Binance fallback
+                
                 recovered_count = 0
-                
-                # Pre-fetch market mappings to link ID (CRVUSDT) to Symbol (CRV/USDT:USDT)
-                id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
-                
-                for pos in all_positions:
-                    p_id = pos.get('symbol') # e.g. CRVUSDT
-                    p_amt = float(pos.get('positionAmt', 0))
-                    
+                for pos in positions:
+                    # Logic here targets Bitget/Binance unified balance data
+                    p_amt = float(pos.get('positionAmt', pos.get('total', 0)))
                     if p_amt != 0:
-                        p_notional = abs(float(pos.get('notional', 0)))
-                        # Find the corresponding symbol in exchange markets
-                        full_symbol = id_to_symbol.get(p_id)
+                        p_id = pos.get('symbol', pos.get('instId'))
+                        # Find the corresponding ccxt symbol
+                        full_symbol = next((s for s, m in self.exchange.markets.items() if m['id'] == p_id), None)
                         if full_symbol:
                             side = 'LONG' if p_amt > 0 else 'SHORT'
-                            
-                            # 1. Force add to monitor list if missing
                             if full_symbol not in self.symbols:
-                                logger.warning(f"🛡️ [ADOPTED] Auto-adding {full_symbol} to monitor list (Active position detected)")
                                 self.symbols.append(full_symbol)
-                            
-                            # 2. Update memory
                             self.active_positions[full_symbol] = side
-                            logger.info(f"📦 [RECOVERED] Found {side} position for {full_symbol} (${p_notional:.2f} notional)")
                             recovered_count += 1
                 
                 if recovered_count > 0:
-                    logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions from account balance.")
+                    logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions.")
             except Exception as e:
-                logger.error(f"⚠️ [RECOVERY ERROR] Could not sync positions on startup: {e}")
+                logger.error(f"⚠️ [RECOVERY ERROR] Position sync skipped: {e}")
 
             # --- NEW: Restart Notification (v10.1) ---
             asyncio.create_task(self.notifier.send_message("🚀 *SISTEMA RIAVVIATO*\nIl bot è ora operativo con la configurazione v10.0 Audit."))
@@ -597,13 +548,12 @@ class CryptoBot:
                 # 3. Sentiment & Institutional
                 current_oi, current_ls = 0, 1.0
                 try:
-                    sentiment_api = getattr(self, 'data_fetcher', self.exchange)
+                    sentiment_api = self.exchange
                     oi_data = await sentiment_api.fetch_open_interest(symbol)
                     current_oi = float(oi_data.get('openInterestAmount', 0))
                     
-                    if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true' or hasattr(self, 'data_fetcher'):
-                        ls_data = await sentiment_api.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
-                        current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
+                    ls_data = await sentiment_api.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
+                    current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
                 except: pass
 
                 funding = await provider.fetch_funding_rate(symbol)
@@ -704,10 +654,9 @@ class CryptoBot:
         self.latest_data[symbol]['funding_multiplier'] = funding_multiplier
 
         # --- MAINNET VALIDITY FILTER (SHADOW MODE) ---
-        if hasattr(self, 'data_fetcher') and self.data_fetcher.markets:
-            if symbol not in self.data_fetcher.markets:
-                logger.warning(f"🚫 [Shadow Filter] Ignoring {symbol}: Not present on live Binance Mainnet (Testnet phantom).")
-                return
+        if symbol not in self.exchange.markets:
+            logger.error(f"❌ {symbol} not found on {self.active_exchange_name}!")
+            return
                 
         # --- CONSENSUS ENGINE: Routing signals to SignalManager ---
         if is_technical_signal:
@@ -1098,11 +1047,9 @@ class CryptoBot:
             # Log with exchange_trade_id to prevent duplicates in sync_binance_trades
             # Capture Real Exit Price for Shadow PnL
             real_exit_price = 0.0
-            if hasattr(self, 'data_fetcher'):
-                try:
-                    rt = await self.data_fetcher.fetch_ticker(symbol)
-                    real_exit_price = float(rt.get('last') or rt.get('close') or 0)
-                except: pass
+            # Standard Ticker Path
+            ticker = await self.exchange.fetch_ticker(symbol)
+            real_exit_price = float(ticker.get('last') or ticker.get('close') or 0)
 
             self.db.log_trade(
                 symbol, 
@@ -1872,18 +1819,23 @@ class CryptoBot:
             # 1. Fetch Balance (The ultimate source of truth for all positions on Binance)
             balances = await self.exchange.fetch_balance()
             
-            # 2. Derive active positions from balance info
-            raw_positions = balances.get('info', {}).get('positions', [])
-            active_pos = []
+            # 2. Derive active positions from balance info (Standardized for Bitget/Binance v11.0)
+            all_raw_pos = balances.get('info', {}).get('positions', [])
+            if not all_raw_pos and 'info' in balances:
+                info = balances['info']
+                if isinstance(info, list): # Bitget V2
+                    all_raw_pos = info
+                else:
+                    all_raw_pos = info.get('positions', []) # Binance
             
-            # Pre-fetch market mappings to link ID (CRVUSDT) to Symbol (CRV/USDT:USDT)
+            active_pos = []
             id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
             
-            for p in raw_positions:
-                p_amt = float(p.get('positionAmt', 0))
+            for p in all_raw_pos:
+                # Standardize amount extraction (positionAmt for Binance, total/available for Bitget V2)
+                p_amt = float(p.get('positionAmt', p.get('total', p.get('available', 0))))
                 if p_amt != 0:
-                    # Enrich position data for bot logic
-                    p_id = p.get('symbol')
+                    p_id = p.get('symbol', p.get('instId'))
                     full_symbol = id_to_symbol.get(p_id, p_id)
                     p['symbol'] = full_symbol
                     p['amount'] = p_amt

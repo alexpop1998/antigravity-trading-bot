@@ -32,11 +32,7 @@ class AssetScanner:
             
             for symbol, data in tickers.items():
                 # Filter: Only USDT-M Perpetual Futures
-                if not symbol.endswith(":USDT"):
-                    continue
-                
-                # Filter: Only Mainnet-validated symbols (Shadow Mode)
-                if self.allowed_symbols is not None and symbol not in self.allowed_symbols:
+                if not (symbol.endswith(":USDT") or ":USDT" in symbol):
                     continue
                 
                 if symbol in self.blacklist:
