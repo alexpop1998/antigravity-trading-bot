@@ -298,6 +298,9 @@ class CryptoBot:
             except Exception as e:
                 logger.error(f"⚠️ [RECOVERY ERROR] Could not sync positions on startup: {e}")
 
+            # --- NEW: Restart Notification (v10.1) ---
+            asyncio.create_task(self.notifier.send_message("🚀 *SISTEMA RIAVVIATO*\nIl bot è ora operativo con la configurazione v10.0 Audit."))
+
             # --- [FIX] SYMBOL STATE SYNCHRONIZATION (v9.8.5) ---
             # Migration: Preserve trade memory when symbols are bridged (e.g. HEMI/USDT -> HEMI/USDT:USDT)
             migrated_count = 0
@@ -1554,12 +1557,8 @@ class CryptoBot:
                 order = await self.exchange.create_market_order(symbol, side.lower(), amount_to_buy)
                 logger.info(f"✅ Main order success for {symbol}: {order['id']}")
                 
-                # --- NEW: Enhanced Alert for Gatekeeper (Black Swan) ---
-                if signal_type == "GATEKEEPER":
-                    msg = f"☢️ *URGENT: GATEKEEPER ALERT*\n\n" \
-                          f"Bot has EXECUTED an emergency `{side.upper()}` on `{symbol}` @ `{current_price}`.\n\n" \
-                          f"⚠️ This is a fundamental 'Black Swan' event. Manual monitoring/intervention is highly recommended."
-                    asyncio.create_task(self.notifier.send_message(msg))
+                # Gatekeeper alert removed per user request (v10.1)
+                pass
             
             # --- Continue with Risk Level calculation OUTSIDE the order lock ---
             # 2. Risk Levels based on ATR
