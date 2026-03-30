@@ -89,6 +89,10 @@ class TelegramNotifier:
         asyncio.create_task(self.send_message(msg))
 
     def notify_alert(self, type, title, value=""):
+        # Fail-safe: Silenzio totale per GATEKEEPER richiesto dall'utente (v10.3)
+        if type == "GATEKEEPER":
+            return
+            
         # Traduzione dei tipi di alert
         types_it = {
             "WHALE": "🐳 MOVIMENTO WHALE",
