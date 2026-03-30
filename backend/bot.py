@@ -1148,10 +1148,10 @@ class CryptoBot:
         
         if raw_ai_mod >= 1.5 and leverage > 20:
              clamped_leverage = min(25, leverage)
+             logger.info(f"🔥 [AI LEVERAGE BOOST] Conviction High: Allowing {clamped_leverage}x leverage for {symbol}.")
 
         # RE-CALCULATE amount with final leverage (v9.8.9 Fix)
         amount_to_buy = (adjusted_usdt * clamped_leverage) / current_price
-             logger.info(f"🔥 [AI LEVERAGE BOOST] Conviction High: Allowing {clamped_leverage}x leverage for {symbol}.")
         
         purchasing_power = adjusted_usdt * clamped_leverage
         
