@@ -47,7 +47,11 @@ class SectorManager:
                 # We use nominal value (entry_price * amount)
                 sector_value += float(trade.get('entry_price', 0)) * float(trade.get('amount', 0))
         
-        current_exposure_pct = sector_value / total_balance if total_balance > 0 else 0
+        # v11.4 Safeguard: If balance is tiny, prevent division errors or ghost spikes
+        if total_balance < 1.0: # Minimum account size for risk calc
+            return True # Allow entries if we just started, real sync will follow
+            
+        current_exposure_pct = sector_value / total_balance
         
         if current_exposure_pct >= self.max_sector_exposure:
             logger.warning(f"🚫 [SECTOR LIMIT] {target_sector} exposure ({current_exposure_pct:.1%}) exceeds limit ({self.max_sector_exposure:.1%}). Blocking {symbol}")

@@ -1823,13 +1823,23 @@ class CryptoBot:
             # 1. Fetch Balance (The ultimate source of truth for all positions)
             balances = await self.exchange.fetch_balance()
             
-            # 2. Derive active positions from balance info (Standardized for Bitget V2 / Binance v11.3.1)
+            # 2. Derive active positions from balance info (Standardized for Bitget V2 / Binance v11.4)
             info = balances.get('info', [])
             all_raw_pos = []
+            
             if isinstance(info, list): # Bitget V2
                 all_raw_pos = info
             elif isinstance(info, dict): # Binance
                 all_raw_pos = info.get('positions', [])
+            
+            # v11.4 Bitget Fix: If no positions found in standard fields, try fetching explicitly
+            if self.active_exchange_name == "bitget" and not all_raw_pos:
+                try:
+                    # Bitget CCXT requires symbols list for fetch_positions
+                    raw_bitget_pos = await self.exchange.fetch_positions(self.symbols)
+                    all_raw_pos = [p['info'] for p in raw_bitget_pos if 'info' in p]
+                except Exception as ex:
+                    logger.warning(f"⚠️ [BITGET SYNC] Explicit fetchPositions failed: {ex}")
             
             active_pos = []
             id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
