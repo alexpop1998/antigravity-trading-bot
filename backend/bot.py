@@ -1820,17 +1820,16 @@ class CryptoBot:
     async def _update_account_state(self):
         """Standardizes and updates the current account state (equity, positions, PnL)."""
         try:
-            # 1. Fetch Balance (The ultimate source of truth for all positions on Binance)
+            # 1. Fetch Balance (The ultimate source of truth for all positions)
             balances = await self.exchange.fetch_balance()
             
-            # 2. Derive active positions from balance info (Standardized for Bitget/Binance v11.0)
-            all_raw_pos = balances.get('info', {}).get('positions', [])
-            if not all_raw_pos and 'info' in balances:
-                info = balances['info']
-                if isinstance(info, list): # Bitget V2
-                    all_raw_pos = info
-                else:
-                    all_raw_pos = info.get('positions', []) # Binance
+            # 2. Derive active positions from balance info (Standardized for Bitget V2 / Binance v11.3.1)
+            info = balances.get('info', [])
+            all_raw_pos = []
+            if isinstance(info, list): # Bitget V2
+                all_raw_pos = info
+            elif isinstance(info, dict): # Binance
+                all_raw_pos = info.get('positions', [])
             
             active_pos = []
             id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
