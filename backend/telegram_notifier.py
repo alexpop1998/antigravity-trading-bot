@@ -63,7 +63,7 @@ class TelegramNotifier:
                 emoji = "💰" if pnl >= 0 else "💀"
                 pnl_str = f"PnL: `{pnl:+.2f} USDT`"
                 if pnl_pct is not None:
-                    pnl_str += f" (`{pnl_pct*100:+.2f}% ROE`)"
+                    pnl_str += f" (`{pnl_pct:+.2f}% ROE`)"
             else:
                 emoji = "🏁"
                 pnl_str = ""
