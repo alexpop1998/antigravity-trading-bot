@@ -1407,10 +1407,17 @@ class CryptoBot:
                 if current_equity > 0:
                     # --- [UPGRADED] ANTI-PYRAMIDING & DYNAMIC CAP (v9.7.6) ---
                     # --- [UPGRADED] ADAPTIVE ANTI-PYRAMIDING (v10.5) ---
-                    matching_position = next((p for p in self.latest_account_data.get('positions', []) if p['symbol'] == symbol), None)
+                    # v10.0 Atomic Check: Fetch FRESH balance specifically for this symbol to avoid racing background sync
+                    logger.info(f"🔍 [ATOMIC CHECK] Verifying real-time exchange position for {symbol}...")
+                    fresh_bal = await self.exchange.fetch_balance()
+                    raw_positions = fresh_bal.get('info', {}).get('positions', [])
                     
-                    # Self-Healing: Trust Binance over local state if they disagree
-                    # v10.5 Fix: Using 'positionAmt' for Binance raw positions
+                    market = self.exchange.markets.get(symbol, {})
+                    market_id = market.get('id')
+                    
+                    matching_position = next((p for p in raw_positions if p.get('symbol') == symbol or p.get('symbol') == market_id), None)
+                    
+                    # Self-Healing: Trust real-time exchange over local state
                     is_p_active = matching_position and abs(float(matching_position.get('positionAmt', matching_position.get('amount', 0)))) > 0
                     if not is_p_active and self.trade_levels.get(symbol):
                          # Internal state says active but Binance says empty -> Manual closure recovery
