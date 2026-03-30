@@ -4,7 +4,9 @@ from dotenv import load_dotenv
 import logging
 
 # Load environment
-load_dotenv(override=True)
+base_dir = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(base_dir, "backend", ".env")
+load_dotenv(env_path, override=True)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Liquidator")
 
