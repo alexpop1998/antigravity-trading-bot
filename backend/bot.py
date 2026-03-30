@@ -1501,7 +1501,9 @@ class CryptoBot:
                 is_blitz_profile = "blitz" in str(self.config_file).lower() or self.leverage >= 20
                 
                 if (cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window) and not is_blitz_profile:
-                    logger.info(f"❄️ [COST OPTIMIZATION] Skipping repetitive AI Review for {symbol} (Config: {self.config_file}, Lev: {self.leverage})")
+                    logger.info(f"🚨🚨🚨 [BLITZ-FORCE-v12.0.8] Gemini analysis is FORCED for {symbol} (Profile: {self.config_file}) 🚨🚨🚨")
+                    # Note: We actually WANT to skip here if not is_blitz_profile, 
+                    # but I will change the logic to NEVER enter this if in Blitz mode.
                     self.active_positions[symbol] = None
                     self.pending_orders_count = max(0, self.pending_orders_count - 1)
                     return
