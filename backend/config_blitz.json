@@ -1,0 +1,20 @@
+{
+    "profile_name": "EXTREME Capital Blitz",
+    "trading_parameters": {
+        "timeframe": "15m",
+        "rsi_period": 14,
+        "leverage": 25,
+        "usdt_per_trade": 1000,
+        "percent_per_trade": 25.0,
+        "max_margin_pct": 80.0,
+        "consensus_threshold": 2.0,
+        "gemini_min_confidence": 0.70,
+        "stop_loss_pct": 0.04,
+        "take_profit_pct": 0.15,
+        "max_concurrent_positions": 10,
+        "max_global_margin_ratio": 0.90,
+        "daily_loss_limit": 100.0,
+        "stagnation_max_hours": 2,
+        "stagnation_pnl_threshold": 0.001
+    }
+}
