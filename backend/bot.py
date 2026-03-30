@@ -1712,8 +1712,9 @@ class CryptoBot:
         self.alert_history.insert(0, alert)
         self.alert_history = self.alert_history[:self.max_alerts]
         
-        # Notifica Telegram per avvisi importanti
-        self.notifier.notify_alert(type, title, str(value))
+        # Notifica Telegram per avvisi importanti (Silenziamo GATEKEEPER come richiesto)
+        if type != "GATEKEEPER":
+            self.notifier.notify_alert(type, title, str(value))
 
     async def update_loop(self):
         logger.info("Starting bot market data update loop...")
