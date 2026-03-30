@@ -1494,7 +1494,10 @@ class CryptoBot:
                 # v11.6.1: Startup Audit Bypass - Allow LLM review for everything in the first 5 minutes
                 is_startup_window = (now - self.start_time) < 300
                 
-                if cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window:
+                # v12.0.3: Blitz Mode Bypass - High leverage profiles bypass all cooldowns to ensure maximum reactivity
+                is_blitz_active = self.leverage >= 20
+                
+                if (cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window) and not is_blitz_active:
                     logger.info(f"❄️ [COST OPTIMIZATION] Skipping repetitive AI Review for {symbol}")
                     self.active_positions[symbol] = None
                     self.pending_orders_count = max(0, self.pending_orders_count - 1)
