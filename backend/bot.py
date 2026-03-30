@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import os
 import json
 import time
-from collections import deque
+from collections import deque, defaultdict
 from ml_predictor import MLPredictor
 from database import BotDatabase
 from telegram_notifier import TelegramNotifier
@@ -168,10 +168,10 @@ class CryptoBot:
         self.global_panic_notified = False
         self.symbol_blacklist = set()
         self.initial_wallet_balance = None
-        self.previous_prices: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
+        self.previous_prices: Dict[str, float] = defaultdict(float)
         
         # --- NEW: Time-Domain Lock (DeepSeek Refinement) ---
-        self.hft_locks: Dict[str, float] = {symbol: 0.0 for symbol in self.symbols}
+        self.hft_locks: Dict[str, float] = defaultdict(float)
         
         # v10.4: Hard Session Lockdown Start Time
         self.session_start_time = time.time()
@@ -186,9 +186,9 @@ class CryptoBot:
         self.start_time = self.session_start_time 
         
         # 5-minute rolling window
-        self.price_windows: Dict[str, deque] = {symbol: deque(maxlen=30) for symbol in self.symbols}
+        self.price_windows: Dict[str, deque] = defaultdict(lambda: deque(maxlen=30))
         # 2-minute rolling window for VeloCity Emergency Exit
-        self.price_history_2m: Dict[str, deque] = {symbol: deque(maxlen=12) for symbol in self.symbols}
+        self.price_history_2m: Dict[str, deque] = defaultdict(lambda: deque(maxlen=12))
         
         self.min_leverage = 2
         self.max_leverage = 25
@@ -477,44 +477,40 @@ class CryptoBot:
             mid_price = (best_bid + best_ask) / 2
             bid_depth_1pct = sum(float(bid[1]) for bid in bids if float(bid[0]) >= mid_price * 0.99)
             ask_depth_1pct = sum(float(ask[1]) for ask in asks if float(ask[0]) <= mid_price * 1.01)
-            total_depth_1pct = bid_depth_1pct + ask_depth_1pct
             
-            # --- FLASH & RECOVERY DETECTION (5m Rolling Window) ---
+            # --- [PRIORITY 1] SAFETY AUDIT (v9.8.6) ---
+            # Move SL/TP check to the VERY BEGINNING to protect capital even if analysis crashes
+            self._check_soft_stop_loss(symbol, current_close)
+            
+            # --- [PRIORITY 2] VOLATILITY & VELOCITY (2m Anti-Ruin) ---
             change_5m_pct = 0
             prev_price = self.previous_prices.get(symbol, current_close)
             window = self.price_windows[symbol]
             window.append(current_close)
             
-            # Compare current price to the start of the 5-minute window
             if len(window) >= 2:
                 reference_price = window[0]
                 change_5m_pct = (current_close - reference_price) / reference_price
                 
-                # --- VOL CONFIRMATION CHECK ---
+                # --- [SUB-MODULE] FLASH DETECTION ---
                 current_candle_vol = float(df['volume'].iloc[-1])
                 avg_recent_vol = float(df['volume'].rolling(window=10).mean().iloc[-2]) if len(df) > 10 else 1.0
                 is_high_volume = current_candle_vol > (avg_recent_vol * 1.5)
                 
-                # 1. Detect Flash Event (Dump or Pump) - 1.2% threshold for 5 mins
-                is_event_dump = change_5m_pct < -0.012
-                is_event_pump = change_5m_pct > 0.012
-                
-                if is_event_dump:
+                if change_5m_pct < -0.012:
                     logger.info(f"⚠️ [FLASH] Potential DUMP detected for {symbol} ({change_5m_pct:.2%} in 5m)")
                     asyncio.create_task(self.handle_signal(symbol, "EVENT_DUMP", "sell", weight_modifier=1.0))
-                if is_event_pump:
+                elif change_5m_pct > 0.012:
                     logger.info(f"⚠️ [FLASH] Potential PUMP detected for {symbol} ({change_5m_pct:.2%} in 5m)")
                     asyncio.create_task(self.handle_signal(symbol, "EVENT_PUMP", "buy", weight_modifier=1.0))
-                    
-                # --- VELOCITY EMERGENCY EXIT (2m Anti-Ruin) ---
+
+                # --- [SUB-MODULE] VELOCITY EXIT ---
                 history_2m = self.price_history_2m[symbol]
                 history_2m.append(current_close)
-                if len(history_2m) >= 6: # At least 1 minute of data
+                if len(history_2m) >= 6:
                     ref_2m = history_2m[0]
                     change_2m_pct = (current_close - ref_2m) / ref_2m
                     
-                    # --- [UPGRADED] DYNAMIC SOS THRESHOLD (v9.8.0 - Sniper Resilience) ---
-                    # Floor raised to 1.2% to avoid noise closures at -4/5% ROE
                     atr_val = current_atr if isinstance(current_atr, (int, float)) else (current_close * 0.015)
                     atr_pct = (atr_val / current_close) if current_close > 0 else 0.015
                     sos_threshold = max(0.012, min(0.040, atr_pct * 1.5))
@@ -523,142 +519,72 @@ class CryptoBot:
                     if active_pos:
                         abs_change = abs(change_2m_pct)
                         is_against = (active_pos == 'LONG' and change_2m_pct < 0) or (active_pos == 'SHORT' and change_2m_pct > 0)
-                        
                         if is_against and abs_change > (sos_threshold * 0.7):
                             if abs_change >= (sos_threshold * 1.5):
                                 logger.critical(f"🆘 [HARD VELOCITY EXIT] Closing {active_pos} {symbol}: Panic Spike ({change_2m_pct:.2%}).")
                                 asyncio.create_task(self.close_position(symbol, self.trade_levels[symbol]))
                             else:
-                                logger.warning(f"🗯️ [VOLATILITY ALERT] {symbol} {active_pos} spike ({change_2m_pct:.2%}). Requesting AI Priority Audit.")
-                                self.llm_cooldowns[symbol] = 0 # Force AI review in next cycle
+                                self.llm_cooldowns[symbol] = 0 
                     else:
-                        # --- PROACTIVE VELOCITY ENTRIES ---
-                        # 1. Momentum Entry: Ride the wave if move > 1.2 * SOS threshold
                         if change_2m_pct > (sos_threshold * 1.2):
-                            logger.warning(f"🚀 [VELOCITY MOMENTUM] Potential breakout detected for {symbol} (+{change_2m_pct:.2%})")
                             asyncio.create_task(self.handle_signal(symbol, "VELOCITY_MOMENTUM", "buy", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
                         elif change_2m_pct < -(sos_threshold * 1.2):
-                            logger.warning(f"🚀 [VELOCITY MOMENTUM] Potential breakdown detected for {symbol} (-{change_2m_pct:.2%})")
                             asyncio.create_task(self.handle_signal(symbol, "VELOCITY_MOMENTUM", "sell", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
-                        
-                        # 2. Reversal Entry: Catch the rubber band if extreme overextension + exhaustion
-                        # Requires very high RSI AND a small price reversal in the last few periods
-                        if len(history_2m) >= 4:
-                            prev_move = (history_2m[-2] - history_2m[0]) / history_2m[0]
-                            # Check if current close is starting to reverse from the peak of the move
-                            is_reversing = (current_close < history_2m[-2]) if prev_move > sos_threshold else (current_close > history_2m[-2] if prev_move < -sos_threshold else False)
-                            
-                            if is_reversing and isinstance(current_rsi, (int, float)):
-                                if prev_move > (sos_threshold * 1.5) and current_rsi > 82:
-                                    logger.warning(f"🪃 [VELOCITY REVERSAL] Overextended PUMP detected for {symbol}. RSI={current_rsi}. Shorting rebound.")
-                                    asyncio.create_task(self.handle_signal(symbol, "VELOCITY_REVERSAL", "sell", weight_modifier=1.1, current_price=current_close, ema200=current_ema200))
-                                elif prev_move < -(sos_threshold * 1.5) and current_rsi < 18:
-                                    logger.warning(f"🪃 [VELOCITY REVERSAL] Overextended DUMP detected for {symbol}. RSI={current_rsi}. Longing rebound.")
-                                    asyncio.create_task(self.handle_signal(symbol, "VELOCITY_REVERSAL", "buy", weight_modifier=1.1, current_price=current_close, ema200=current_ema200))
-                    
-                # 2. Detect V-Shape Recovery (Absorption)
-                if is_event_dump and current_rsi < 28: # Slightly relaxed RSI for recovery
-                    # Price is starting to tick up from the bottom of the move with Volume Confirmation
-                    if current_close > prev_price and is_high_volume:
-                        logger.warning(f"🛡️ [RE-ABSORPTION] RECOVERY LONG for {symbol} after {change_5m_pct:.2%} drop!")
-                        asyncio.create_task(self.handle_signal(symbol, "RECOVERY", "buy", weight_modifier=1.0, is_black_swan=True, current_price=current_close, ema200=current_ema200))
-                
-                elif is_event_pump and current_rsi > 72:
-                    # Price is starting to tick down from the top of the pump with Volume Confirmation
-                    if current_close < prev_price and is_high_volume:
-                        logger.warning(f"🛡️ [REJECTION] REJECTION SHORT for {symbol} after {change_5m_pct:.2%} pump!")
-                        asyncio.create_task(self.handle_signal(symbol, "REJECTION", "sell", weight_modifier=1.0, is_black_swan=True, current_price=current_close, ema200=current_ema200))
 
-            # Store current price for next cycle velocity tracking
+            # Store price for next cycle
             self.previous_prices[symbol] = current_close
 
-            provider = self._get_data_provider(symbol)
-            ticker = await provider.fetch_ticker(symbol)
-            # 24h Volume Guard (USD or Quote Currency)
-            quote_volume = float(ticker.get('quoteVolume', 0))
-            
-            # Optimize: Only re-train/predict every 30 minutes to save CPU, and only one at a time
-            import time
-            current_time = time.time()
-            if current_time - self.ml_cooldowns.get(symbol, 0) > 1800: # 30 minutes
-                try:
-                    async with self.ml_semaphore:
-                        # ML predictor is still sync, keep to_thread for it
-                        predicted_price = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
-                except Exception as mle:
-                    logger.error(f"⚠️ ML Training failed for {symbol}: {mle}")
-                    predicted_price = "ML Error"
-                self.ml_cooldowns[symbol] = current_time
-            else:
-                # Use cached prediction if available, safely
-                predicted_price = self.latest_data[symbol].get('prediction', "Syncing ML...") if symbol in self.latest_data else "Syncing..."
-            
-            # --- INSTITUTIONAL DATA FETCH (OI & L/S Ratio) ---
-            current_oi = 0
-            current_ls = 1.0
+            # --- [PRIORITY 3] ENRICHED ANALYSIS (Wrapped to prevent stalling) ---
             try:
-                # Force Mainnet provider for sentiment in Shadow Mode to avoid testnet -4108 errors
-                sentiment_api = getattr(self, 'data_fetcher', self.exchange)
+                # 1. Ticker Data
+                provider = self._get_data_provider(symbol)
+                ticker = await provider.fetch_ticker(symbol)
+                quote_volume = float(ticker.get('quoteVolume', 0))
                 
-                oi_data = await sentiment_api.fetch_open_interest(symbol)
-                current_oi = float(oi_data.get('openInterestAmount', 0))
-                
-                # Global Account L/S Ratio (5m) - Use production fallback if in shadow mode
-                if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true' or hasattr(self, 'data_fetcher'):
-                    # Ensure we use the best available provider for LS ratio
-                    ls_data = await sentiment_api.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
-                    current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
-            except Exception as se:
-                # Silence the specific -4108 error which is common noise on Binance Testnet
-                if "-4108" in str(se):
-                    logger.debug(f"🤫 Sentiment fetch skipped for {symbol} (Testnet pre-trading/maintenance)")
+                # 2. ML Prediction (Cooldowned)
+                current_time = time.time()
+                if current_time - self.ml_cooldowns.get(symbol, 0) > 1800:
+                    try:
+                        async with self.ml_semaphore:
+                            predicted_price = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
+                    except Exception as mle:
+                        logger.error(f"⚠️ ML Training failed for {symbol}: {mle}")
+                        predicted_price = "ML Error"
+                    self.ml_cooldowns[symbol] = current_time
                 else:
-                    logger.error(f"⚠️ Sentiment fetch limited for {symbol}: {se}")
+                    predicted_price = self.latest_data.get(symbol, {}).get('prediction', "Syncing...")
 
-            # --- FUNDING RATE FETCH ---
-            provider = self._get_data_provider(symbol)
-            funding = await provider.fetch_funding_rate(symbol)
-            funding_rate = float(funding.get('fundingRate', 0))
-            
-            self.latest_data[symbol] = {
-                'price': current_close,
-                'change': ticker['change'] if ticker['change'] is not None else (current_close - prev_close),
-                'changePercent': ticker['percentage'] if ticker['percentage'] is not None else (((current_close - prev_close) / prev_close) * 100),
-                'rsi': round(current_rsi, 2) if not pd.isna(current_rsi) else "N/A",
-                'macd': round(current_macd, 4) if not pd.isna(current_macd) else "N/A",
-                'macd_hist': round(current_macd_hist, 4) if not pd.isna(current_macd_hist) else "N/A",
-                'bb_upper': round(current_bb_upper, 4) if not pd.isna(current_bb_upper) else "N/A",
-                'bb_lower': round(current_bb_lower, 4) if not pd.isna(current_bb_lower) else "N/A",
-                'imbalance': round(imbalance, 2),
-                'spread_pct': round(spread_pct * 100, 4), # Percentage for AI readability
-                'liquidity_depth': round(total_depth_1pct, 2), 
-                'atr': round(current_atr, 6) if not pd.isna(current_atr) else "N/A",
-                'ema200': round(current_ema200, 4) if not pd.isna(current_ema200) else "N/A",
-                'volume24h': quote_volume,
-                'funding_rate': funding_rate,
-                'open_interest': current_oi,
-                'ls_ratio': current_ls,
-                'prediction': predicted_price if predicted_price else "Syncing ML..."
-            }
-            
-            # --- SENTIMENT SIGNAL GENERATION ---
-            try:
-                # 1. OI Expansion (More participation)
-                prev_oi = self.latest_data[symbol].get('open_interest', 0) if symbol in self.latest_data else 0
-                oi_delta = (current_oi - prev_oi) / prev_oi if prev_oi > 0 else 0
-                
-                # 2. Bullish Confluence: Price up + OI up + L/S not extreme
-                if change_5m_pct > 0.005 and oi_delta > 0.005 and current_ls < 1.3:
-                    asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "buy", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
-                # 3. Bearish Confluence: Price down + OI up + L/S not extreme
-                elif change_5m_pct < -0.005 and oi_delta > 0.005 and current_ls > 0.7:
-                    asyncio.create_task(self.handle_signal(symbol, "SENTIMENT", "sell", weight_modifier=1.2, current_price=current_close, ema200=current_ema200))
+                # 3. Sentiment & Institutional
+                current_oi, current_ls = 0, 1.0
+                try:
+                    sentiment_api = getattr(self, 'data_fetcher', self.exchange)
+                    oi_data = await sentiment_api.fetch_open_interest(symbol)
+                    current_oi = float(oi_data.get('openInterestAmount', 0))
+                    
+                    if not os.getenv('BINANCE_SANDBOX', 'false').lower() == 'true' or hasattr(self, 'data_fetcher'):
+                        ls_data = await sentiment_api.fapiDataGetGlobalLongShortAccountRatio({'symbol': symbol.replace('/', '').split(':')[0], 'period': '5m', 'limit': 1})
+                        current_ls = float(ls_data[0]['longShortRatio']) if ls_data else 1.0
+                except: pass
 
-                self._check_soft_stop_loss(symbol, current_close)
+                funding = await provider.fetch_funding_rate(symbol)
+                funding_rate = float(funding.get('fundingRate', 0))
+
+                # Update latest data record
+                self.latest_data[symbol] = {
+                    'price': current_close,
+                    'rsi': round(current_rsi, 2) if not pd.isna(current_rsi) else "N/A",
+                    'prediction': predicted_price,
+                    'imbalance': round(imbalance, 2),
+                    'volume24h': quote_volume,
+                    'funding_rate': funding_rate,
+                    'open_interest': current_oi,
+                    'ls_ratio': current_ls
+                }
+
+                # 4. Final Strategy Audit
                 self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx, mtf_context, change_5m_pct)
-                
             except Exception as e:
-                logger.error(f"Error analyzing {symbol}: {e}")
+                logger.error(f"⚠️ Analysis Module failed for {symbol}: {e}")
                 
         except Exception as e:
             logger.error(f"FATAL error profiling {symbol}: {e}")
