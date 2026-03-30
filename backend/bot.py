@@ -1363,7 +1363,7 @@ class CryptoBot:
                     # --- [UPGRADED] ADAPTIVE ANTI-PYRAMIDING (v10.5) ---
                 
                 # v11.5: LIQUIDITY GUARD - Check spread for listings and high-risk entries
-                if signal_type == "NEW_LISTING" or is_black_swan:
+                if signal_type == "NEW_LISTING" or (isinstance(is_black_swan, bool) and is_black_swan):
                     try:
                         orderbook = await self.exchange.fetch_order_book(symbol, limit=5)
                         bids = orderbook['bids']
@@ -1477,7 +1477,10 @@ class CryptoBot:
                 # Cooldown Duration: 300s (5m) for standard, 900s (15m) for recent REJECTs
                 cooldown_active = (now - last_review) < 300 if last_review > 0 else False
                 
-                if cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip:
+                # v11.6.1: Startup Audit Bypass - Allow LLM review for everything in the first 5 minutes
+                is_startup_window = (now - self.start_time) < 300
+                
+                if cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window:
                     logger.info(f"❄️ [COST OPTIMIZATION] Skipping repetitive AI Review for {symbol}")
                     self.active_positions[symbol] = None
                     self.pending_orders_count = max(0, self.pending_orders_count - 1)
