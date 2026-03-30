@@ -80,8 +80,8 @@ class LLMAnalyst:
             
             --- MISSIONE SNIPER ---
             Sei un Cecchino Istituzionale. Non aver paura delle monete meno capitalizzate, ma esigi prove schiaccianti:
-            1. Per monete a bassa capitalizzazione/volume: Richiedi CONVINCENZA > 0.95.
-            2. Per le Major (BTC, ETH, SOL): Richiedi CONVINCENZA > 0.85.
+            1. Per monete a bassa capitalizzazione/volume: Richiedi CONVINCENZA > 0.80.
+            2. Per le Major (BTC, ETH, SOL): Richiedi CONVINCENZA > 0.80.
             3. ANALISI OVEREXTENSION: Non entrare mai LONG se il prezzo è troppo lontano dalla EMA200 o se l'RSI è già in ipercomprato estremo (>75).
             
             DEVI SEGUIRE QUESTO PROCESSO LOGICO (Chain-of-Thought):
