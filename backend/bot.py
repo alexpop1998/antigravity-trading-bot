@@ -261,27 +261,38 @@ class CryptoBot:
             
             logger.info(f"🎯 Validated {len(self.symbols)} active symbols.")
             
-            # --- [FIX] REAL-TIME POSITION RECOVERY (v9.9.0) ---
+            # --- [FIX] AGGRESSIVE POSITION RECOVERY (v9.9.1) ---
             try:
                 logger.info("🏦 [SYNC] Recovering active positions from Binance...")
-                # Fetch positions with float values for comparison
                 all_positions = await self.exchange.fetch_positions()
                 recovered_count = 0
+                
+                # Pre-fetch market mappings to link ID (CRVUSDT) to Symbol (CRV/USDT:USDT)
+                id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
+                
                 for pos in all_positions:
-                    p_symbol = pos.get('symbol')
+                    p_id = pos.get('symbol') # e.g. CRVUSDT
                     p_amt = float(pos.get('positionAmt', 0))
                     p_notional = abs(float(pos.get('notional', 0)))
                     
                     if p_amt != 0:
-                        # Normalize symbol for matching if needed
-                        match_symbol = next((s for s in self.symbols if s == p_symbol or s.split(':')[0] == p_symbol), None)
-                        if match_symbol:
+                        # Find the corresponding symbol in exchange markets
+                        full_symbol = id_to_symbol.get(p_id)
+                        if full_symbol:
                             side = 'LONG' if p_amt > 0 else 'SHORT'
-                            self.active_positions[match_symbol] = side
-                            logger.info(f"📦 [RECOVERED] Found {side} position for {match_symbol} (${p_notional:.2f} notional)")
+                            
+                            # 1. Force add to monitor list if missing
+                            if full_symbol not in self.symbols:
+                                logger.warning(f"🛡️ [ADOPTED] Auto-adding {full_symbol} to monitor list (Active position detected)")
+                                self.symbols.append(full_symbol)
+                            
+                            # 2. Update memory
+                            self.active_positions[full_symbol] = side
+                            logger.info(f"📦 [RECOVERED] Found {side} position for {full_symbol} (${p_notional:.2f} notional)")
                             recovered_count += 1
+                
                 if recovered_count > 0:
-                    logger.warning(f"✅ [RECOVERY] Successfully synced {recovered_count} active positions from account.")
+                    logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions from account.")
             except Exception as e:
                 logger.error(f"⚠️ [RECOVERY ERROR] Could not sync positions on startup: {e}")
 
