@@ -2126,7 +2126,10 @@ class CryptoBot:
         """Emergency function to close every single open position immediately."""
         try:
             logger.warning("🛡️ Starting Emergency Cleanup of ALL positions...")
-            positions = await self.exchange.fetch_positions()
+            if self.active_exchange_name == "bitget":
+                positions = await self.exchange.fetch_positions(self.symbols)
+            else:
+                positions = await self.exchange.fetch_positions()
             active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
             
             for pos in active_pos:
@@ -2247,7 +2250,10 @@ class CryptoBot:
         If a position is found on exchange but NOT in trade_levels, it re-initializes it.
         """
         try:
-            positions = await self.exchange.fetch_positions()
+            if self.active_exchange_name == "bitget":
+                positions = await self.exchange.fetch_positions(self.symbols)
+            else:
+                positions = await self.exchange.fetch_positions()
             active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
             
             for pos in active_pos:
