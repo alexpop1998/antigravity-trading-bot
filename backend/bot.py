@@ -25,6 +25,7 @@ from ai_parameter_optimizer import AIParameterOptimizer
 load_dotenv(override=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("TradingBot")
 class CryptoBot:
     def __init__(self, config_file=None, profile=None):
         # Load SaaS Client Risk Profiles
