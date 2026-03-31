@@ -2107,10 +2107,9 @@ class CryptoBot:
                 # Use the worse of the two for the circuit breaker
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
 
-
-                # --- NEW: CAPITAL RESET DETECTION (v15.4) ---
+                # --- NEW: CAPITAL RESET DETECTION (v15.5) ---
                 # Detect and fix stale 'initial_balance' data if the difference is >15% and NO positions are open.
-                # v15.4: Reset at 15% for better reactivity on small accounts
+                # v15.5: Reset AT START OF EVALUATION to prevent false CB LOCK
                 if abs(effective_pnl_pct) >= 0.15 and not active_pos and (time.time() - self.start_time) < 600:
                      logger.warning(f"🔄 [CAPITAL RESET] Major balance shift from ${self.initial_wallet_balance:.2f} to ${wallet_balance:.2f} with zero positions. Syncing benchmark.")
                      self.initial_wallet_balance = wallet_balance
@@ -2119,6 +2118,8 @@ class CryptoBot:
                      wallet_pnl_pct = 0
                      equity_pnl_pct = 0
                      effective_pnl_pct = 0
+
+
 
 
                 # --- NEW: STARTUP PROTECTION SHIELD (v4.2) ---
