@@ -1639,7 +1639,7 @@ class CryptoBot:
                 sl_distance  = max(current_price * 0.015, current_atr * 3.0) # Min 1.5% or 3x ATR
                 tp1_distance = max(current_price * 0.020, current_atr * 5.0) # Min 2.0% or 5x ATR
                 tp2_distance = max(current_price * 0.050, current_atr * 10.0)
-                  else:
+            else:
                 # --- NEW: PROFILE-AWARE DYNAMIC RISK MATRIX (v14.5) ---
                 # Default multipliers by profile
                 p_matrix = {
@@ -1683,11 +1683,6 @@ class CryptoBot:
 
                 # v12.0.2: [BLITZ SURVIVAL] Hard safety cap for high-leverage positions (>= 20x)
                 if self.leverage >= 20:
-                    max_sl_dist = current_price * 0.018 # Hard cap at 1.8%
-                    if sl_distance > max_sl_dist:
-                         logger.warning(f"🛡️ [BLITZ CAP] Reducing too-wide SL for {symbol} from {sl_distance/current_price:.2%} to 1.80% (Survival Cap).")
-                         sl_distance = max_sl_dist
-       if self.leverage >= 20:
                     max_sl_dist = current_price * 0.018 # Hard cap at 1.8%
                     if sl_distance > max_sl_dist:
                          logger.warning(f"🛡️ [BLITZ CAP] Reducing too-wide SL for {symbol} from {sl_distance/current_price:.2%} to 1.80% (Survival Cap).")
@@ -1738,8 +1733,9 @@ class CryptoBot:
             self.trade_levels[symbol] = {
                 'side': 'buy' if is_long else 'sell',
                 'entry_price': current_price,
-                'real_entry_price': real_entry_price, # STORE REAL ENTRY
-                'open_time': time.time(), # v10.0: Stagnation Shield support
+                'real_entry_price': real_entry_price, 
+                'open_time': time.time(), 
+                'opened_at': time.time(),
                 'sl': sl_price,
                 'sl_distance': sl_distance,
                 'tp1': tp1_price,
@@ -1749,18 +1745,13 @@ class CryptoBot:
                 'is_black_swan': is_black_swan,
                 'signal_type': signal_type,
                 'snapshot_id': snapshot_id,
-                'profile_type': self.profile_type # v15.1: Profile Context for Adaptation
-            }
-            
-            # Persist updated levels
-            self.db.save_state("trade_levels", self.trade_levels)
-                'opened_at': time.time(),
+                'profile_type': self.profile_type,
                 'trailing_delayed': True if signal_type == "GATEKEEPER" else False,
                 'highest_price': current_price if is_long else 0,
                 'lowest_price': current_price if not is_long else 0,
-                'ai_tp_price': ai_tp_price,
-                'snapshot_id': snapshot_id
+                'ai_tp_price': ai_tp_price if 'ai_tp_price' in locals() else tp1_price
             }
+            
             # Save and Log
             self.db.save_state("trade_levels", self.trade_levels)
             self.notifier.notify_trade(symbol, side.upper(), current_price, amount_to_buy, "CONSENSUS_HIT")
