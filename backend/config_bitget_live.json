@@ -1,5 +1,6 @@
 {
     "profile_name": "BITGET LIVE Sniper",
+    "profile_type": "aggressive",
     "trading_parameters": {
         "timeframe": "15m",
         "rsi_period": 14,
@@ -21,5 +22,18 @@
         "daily_loss_limit": 2.0,
         "stagnation_max_hours": 3,
         "stagnation_pnl_threshold": 0.005
+    },
+    "strategic_params": {
+        "llm_cooldown_seconds": 300,
+        "llm_cooldown_bypass": false,
+        "startup_shield_seconds": 300,
+        "news_shield_seconds": 600,
+        "min_notional_usdt": 10.0,
+        "leverage_range": [5, 20]
+    },
+    "ai_prompts": {
+        "llm_philosophy": "--- MISSIONE BITGET SNIPER ---\nSei un Cecchino di Volumi. Cerchi trade rapidi su asset con liquidità elevata. Non esitare se il setup tecnico è solido e il volume supporta il breakout.\nREGOLE:\n1. Liquidità: Entra solo se il book è profondo.\n2. Esecuzione: Sii rapido e preciso.\n3. Rischio: Rispetta gli stop loss stretti.",
+        "llm_temperature": 0.5
     }
 }
+

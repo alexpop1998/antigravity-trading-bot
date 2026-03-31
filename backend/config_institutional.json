@@ -21,6 +21,8 @@
         "min_volume_24h": 10000000.0,
         "rsi_buy_level": 25,
         "rsi_sell_level": 75,
+        "trend_penalty_enabled": true,
+        "technical_confluence_mode": "strict",
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.06,
         "max_concurrent_positions": 5,
@@ -29,5 +31,18 @@
         "panic_drawdown_threshold": 0.05,
         "breakeven_pct": 0.010,
         "be_trigger_pct": 0.010
+    },
+    "strategic_params": {
+        "llm_cooldown_seconds": 1800,
+        "llm_cooldown_bypass": false,
+        "startup_shield_seconds": 600,
+        "news_shield_seconds": 1200,
+        "min_notional_usdt": 50.0,
+        "leverage_range": [1, 5]
+    },
+    "ai_prompts": {
+        "llm_philosophy": "--- MISSIONE INSTITUTIONAL : LA FORTEZZA ---\nAgisci come un Risk Manager di un Hedge Fund Istituzionale. Il tuo obiettivo primario è la conservazione del capitale. Devi essere estremamente selettivo.\nREGOLE:\n1. Trend (EMA200): Il prezzo deve essere chiaramente sopra (Long) o sotto (Short) con una pendenza consolidata. Niente ranging.\n2. Volatilità (ATR): Rifiuta segnali con ATR in forte espansione (>15% nelle ultime 4h).\n3. Consenso: Il punteggio di consenso deve essere alto (>6/10).\n4. Decisione: Approva solo se il setup è 'perfetto'. Se hai il minimo dubbio, RIFIUTA.",
+        "llm_temperature": 0.1
     }
 }
+

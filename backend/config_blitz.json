@@ -1,6 +1,6 @@
 {
     "profile_name": "BLITZ - Hybrid Aggressive/Extreme",
-    "profile_type": "aggressive",
+    "profile_type": "blitz",
     "trading_parameters": {
         "symbols": [
             "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
@@ -16,7 +16,7 @@
         "percent_per_trade": 50.0,
         "max_margin_pct": 52.0,
         "consensus_threshold": 1.5,
-        "gemini_min_confidence": 0.6,
+        "gemini_min_confidence": 0.60,
         "adx_threshold": 15,
         "ema_trend_filter": false,
         "min_volume_24h": 1000000.0,
@@ -32,5 +32,17 @@
         "panic_drawdown_threshold": 0.25,
         "breakeven_pct": 0.005,
         "be_trigger_pct": 0.005
+    },
+    "strategic_params": {
+        "llm_cooldown_seconds": 0,
+        "llm_cooldown_bypass": true,
+        "startup_shield_seconds": 0,
+        "news_shield_seconds": 0,
+        "min_notional_usdt": 5.0,
+        "leverage_range": [5, 25]
+    },
+    "ai_prompts": {
+        "llm_philosophy": "--- MISSIONE BLITZ : HIGH SPEED ATTACK ---\nSei un Predatore di Ultra-Momentum. Il tuo obiettivo è capitalizzare su segnali esplosivi ignorando ogni prudenza. Se vedi volume e direzione, APPROVA.\nREGOLE:\n1. Velocità: Non aspettare conferme multiple. Se il momentum è chiaro, entra.\n2. Volatilità: Accetta candele ampie e spread volatili.\n3. Decisione: Approva se vedi una chiara spinta di prezzo. Ignora RSI estremi (fino a 85/15).",
+        "llm_temperature": 0.9
     }
 }

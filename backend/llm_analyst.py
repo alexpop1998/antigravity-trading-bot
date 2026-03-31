@@ -66,49 +66,16 @@ class LLMAnalyst:
             else:
                 memory_context += "Nessun trade registrato nelle ultime 24 ore.\n"
 
-            # --- DYNAMIC PROFILE PROMPTS (v14.5) ---
+            # --- DYNAMIC PROFILE PROMPTS (v17.0) ---
             profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            
-            prompts = {
-                "institutional": """--- MISSIONE INSTITUTIONAL : LA FORTEZZA ---
-                    Agisci come un Risk Manager di un Hedge Fund Istituzionale. Il tuo obiettivo primario è la conservazione del capitale. Devi essere estremamente selettivo. 
-                    REGOLE:
-                    1. Trend (EMA200): Il prezzo deve essere chiaramente sopra (Long) o sotto (Short) con una pendenza consolidata. Niente ranging.
-                    2. Volatilità (ATR): Rifiuta segnali con ATR in forte espansione (>15% nelle ultime 4h). La stabilità è prioritaria.
-                    3. Consenso: Il punteggio di consenso è alto (>6/10). Assicurati che ci sia convergenza tra Macro e Tecnico.
-                    4. Decisione: Approva solo se il setup è 'perfetto'. Se hai anche il minimo dubbio, RIFIUTA. 
-                    5. Leva: Tendi sempre verso il minimo consentito (1x-2x) a meno che il trend non sia eccezionalmente forte.""",
-                
-                "conservative": """--- MISSIONE CONSERVATIVE : CRESCITA STABILE ---
-                    Sei un Trader Professionista con un focus sulla gestione del rischio. Cerchi opportunità con un buon rapporto rischio/rendimento.
-                    REGOLE:
-                    1. Momentum: Il MACD è incrociato e istogramma in espansione? Il volume supporta il movimento?
-                    2. Contesto: Il prezzo rispetta i livelli chiave (supporto/resistenza)?
-                    3. AI Predictor: Qual è la probabilità di direzione del ML? Se è >60%, dai più peso.
-                    4. Leva: Scegli la leva in base alla forza del trend. Usa leva più alta (6x-8x) solo se il momentum è forte e i volumi sono sopra la media del 20%.""",
-                
-                "aggressive": """--- MISSIONE AGGRESSIVE : PREDATORE BLITZ ---
-                    Sei un Predatore di Momentum. Il tuo unico obiettivo è cavalcare le onde di volatilità per generare profitti rapidi. 
-                    Ignora metriche conservative come RSI > 70 – per te, RSI alto è sinonimo di FORZA e momentum consolidato.
-                    REGOLE:
-                    1. Volume: Il volume è in aumento? Non esigere esplosioni 2x.
-                    2. Velocità Prezzo: Il prezzo si sta muovendo con forza? 
-                    3. AI Predictor: Se il ML Predictor dà alta confidenza, è un GREEN LIGHT.
-                    4. REGOLA DELLA MAGGIORANZA: Ignora i conflitti tra indicatori. Se almeno 2 indicatori tecnici su 4 supportano la direzione, APPROVA. Non cercare la perfezione; cattura il movimento.
-                    5. Esecuzione: Se il trend è chiaro, APPROVA. Usa leva e strength audaci per capitalizzare.""",
-                
-                "extreme": """--- MISSIONE EXTREME : HIGH STAKES ---
-                    Sei un Trader d'Assalto con massima tolleranza al rischio. Hai un conto piccolo e cerchi il salto di capitale immediato.
-                    Il tuo obiettivo è la frequenza di esecuzione alta: non scartare trade per dubbi minori.
-                    REGOLE:
-                    1. Catalizzatore: C'è volatilità, una rottura di livello o volume interessante?
-                    2. Struttura: Ogni breakout è una potenziale entrata. 
-                    3. Decisione: Se vedi un movimento in atto, APPROVA immediatamente senza esitazione. Meglio rischiare un'entrata rapida che perdere il treno.
-                    4. Leva & Forza: Massimizza i parametri. Ogni trade deve essere un colpo secco alla giugulare del mercato."""
-            }
-            
-            active_profile_prompt = prompts.get(profile_type, prompts["aggressive"])
+            ai_prompts = getattr(self.bot.risk_profile, 'ai_prompts', {})
+            active_profile_prompt = ai_prompts.get("llm_philosophy", "Focus on high-conviction technical alignment.")
 
+            # --- ANTI-BIAS NOTE (Dynamic) ---
+            bias_note = ""
+            if profile_type in ["aggressive", "extreme", "blitz"]:
+                bias_note = "❗ NOTA CRITICA (ANTI-BIAS): Ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto. Non farti frenare dalle perdite precedenti; il tuo compito è catturare il prossimo movimento."
+            
             prompt = f"""
             Sei l'Analista Strategico di un Hedge Fund AI. Devi decidere se approvare un'operazione di trading ad alta frequenza.
             
@@ -128,7 +95,7 @@ class LLMAnalyst:
             Past Performance: {memory_context}
             Audit Lessons: {self.lessons_learned}
             
-            ❗ NOTA CRITICA (ANTI-BIAS): Se il profilo è AGGRESSIVE o EXTREME, ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto. Non farti frenare dalle perdite precedenti; il tuo compito è catturare il prossimo movimento.
+            {bias_note}
             
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{
@@ -146,9 +113,8 @@ class LLMAnalyst:
             }}
             """
 
-            # --- DYNAMIC TEMPERATURE (v16.2) ---
-            temp_map = {"institutional": 0.1, "conservative": 0.3, "aggressive": 0.7, "extreme": 0.8}
-            active_temp = temp_map.get(profile_type, 0.5)
+            # --- DYNAMIC TEMPERATURE (v17.0) ---
+            active_temp = float(ai_prompts.get("llm_temperature", 0.5))
             
             async with self.semaphore:
                 response = await self.ai_client.chat.completions.create(
@@ -234,15 +200,10 @@ class LLMAnalyst:
             return "HOLD", 0, "No AI Client"
 
         try:
-            # --- DYNAMIC MONITORING PHILOSOPHY (v14.6) ---
+            # --- DYNAMIC MONITORING PHILOSOPHY (v17.0) ---
             profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            philosophies = {
-                "institutional": "Sei ultra-prudente. Se vedi debolezza o perdita di trend EMA200, chiudi subito. Non inseguire profitti incerti.",
-                "conservative": "Punta alla stabilità. Se siamo in profitto (TP1 preso), cerca motivi per chiudere se la volatilità sale.",
-                "aggressive": "Sii un predatore. Mantieni finché il momentum è a favore. Accetta ritracciamenti tecnici.",
-                "extreme": "All-in o niente. Mantieni per il colpo grosso (TP2) a meno di inversione strutturale violenta."
-            }
-            philosophy = philosophies.get(profile_type, philosophies["aggressive"])
+            ai_prompts = getattr(self.bot.risk_profile, 'ai_prompts', {})
+            philosophy = ai_prompts.get("llm_philosophy", "Monitor standard indicators.")
 
             prompt = f"""
             Sei l'Analista di Rischio di un Hedge Fund AI. Modalità operativa: {profile_type.upper()}.
@@ -263,7 +224,6 @@ class LLMAnalyst:
             4. CLOSE: Chiudi tutto ora.
             
             REGOLE SPECIFICHE {profile_type.upper()}:
-            - {philosophy}
             - Abbiamo uno Stop Loss e un Trailing che ci proteggono, ma il tuo intervento 'manuale' è richiesto se i segnali tecnici deteriorano.
             
             RISPONDI JSON: {{ "technical_status": "sintesi", "action": "HOLD/SCALE_OUT/PIVOT/CLOSE", "confidence": 0-1, "reasoning": "max 15 parole" }}

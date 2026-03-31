@@ -76,7 +76,17 @@ class CryptoBot:
         self.trend_penalty_enabled = bool(params.get("trend_penalty_enabled", True))
         self.technical_confluence_mode = str(params.get("technical_confluence_mode", "strict")).lower()
         
+        # --- NEW: DYNAMIC STRATEGIC PARAMETERS (v17.0) ---
+        strat_params = self.risk_profile.get("strategic_params", {})
+        self.llm_cooldown_seconds = int(strat_params.get("llm_cooldown_seconds", 300))
+        self.llm_cooldown_bypass = bool(strat_params.get("llm_cooldown_bypass", False))
+        self.startup_shield_seconds = int(strat_params.get("startup_shield_seconds", 300))
+        self.news_shield_seconds = int(strat_params.get("news_shield_seconds", 600))
+        self.min_notional_usdt = float(strat_params.get("min_notional_usdt", 5.0))
+        self.leverage_range = strat_params.get("leverage_range", [5, 20])
+        
         logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()} (Penalty: {self.trend_penalty_enabled}, Confluence: {self.technical_confluence_mode.upper()})")
+        logger.info(f"⚙️ [STRATEGY] Cooldown: {self.llm_cooldown_seconds}s, Bypass: {self.llm_cooldown_bypass}, Shield: {self.startup_shield_seconds}s, Min Notional: ${self.min_notional_usdt}")
         
         # Select active exchange from environment
         self.active_exchange_name = os.getenv("ACTIVE_EXCHANGE", "binance").lower()
@@ -1230,11 +1240,13 @@ class CryptoBot:
              return 0.0
 
         # --- DYNAMIC LEVERAGE CLAMP ---
-        # Standard range 5x - 20x as requested
-        clamped_leverage = max(5, min(25 if is_aggressive else 20, leverage))
+        # Using dynamic leverage range from config
+        min_lev = self.leverage_range[0]
+        max_lev = self.leverage_range[1]
+        clamped_leverage = max(min_lev, min(max_lev, leverage))
         
-        if raw_ai_mod >= 1.5 and leverage > 20:
-             clamped_leverage = min(25, leverage)
+        if raw_ai_mod >= 1.5 and leverage > max_lev:
+             clamped_leverage = min(max_lev, leverage)
              logger.info(f"🔥 [AI LEVERAGE BOOST] Conviction High: Allowing {clamped_leverage}x leverage for {symbol}.")
 
         # --- [FIX] PORTFOLIO-AWARE SIZING (v9.9.0) ---
@@ -1271,8 +1283,8 @@ class CryptoBot:
         
         purchasing_power = adjusted_usdt * clamped_leverage
         
-        if purchasing_power < 5.0:
-            purchasing_power = 5.0
+        if purchasing_power < self.min_notional_usdt:
+            purchasing_power = self.min_notional_usdt
 
 
             
@@ -1366,24 +1378,23 @@ class CryptoBot:
         lev_calc = base_lev - vol_penalty + trend_bonus
         
         # 4. Dynamic Floor Based on Confidence (v13.0 Aggressive)
-        # Standard min is 5x. Aggressive raises floor to 10x.
-        floor_lev = 10 if is_aggressive else 5
+        # Using profile-defined leverage range
+        floor_lev = self.leverage_range[0]
         if not is_aggressive:
             if consensus_score >= 9.2:
-                floor_lev = 10
+                floor_lev = max(floor_lev, 10)
             elif consensus_score >= 8.5:
-                floor_lev = 8
+                floor_lev = max(floor_lev, 8)
             
-        # 5. Major-Aware Caps (BTC/ETH up to 75x)
+        # 5. Major-Aware Caps (BTC/ETH up to 75x for Aggressive/Blitz)
         is_major = any(m in symbol.upper() for m in ["BTC/", "ETH/", "BITCOIN", "ETHEREUM"])
-        if is_aggressive:
-            final_max = 75 if is_major else 25
-        else:
-            final_max = 20
+        final_max = self.leverage_range[1]
+        if is_aggressive and is_major:
+            final_max = 75
             
         final_lev = max(floor_lev, min(final_max, round(lev_calc)))
         
-        logger.info(f"📐 [Leverage] {symbol} (v13.0): AI={ai_lev}, Trust={score_trust:.2f}, Major={is_major}, Floor={floor_lev}x -> Final={final_lev}x")
+        logger.info(f"📐 [Leverage] {symbol} (v17.0): AI={ai_lev}, Trust={score_trust:.2f}, Major={is_major}, Range=[{floor_lev}x - {final_max}x] -> Final={final_lev}x")
         return final_lev
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
@@ -1574,21 +1585,21 @@ class CryptoBot:
                 is_high_priority = signal_type == "WHALE"
                 is_side_flip = side.lower() != last_side
                 
-                # Cooldown Duration: 300s (5m) for standard
-                cooldown_active = (now - last_review) < 300 if (0 < last_review < now) else False
+                # Cooldown Duration: Dynamic from config
+                cooldown_active = (now - last_review) < self.llm_cooldown_seconds if (0 < last_review < now) else False
                 
                 # Check for "Future Scheduled Cooldowns" (Negative time bug fix)
                 if last_review > now:
                      cooldown_active = True
                 
-                # v11.6.1: Startup Audit Bypass - Allow LLM review for everything in the first 5 minutes
-                is_startup_window = (now - self.start_time) < 300
+                # v11.6.1: Startup Audit Bypass - Allow LLM review for everything in the first N seconds
+                is_startup_window = (now - self.start_time) < self.startup_shield_seconds
                 
-                # v13.0: Aggressive/Blitz Profile Bypass - Force Gemini to ignore cooldowns when on aggressive settings
-                is_blitz_profile = "blitz" in str(self.config_file).lower() or "aggressive" in str(self.config_file).lower() or self.leverage >= 20
+                # v17.0: Dynamic Cooldown Bypass from config
+                is_cooldown_bypass = self.llm_cooldown_bypass
                 
-                # Logic: If it's a Blitz/Aggressive profile, we NEVER enter this skip block.
-                if not is_blitz_profile:
+                # Logic: If bypass is active, we NEVER enter this skip block.
+                if not is_cooldown_bypass:
                     if (cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window):
                         logger.info(f"⏳ [COOLDOWN] Skipping secondary Gemini review for {symbol} (Last: {int(now - last_review)}s ago).")
                         self.active_positions[symbol] = None
@@ -1601,8 +1612,8 @@ class CryptoBot:
                 # Initial defaults
                 approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = False, 1.0, self.leverage, 1.0, 1.0, None, "Pending Review"
 
-                # --- NEW: STARTUP NEWS SHIELD (10m) ---
-                if is_news_signal and (time.time() - self.start_time) < 600:
+                # --- NEW: STARTUP NEWS SHIELD (Dynamic) ---
+                if is_news_signal and (time.time() - self.start_time) < self.news_shield_seconds:
                     logger.warning(f"🛡️ [STARTUP SHIELD] News Signal ignored for {symbol}: Waiting for fresh data (elapsed: {int(time.time() - self.start_time)}s)")
                     self.active_positions[symbol] = None
                     self.pending_orders_count = max(0, self.pending_orders_count - 1)
@@ -1640,8 +1651,9 @@ class CryptoBot:
 
                     
                 # Update Cooldown state
-                # If REJECTED, set a longer cooldown (900s) to avoid spamming the same setup
-                self.llm_cooldowns[symbol] = now if approved else now + 600 # +600 makes it 15m total (300+600)
+                # If REJECTED, set a longer cooldown to avoid spamming the same setup
+                reject_cooldown = self.llm_cooldown_seconds * 2 if self.llm_cooldown_seconds > 0 else 600
+                self.llm_cooldowns[symbol] = now if approved else now + reject_cooldown
                 self.last_llm_side[symbol] = side.lower()
                 
                 if not approved:

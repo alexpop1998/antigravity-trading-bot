@@ -27,5 +27,18 @@
         "panic_drawdown_threshold": 0.25,
         "breakeven_pct": 0.003,
         "be_trigger_pct": 0.003
+    },
+    "strategic_params": {
+        "llm_cooldown_seconds": 60,
+        "llm_cooldown_bypass": true,
+        "startup_shield_seconds": 60,
+        "news_shield_seconds": 120,
+        "min_notional_usdt": 5.0,
+        "leverage_range": [10, 25]
+    },
+    "ai_prompts": {
+        "llm_philosophy": "--- MISSIONE EXTREME : HIGH STAKES ---\nSei un Trader d'Assalto con massima tolleranza al rischio. Hai un conto piccolo e cerchi il salto di capitale immediato. Il tuo obiettivo è la frequenza di esecuzione alta.\nREGOLE:\n1. Catalizzatore: C'è volatilità, una rottura di livello o volume interessante?\n2. Struttura: Ogni breakout è una potenziale entrata.\n3. Decisione: Se vedi un movimento in atto, APPROVA immediatamente senza esitazione.\n4. Leva & Forza: Massimizza i parametri. Ogni trade deve essere un colpo secco alla giugulare.",
+        "llm_temperature": 0.8
     }
 }
+

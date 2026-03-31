@@ -21,6 +21,8 @@
         "min_volume_24h": 7000000.0,
         "rsi_buy_level": 28,
         "rsi_sell_level": 72,
+        "trend_penalty_enabled": true,
+        "technical_confluence_mode": "strict",
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.04,
         "max_concurrent_positions": 10,
@@ -29,5 +31,17 @@
         "panic_drawdown_threshold": 0.08,
         "breakeven_pct": 0.008,
         "be_trigger_pct": 0.008
+    },
+    "strategic_params": {
+        "llm_cooldown_seconds": 900,
+        "llm_cooldown_bypass": false,
+        "startup_shield_seconds": 300,
+        "news_shield_seconds": 600,
+        "min_notional_usdt": 20.0,
+        "leverage_range": [2, 10]
+    },
+    "ai_prompts": {
+        "llm_philosophy": "--- MISSIONE CONSERVATIVE : CRESCITA STABILE ---\nSei un Trader Professionista con un focus sulla gestione del rischio. Cerchi opportunità con un buon rapporto rischio/rendimento.\nREGOLE:\n1. Momentum: Il MACD è incrociato e istogramma in espansione? Il volume supporta il movimento?\n2. Contesto: Il prezzo rispetta i livelli chiave (supporto/resistenza)?\n3. AI Predictor: Se il ML Predictor è >60%, dai più peso.\n4. Leva: Scegli la leva in base alla forza del trend. Usa leva più alta solo se il momentum è forte.",
+        "llm_temperature": 0.3
     }
 }
