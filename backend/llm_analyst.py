@@ -127,6 +127,8 @@ class LLMAnalyst:
             Past Performance: {memory_context}
             Audit Lessons: {self.lessons_learned}
             
+            ❗ NOTA CRITICA (ANTI-BIAS): Se il profilo è AGGRESSIVE o EXTREME, ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto. Non farti frenare dalle perdite precedenti; il tuo compito è catturare il prossimo movimento.
+            
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{
                 "macro_analysis": "breve sintesi macro",
