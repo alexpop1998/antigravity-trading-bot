@@ -1,18 +1,29 @@
 {
-    "profile_name": "CAPITAL BLITZ (16 -> 100 USDT)",
+    "profile_name": "BLITZ - Hybrid Aggressive/Extreme",
+    "profile_type": "aggressive",
     "trading_parameters": {
+        "symbols": [
+            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT",
+            "DOGE/USDT:USDT", "PEPE/USDT:USDT", "WIF/USDT:USDT", "AVAX/USDT:USDT",
+            "ADA/USDT:USDT", "SHIB/USDT:USDT", "DOT/USDT:USDT", "NEAR/USDT:USDT",
+            "SUI/USDT:USDT", "TIA/USDT:USDT", "OP/USDT:USDT", "ARB/USDT:USDT",
+            "INJ/USDT:USDT", "FTM/USDT:USDT", "AAVE/USDT:USDT", "CRV/USDT:USDT"
+        ],
         "timeframe": "15m",
         "rsi_period": 14,
-        "leverage": 25,
-        "usdt_per_trade": 10,
-        "percent_per_trade": 10.0,
-        "max_margin_pct": 40.0,
-        "consensus_threshold": 2.5,
-        "gemini_min_confidence": 0.85,
-        "stop_loss_pct": 0.018,
+        "leverage": 10,
+        "usdt_per_trade": 0.0,
+        "percent_per_trade": 50.0,
+        "max_margin_pct": 52.0,
+        "consensus_threshold": 1.5,
+        "gemini_min_confidence": 0.6,
+        "stop_loss_pct": 0.02,
         "take_profit_pct": 0.08,
-        "max_concurrent_positions": 10,
-        "max_global_margin_ratio": 0.9,
-        "daily_loss_limit": 10.0
+        "max_concurrent_positions": 1,
+        "max_global_margin_ratio": 0.90,
+        "daily_loss_limit": 15.0,
+        "panic_drawdown_threshold": 0.25,
+        "breakeven_pct": 0.005,
+        "be_trigger_pct": 0.005
     }
 }
