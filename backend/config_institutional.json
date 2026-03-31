@@ -1,6 +1,6 @@
 {
-    "profile_name": "CONSERVATIVE - Crescita Stabile",
-    "profile_type": "conservative",
+    "profile_name": "INSTITUTIONAL - La Fortezza",
+    "profile_type": "institutional",
     "trading_parameters": {
         "symbols": [
             "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT", 
@@ -10,16 +10,16 @@
         ],
         "timeframe": "15m",
         "rsi_period": 14,
-        "leverage": 5,
+        "leverage": 2,
         "usdt_per_trade": 0.0,
-        "percent_per_trade": 4.0,
-        "max_margin_pct": 5.0,
-        "consensus_threshold": 4.5,
-        "gemini_min_confidence": 0.85,
+        "percent_per_trade": 1.5,
+        "max_margin_pct": 2.0,
+        "consensus_threshold": 6.0,
+        "gemini_min_confidence": 0.90,
         "stop_loss_pct": 0.02,
-        "take_profit_pct": 0.04,
-        "max_concurrent_positions": 10,
-        "max_global_margin_ratio": 0.50,
-        "daily_loss_limit": 2.0
+        "take_profit_pct": 0.06,
+        "max_concurrent_positions": 5,
+        "max_global_margin_ratio": 0.20,
+        "daily_loss_limit": 1.0
     }
 }

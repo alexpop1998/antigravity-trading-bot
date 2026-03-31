@@ -57,6 +57,8 @@ class CryptoBot:
             self.panic_drawdown_threshold = 0.05 # Minimum 5% hard ceiling
         self.gemini_min_confidence = float(params.get("gemini_min_confidence", 0.90))
         self.current_margin_ratio = 0.0
+        self.profile_type = self.risk_profile.get("profile_type", "aggressive").lower()
+        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()}")
         
         # Select active exchange from environment
         self.active_exchange_name = os.getenv("ACTIVE_EXCHANGE", "binance").lower()
@@ -240,12 +242,9 @@ class CryptoBot:
                         full_symbol = next((s for s, m in self.exchange.markets.items() if m['id'] == p_id), None)
                         if full_symbol:
                             side = 'LONG' if p_amt > 0 else 'SHORT'
-                            if full_symbol not in self.symbols:
-                                self.symbols.append(full_symbol)
-                            self.active_positions[full_symbol] = side
-                            recovered_count += 1
-                
                 if recovered_count > 0:
+                    logger.info(f"✅ Recovered {recovered_count} active positions. Adapting to {self.profile_type.upper()}...")
+                    await self._reconcile_active_trades()
                     logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions.")
             except Exception as e:
                 logger.error(f"⚠️ [RECOVERY ERROR] Position sync skipped: {e}")
@@ -853,12 +852,15 @@ class CryptoBot:
                         sl = new_sl
                         logger.info(f"📈 TRAILING TECHNICAL STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
             
-            # v12.0.2: [BLITZ BREAKEVEN] Move SL to entry at 1.2% profit for high leverage
+            # --- PROFILE-SPECIFIC BREAK-EVEN (v14.5) ---
             pnl_pct = (current_price - entry_price) / entry_price
-            if self.leverage >= 20 and pnl_pct >= 0.012 and not trade.get('blitz_be_hit', False):
-                trade['sl'] = entry_price * 1.001 # Entry + 0.1% buffer
-                trade['blitz_be_hit'] = True
-                logger.warning(f"🛡️ [BLITZ BE] {symbol} profit reached 1.2%. SL moved to entry ({trade['sl']}) to protect capital.")
+            be_threshold = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.012
+            
+            if pnl_pct >= be_threshold and not trade.get('be_hit', False):
+                # Move SL to entry + 0.1% buffer to cover fees
+                trade['sl'] = entry_price * 1.001 
+                trade['be_hit'] = True
+                logger.warning(f"🛡️ [BREAK-EVEN {self.profile_type.upper()}] {symbol} profit reached {be_threshold:.1%}. SL moved to entry ({trade['sl']})")
 
             # Ultimate Safety: Survival Stop (5x ATR)
             survival_sl = trade.get('entry_price') - survival_sl_dist
@@ -874,10 +876,11 @@ class CryptoBot:
             elif current_price >= tp1:
                 # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
-                    # ENFORCE MINIMUM TP1 profit (1.0% price move)
+                    # ENFORCE MINIMUM TP1 profit (0.5% for Blitz, 1% others)
                     pnl_tp1 = (current_price - entry_price) / entry_price
-                    if pnl_tp1 < 0.010: # 1% Minimum
-                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < 1.00%")
+                    min_tp1 = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.010
+                    if pnl_tp1 < min_tp1: 
+                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < {min_tp1:.2%}")
                     else:
                         # Aggressive Recovery Exit (v9.8.5)
                         # If it's a recovered zombie and ROI > 20%, close 100% immediately
@@ -910,12 +913,15 @@ class CryptoBot:
                         sl = new_sl
                         logger.info(f"📉 TRAILING TECHNICAL STOP UPDATED for {symbol}: SL now at {new_sl:.6f}")
             
-            # v12.0.2: [BLITZ BREAKEVEN] Move SL to entry at 1.2% profit for high leverage (SHORT)
+            # --- PROFILE-SPECIFIC BREAK-EVEN (v14.5 SHORT) ---
             pnl_pct = (entry_price - current_price) / entry_price
-            if self.leverage >= 20 and pnl_pct >= 0.012 and not trade.get('blitz_be_hit', False):
-                trade['sl'] = entry_price * 0.999 # Entry - 0.1% buffer
-                trade['blitz_be_hit'] = True
-                logger.warning(f"🛡️ [BLITZ BE SHORT] {symbol} profit reached 1.2%. SL moved to entry ({trade['sl']}) to protect capital.")
+            be_threshold = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.012
+            
+            if pnl_pct >= be_threshold and not trade.get('be_hit', False):
+                # Move SL to entry - 0.1% buffer
+                trade['sl'] = entry_price * 0.999
+                trade['be_hit'] = True
+                logger.warning(f"🛡️ [BREAK-EVEN {self.profile_type.upper()} SHORT] {symbol} profit reached {be_threshold:.1%}. SL moved to entry ({trade['sl']})")
 
             # 2. Check Exit Conditions
             # Ultimate Safety: Survival Stop (5x ATR)
@@ -935,10 +941,11 @@ class CryptoBot:
             elif current_price <= tp1:
                 # Partial Take Profit (TP1) - Close 50%
                 if not trade.get('tp1_hit', False):
-                    # ENFORCE MINIMUM TP1 profit (1.0% price move)
+                    # ENFORCE MINIMUM TP1 profit (0.5% for Blitz, 1% others)
                     pnl_tp1 = (entry_price - current_price) / entry_price
-                    if pnl_tp1 < 0.010: # 1% Minimum
-                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < 1.00%")
+                    min_tp1 = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.010
+                    if pnl_tp1 < min_tp1:
+                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < {min_tp1:.2%}")
                     else:
                         # Aggressive Recovery Exit (v9.8.5)
                         # If it's a recovered zombie and ROI > 20%, close 100% immediately
@@ -1168,8 +1175,10 @@ class CryptoBot:
              logger.warning(f"🛡️ [SIZING CAP] Capping margin to {max_limit_val}%: {max_limit_usdt:.2f} USDT.")
              adjusted_usdt = max_limit_usdt
 
-        # --- DYNAMIC FLOOR (1% Equity) ---
-        min_margin = max(5.0, current_equity * 0.01) 
+        # --- DYNAMIC FLOOR (v13.5: Notional-Aware) ---
+        # Low floor (0.50 USDT) to allow multiple positions on small accounts.
+        # Exchange minimums are handled later by the purchasing_power floor.
+        min_margin = max(0.50, current_equity * 0.005) 
         if adjusted_usdt < min_margin and not self.circuit_breaker_active:
              adjusted_usdt = min_margin
 
@@ -1630,27 +1639,22 @@ class CryptoBot:
                 sl_distance  = max(current_price * 0.015, current_atr * 3.0) # Min 1.5% or 3x ATR
                 tp1_distance = max(current_price * 0.020, current_atr * 5.0) # Min 2.0% or 5x ATR
                 tp2_distance = max(current_price * 0.050, current_atr * 10.0)
-            elif signal_type in ["RECOVERY", "REJECTION"]:
-                logger.warning(f"🛡️ RECOVERY SCALPING ACTIVE for {symbol}: 1.2% Partial TP Target.")
-                sl_distance = current_price * 0.015 # 1.5% SL
-                tp1_distance = current_price * 0.012 # 1.2% TP1
-                tp2_distance = current_price * 0.030 # 3.0% TP2
-            else:
-                # Optimized Strategy: SL 2.0x, TP1 4.0x, TP2 10.0x (Wider for big runs)
-                # --- NEW: Volatility Shield SL (DeepSeek Refinement) ---
-                if self.is_macro_paused:
-                    sl_mult = 6.0
-                    tp1_mult = 10.0
-                    # TP2 very large to allow Trailing Stop to do the work
-                    tp2_mult = 25.0
-                    logger.warning(f"🛡️ [RISK MGMT] Macro Volatility Shield active: Widened SL/TP for {symbol}.")
-                else:
-                    sl_mult = 2.0
-                    tp1_mult = 4.0
-                    # Higher TP2 to favor Trailing Stop Largo
-                    tp2_mult = 15.0
+                  else:
+                # --- NEW: PROFILE-AWARE DYNAMIC RISK MATRIX (v14.5) ---
+                # Default multipliers by profile
+                p_matrix = {
+                    "institutional": {"sl": 1.5, "tp1": 3.0, "tp2": 6.0},
+                    "conservative": {"sl": 1.2, "tp1": 1.8, "tp2": 4.0},
+                    "aggressive": {"sl": 0.8, "tp1": 0.8, "tp2": 2.5},
+                    "extreme": {"sl": 0.5, "tp1": 1.5, "tp2": 5.0} # Aggressive TP2 for moonbags
+                }
                 
-                # --- APPLY AI MULTIPLIERS ---
+                settings = p_matrix.get(self.profile_type, p_matrix["aggressive"])
+                sl_mult = settings["sl"]
+                tp1_mult = settings["tp1"]
+                tp2_mult = settings["tp2"]
+                
+                # --- APPLY AI MULTIPLIERS (v10.5 Override) ---
                 sl_mult *= ai_sl_mult
                 tp1_mult *= ai_tp_mult
                 tp2_mult *= ai_tp_mult
@@ -1675,10 +1679,15 @@ class CryptoBot:
                 tp1_distance = max(tp1_distance, min_tp)
                 
                 if ai_sl_mult != 1.0 or ai_tp_mult != 1.0:
-                    logger.info(f"🧠 [AI TP/SL] Applied AI Multipliers: SL={ai_sl_mult:.2f}x, TP={ai_tp_mult:.2f}x")
+                    logger.info(f"🧠 [AI TP/SL] Applied AI Multipliers over {self.profile_type} base: SL={sl_mult:.2f}x, TP={tp1_mult:.2f}x")
 
                 # v12.0.2: [BLITZ SURVIVAL] Hard safety cap for high-leverage positions (>= 20x)
                 if self.leverage >= 20:
+                    max_sl_dist = current_price * 0.018 # Hard cap at 1.8%
+                    if sl_distance > max_sl_dist:
+                         logger.warning(f"🛡️ [BLITZ CAP] Reducing too-wide SL for {symbol} from {sl_distance/current_price:.2%} to 1.80% (Survival Cap).")
+                         sl_distance = max_sl_dist
+       if self.leverage >= 20:
                     max_sl_dist = current_price * 0.018 # Hard cap at 1.8%
                     if sl_distance > max_sl_dist:
                          logger.warning(f"🛡️ [BLITZ CAP] Reducing too-wide SL for {symbol} from {sl_distance/current_price:.2%} to 1.80% (Survival Cap).")
@@ -1739,6 +1748,12 @@ class CryptoBot:
                 'tp1_hit': False,
                 'is_black_swan': is_black_swan,
                 'signal_type': signal_type,
+                'snapshot_id': snapshot_id,
+                'profile_type': self.profile_type # v15.1: Profile Context for Adaptation
+            }
+            
+            # Persist updated levels
+            self.db.save_state("trade_levels", self.trade_levels)
                 'opened_at': time.time(),
                 'trailing_delayed': True if signal_type == "GATEKEEPER" else False,
                 'highest_price': current_price if is_long else 0,
@@ -1929,6 +1944,65 @@ class CryptoBot:
                 margin_ratio = float(usdt_info.get('marginRatio') or (total_maint_margin / equity if equity > 0 else 0))
         
         return wallet_balance, equity, unrealized_pnl, margin_ratio
+
+    async def _reconcile_active_trades(self):
+        """
+        Adapts recovered positions to the current risk profile (SL/TP, multipliers).
+        v15.2: Retroactive Risk Adaptation.
+        """
+        try:
+            logger.info(f"🔄 [ADAPTATION] Reconciling {len(self.trade_levels)} targets with current {self.profile_type} limits...")
+            
+            p_matrix = {
+                "institutional": {"sl": 1.5, "tp1": 3.0, "tp2": 6.0},
+                "conservative": {"sl": 1.2, "tp1": 1.8, "tp2": 4.0},
+                "aggressive": {"sl": 0.8, "tp1": 0.8, "tp2": 2.5},
+                "extreme": {"sl": 0.5, "tp1": 1.5, "tp2": 5.0}
+            }
+            
+            settings = p_matrix.get(self.profile_type, p_matrix["aggressive"])
+            
+            for symbol, trade in self.trade_levels.items():
+                if not trade or trade.get('profile_type') == self.profile_type:
+                    continue
+                
+                # Check current market state for the symbol
+                price_data = self.latest_data.get(symbol)
+                if not price_data or price_data.get('atr') == 0:
+                    logger.warning(f"⚠️ [ADAPTATION] Skipping {symbol}: Missing price/ATR data.")
+                    continue
+                
+                old_profile = trade.get('profile_type', 'unknown')
+                current_price = price_data['price']
+                current_atr = price_data['atr']
+                
+                # Recalculate levels
+                sl_dist = current_atr * settings['sl']
+                tp1_dist = current_atr * settings['tp1']
+                tp2_dist = current_atr * settings['tp2']
+                
+                is_long = trade['side'] == 'buy'
+                if is_long:
+                    trade['sl'] = current_price - sl_dist
+                    trade['tp1'] = current_price + tp1_dist
+                    trade['tp2'] = current_price + tp2_dist
+                else:
+                    trade['sl'] = current_price + sl_dist
+                    trade['tp1'] = current_price - tp1_dist
+                    trade['tp2'] = current_price - tp2_dist
+                
+                # Precision adjustment
+                trade['sl'] = float(self.exchange.price_to_precision(symbol, trade['sl']))
+                trade['tp1'] = float(self.exchange.price_to_precision(symbol, trade['tp1']))
+                trade['tp2'] = float(self.exchange.price_to_precision(symbol, trade['tp2']))
+                
+                trade['profile_type'] = self.profile_type
+                logger.warning(f"🔄 [ADAPTATION] {symbol} moved from {old_profile.upper()} to {self.profile_type.upper()}. New SL: {trade['sl']}, TP1: {trade['tp1']}")
+                
+            self.db.save_state("trade_levels", self.trade_levels)
+            
+        except Exception as e:
+            logger.error(f"❌ Error during trade reconciliation: {e}")
 
     async def _update_account_state(self):
         """Standardizes and updates the current account state (equity, positions, PnL)."""

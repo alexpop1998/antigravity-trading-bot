@@ -26,11 +26,25 @@ class LLMAnalyst:
 
     def _load_lessons(self):
         try:
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
             if os.path.exists(self.lessons_file):
                 with open(self.lessons_file, 'r') as f:
-                    return json.load(f).get("lessons", "Focus on high-conviction technical alignment.")
-        except:
-            pass
+                    data = json.load(f)
+                    
+                    # --- MIGRATION LOGIC (v15.0) ---
+                    # If legacy format, move history to 'aggressive' bucket
+                    if "history" in data and "profiles" not in data:
+                        logger.warning("🔄 [AI MEMORY] Migrating legacy lessons to 'AGGRESSIVE' partition.")
+                        new_data = {"profiles": {"aggressive": {"history": data.get("history", []), "lessons": data.get("lessons", "")}}}
+                        with open(self.lessons_file, 'w') as fw:
+                            json.dump(new_data, fw)
+                        return new_data["profiles"]["aggressive"]["lessons"]
+                    
+                    # Partitioned load
+                    profile_data = data.get("profiles", {}).get(profile_type, {})
+                    return profile_data.get("lessons", "Focus on high-conviction technical alignment for this profile.")
+        except Exception as e:
+            logger.error(f"Error loading AI lessons: {e}")
         return "Focus on high-conviction technical alignment."
 
     async def decide_strategy(self, symbol, side, signal_type, indicators, mtf_context="N/A", news_context="N/A"):
@@ -52,44 +66,66 @@ class LLMAnalyst:
             else:
                 memory_context += "Nessun trade registrato nelle ultime 24 ore.\n"
 
-            # 2. Prepara il prompt
+            # --- DYNAMIC PROFILE PROMPTS (v14.5) ---
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            
+            prompts = {
+                "institutional": """--- MISSIONE INSTITUTIONAL : LA FORTEZZA ---
+                    Agisci come un Risk Manager di un Hedge Fund Istituzionale. Il tuo obiettivo primario è la conservazione del capitale. Devi essere estremamente selettivo. 
+                    REGOLE:
+                    1. Trend (EMA200): Il prezzo deve essere chiaramente sopra (Long) o sotto (Short) con una pendenza consolidata. Niente ranging.
+                    2. Volatilità (ATR): Rifiuta segnali con ATR in forte espansione (>15% nelle ultime 4h). La stabilità è prioritaria.
+                    3. Consenso: Il punteggio di consenso è alto (>6/10). Assicurati che ci sia convergenza tra Macro e Tecnico.
+                    4. Decisione: Approva solo se il setup è 'perfetto'. Se hai anche il minimo dubbio, RIFIUTA. 
+                    5. Leva: Tendi sempre verso il minimo consentito (1x-2x) a meno che il trend non sia eccezionalmente forte.""",
+                
+                "conservative": """--- MISSIONE CONSERVATIVE : CRESCITA STABILE ---
+                    Sei un Trader Professionista con un focus sulla gestione del rischio. Cerchi opportunità con un buon rapporto rischio/rendimento.
+                    REGOLE:
+                    1. Momentum: Il MACD è incrociato e istogramma in espansione? Il volume supporta il movimento?
+                    2. Contesto: Il prezzo rispetta i livelli chiave (supporto/resistenza)?
+                    3. AI Predictor: Qual è la probabilità di direzione del ML? Se è >60%, dai più peso.
+                    4. Leva: Scegli la leva in base alla forza del trend. Usa leva più alta (6x-8x) solo se il momentum è forte e i volumi sono sopra la media del 20%.""",
+                
+                "aggressive": """--- MISSIONE AGGRESSIVE : PREDATORE BLITZ ---
+                    Sei un Predatore di Momentum. Il tuo unico obiettivo è cavalcare le onde di volatilità per generare profitti rapidi. 
+                    Ignora metriche conservative come RSI > 70 – per te, RSI alto è sinonimo di FORZA.
+                    REGOLE:
+                    1. Volume Esplosivo: Il volume delle ultime 3 candele è >2x la media?
+                    2. Velocità Prezzo: Il prezzo si sta muovendo rapidamente in una direzione?
+                    3. AI Predictor: Se il ML Predictor dà alta confidenza, è un GREEN LIGHT immediato.
+                    4. Sii audace: Se il momentum è esplosivo, usa leva massima (15x) e alta position_strength.""",
+                
+                "extreme": """--- MISSIONE EXTREME : HIGH STAKES ---
+                    Sei un Gambler con un Edgio Statistico. Hai un conto piccolo e sei disposto a rischiare il tutto per il tutto. 
+                    Il tuo obiettivo è trovare il 'momentum asimmetrico': rischio limitato per potenziale enorme.
+                    REGOLE:
+                    1. Catalizzatore: C'è una notizia, un'anomalia di liquidazione o un volume spike improvviso?
+                    2. Struttura: Il prezzo sta rompendo un massimo storico o un minimo di liquidità?
+                    3. Decisione: Se vedi potenziale di movimento rapido, APPROVA senza esitazione. 
+                    4. Leva: Deve essere SEMPRE al massimo consentito. Position_strength deve riflettere la convinzione massimale."""
+            }
+            
+            active_profile_prompt = prompts.get(profile_type, prompts["aggressive"])
+
             prompt = f"""
             Sei l'Analista Strategico di un Hedge Fund AI. Devi decidere se approvare un'operazione di trading ad alta frequenza.
             
+            {active_profile_prompt}
+
             OPERAZIONE PROPOSTA:
-            Asset: {symbol}
-            Direzione: {side.upper()}
-            Tipo Segnale: {signal_type}
+            Asset: {symbol} | Direzione: {side.upper()} | Tipo Segnale: {signal_type}
             
             CRITICAL METRICS:
             RSI: {indicators.get('rsi', 'N/D')}, MACD_Hist: {indicators.get('macd_hist', 'N/D')}, 
             Vol_Change: {indicators.get('volume_change', 'N/D')}, ATR_Volatility: {indicators.get('atr', 'N/D')},
             Price_vs_EMA200: {indicators.get('price_vs_ema200', 'N/D')}
             
-            --- MULTI-TIMEFRAME ANALYSIS (MACRO TREND) ---
+            --- MACRO & MEMORY ---
             Trend Context: {mtf_context}
-            
-            --- LATEST MARKET NEWS ---
-            {news_context}
-            
-            --- AI MEMORY (PAST PERFORMANCE) ---
-            {memory_context}
-            
-            --- LESSONS FROM PREVIOUS AUDITS ---
-            {self.lessons_learned}
-            
-            --- MISSIONE SNIPER ---
-            Sei un Cecchino Istituzionale. Non aver paura delle monete meno capitalizzate, ma esigi prove schiaccianti:
-            1. MODALITÀ CAPITAL BLITZ ATTIVA: Stiamo crescendo un capitale piccolo ($16). Sii AUDACE.
-            2. Per monete a bassa capitalizzazione: Richiedi CONVINCENZA > 0.70.
-            3. Per le Major (BTC, ETH): Richiedi CONVINCENZA > 0.70.
-            4. Se vedi Momentum esplosivo, APPROVA anche se RSI è border-line. Siamo in modalità Blitz.
-            3. ANALISI OVEREXTENSION: Non entrare mai LONG se il prezzo è troppo lontano dalla EMA200 o se l'RSI è già in ipercomprato estremo (>75).
-            
-            DEVI SEGUIRE QUESTO PROCESSO LOGICO (Chain-of-Thought):
-            1. ANALISI MACRO: Valuta le news e il trend dominante.
-            2. ANALISI TECNICA: Verifica RSI, MACD e Bollinger rispetto ai livelli chiave.
-            3. VALUTAZIONE RISCHIO: Analizza lo spread, la liquidità e il funding.
+            News: {news_context}
+            Past Performance: {memory_context}
+            Audit Lessons: {self.lessons_learned}
             
             RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
             {{
@@ -98,8 +134,8 @@ class LLMAnalyst:
                 "risk_assessment": "valutazione spread/funding/volatilità",
                 "verdict": "APPROVE" o "REJECT",
                 "confidence": 0.0 a 1.0, 
-                "suggested_leverage": intero tra 8 e 25,  // Sii dinamico ma prudente su monete volatili
-                "position_strength": 1.0 a 25.0,  // 1.0 = Floor 1% Equity. 10.0 = 10% Equity. 25.0 = 25% Equity. 
+                "suggested_leverage": intero nel range del profilo,
+                "position_strength": 1.0 a 50.0,  // Rappresenta la % di equity da impegnare come margine
                 "sl_multiplier": 0.5 a 3.0,
                 "tp_multiplier": 0.5 a 5.0,
                 "tp_price": numero o null,
@@ -191,39 +227,39 @@ class LLMAnalyst:
             return "HOLD", 0, "No AI Client"
 
         try:
+            # --- DYNAMIC MONITORING PHILOSOPHY (v14.6) ---
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            philosophies = {
+                "institutional": "Sei ultra-prudente. Se vedi debolezza o perdita di trend EMA200, chiudi subito. Non inseguire profitti incerti.",
+                "conservative": "Punta alla stabilità. Se siamo in profitto (TP1 preso), cerca motivi per chiudere se la volatilità sale.",
+                "aggressive": "Sii un predatore. Mantieni finché il momentum è a favore. Accetta ritracciamenti tecnici.",
+                "extreme": "All-in o niente. Mantieni per il colpo grosso (TP2) a meno di inversione strutturale violenta."
+            }
+            philosophy = philosophies.get(profile_type, philosophies["aggressive"])
+
             prompt = f"""
-            Sei l'Analista di Rischio di un Hedge Fund AI. Valuta se mantenere, scalare o chiudere questa posizione aperta.
+            Sei l'Analista di Rischio di un Hedge Fund AI. Modalità operativa: {profile_type.upper()}.
+            Filosofia: {philosophy}
+            
+            Valuta se mantenere, scalare o chiudere questa posizione aperta.
             
             POSIZIONE ATTUALE:
-            Asset: {symbol}
-            Direzione: {side.upper()}
-            PnL Attuale: {current_pnl_pct:.2f}%
+            Asset: {symbol} | Direzione: {side.upper()} | PnL Attuale: {current_pnl_pct:.2f}%
             
             CRITICAL METRICS:
-            PnL: {current_pnl_pct:.2f}%, RSI: {indicators.get('rsi', 'N/D')}, 
-            MACD_Hist: {indicators.get('macd_hist', 'N/D')}, Trend: {indicators.get('trend_adx', 'N/D')}
+            RSI: {indicators.get('rsi', 'N/D')}, MACD_Hist: {indicators.get('macd_hist', 'N/D')}, Trend: {indicators.get('trend_adx', 'N/D')}
             
             MISSIONE:
-            1. HOLD: Mantieni tutto invariato. Punta al TP2 (grande profitto). 
-               - [!] IGNORA I PULLBACK: Se siamo in rosso (PnL negativo) ma il trend primario è intatto, scegli HOLD.
-            2. SCALE_OUT: Suggerisci di chiudere il 50% (TP1) se siamo sopra lo 0.75% di profitto e vedi incertezza, esaurimento volumetrico o un'inversione imminente.
-            3. PIVOT: Chiudi subito tutto e apri in direzione OPPOSTA (solo se il trend è girato violentemente su timeframe H1/H4).
-            4. CLOSE: Chiudi tutto ora. 
-               - [!] TRIGGER REVERSE: Scegli CLOSE solo se rilevi una rottura dei livelli di supporto/resistenza MACRO.
+            1. HOLD: Mantieni tutto invariato. Punta al TP2.
+            2. SCALE_OUT: Chiudi il 50% (TP1) se vedi incertezza o esaurimento.
+            3. PIVOT: Chiudi subito tutto e gira la posizione (solo su cambio trend violento).
+            4. CLOSE: Chiudi tutto ora.
             
-            REGOLE D'ORO:
-            - Accettiamo un drawdown (rosso) fino al 2% di prezzo. Non avere paura se non vedi inversione reale.
-            - Favorisci il HOLD per far correre i profitti (TP2).
-            - Abbiamo un Trailing Stop LARGO che ci protegge.
+            REGOLE SPECIFICHE {profile_type.upper()}:
+            - {philosophy}
+            - Abbiamo uno Stop Loss e un Trailing che ci proteggono, ma il tuo intervento 'manuale' è richiesto se i segnali tecnici deteriorano.
             
-            RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
-            {{
-                "technical_status": "sintesi stato tecnico",
-                "risk_status": "livello di rischio attuale",
-                "action": "HOLD" o "SCALE_OUT" o "PIVOT" o "CLOSE",
-                "confidence": 0.0 a 1.0,
-                "reasoning": "Breve spiegazione tecnica (max 15 parole)"
-            }}
+            RISPONDI JSON: {{ "technical_status": "sintesi", "action": "HOLD/SCALE_OUT/PIVOT/CLOSE", "confidence": 0-1, "reasoning": "max 15 parole" }}
             """
 
             async with self.semaphore:
@@ -307,7 +343,9 @@ class LLMAnalyst:
             return
 
         try:
-            # Format last 20 trades for analysis
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            # Filter history to roughly align with current profile if possible, 
+            # for now we take the last 20 but evaluate them via the profile philosophy.
             history_str = json.dumps([{
                 'symbol': t['symbol'], 'side': t['side'], 'pnl': t.get('pnl', 0), 
                 'outcome': 'WIN' if t.get('pnl', 0) > 0 else 'LOSS',
@@ -315,7 +353,8 @@ class LLMAnalyst:
             } for t in trades_history[-20:]], indent=2)
 
             prompt = f"""
-            Sei il Chief Risk Officer di un Hedge Fund. Analizza questi ultimi 20 trade e identifica 3 REGOLE d'oro per evitare perdite future basandoti sui pattern di errore riscontrati (LOSS).
+            Sei il Chief Risk Officer di un Hedge Fund. Profilo Attivo: {profile_type.upper()}.
+            Analizza questi ultimi 20 trade e identifica 3 REGOLE d'oro coerenti con la strategia {profile_type.upper()}.
             
             STORICO TRADE:
             {history_str}
@@ -336,13 +375,25 @@ class LLMAnalyst:
                 
                 content = response.choices[0].message.content
                 result = json.loads(content)
-                self.lessons_learned = result.get("lessons", self.lessons_learned)
+                new_lessons = result.get("lessons", self.lessons_learned)
                 
-                # Save to file for persistence
+                # --- PROFILE-PARTITIONED SAVE ---
+                all_data = {"profiles": {}}
+                if os.path.exists(self.lessons_file):
+                    try:
+                        with open(self.lessons_file, 'r') as f:
+                            all_data = json.load(f)
+                    except: pass
+                
+                p_data = all_data.get("profiles", {}).get(profile_type, {"history": [], "lessons": ""})
+                p_data["lessons"] = new_lessons
+                all_data.setdefault("profiles", {})[profile_type] = p_data
+                self.lessons_learned = new_lessons
+
                 with open(self.lessons_file, 'w') as f:
-                    json.dump({"lessons": self.lessons_learned}, f)
+                    json.dump(all_data, f)
                 
-                logger.warning(f"🧠 [AI AUDIT] Nuove lezioni apprese: {self.lessons_learned}")
+                logger.warning(f"🧠 [AI AUDIT - {profile_type.upper()}] Nuove lezioni apprese: {self.lessons_learned}")
 
         except Exception as e:
             logger.error(f"Errore durante self-audit AI: {e}")
@@ -362,30 +413,23 @@ class LLMAnalyst:
             # --- Capture indicators context from bot ---
             indicators = self.bot.latest_data.get(symbol, {})
             
+            # --- PROFILE-AWARE MENTOR (v14.6) ---
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            
             prompt = f"""
-            Sei un Senior Trading Mentor. Analizza questo trade appena chiuso e ricava una lezione per il futuro.
+            Sei un Senior Trading Mentor specializzato in strategie {profile_type.upper()}. 
+            Analizza questo trade appena chiuso e ricava una lezione.
             
             DATI TRADE:
-            - Simbolo: {symbol}
-            - Entry: {trade.get('entry_price')}
-            - Close: {close_price}
-            - PnL: {pnl:.2%}
-            - Esito: {outcome}
+            - Simbolo: {symbol} | Esito: {outcome} | PnL: {pnl:.2%}
             - Reasoning Entrata: {trade.get('reasoning', 'N/D')}
             
-            CONTESTO INDICATORI:
-            RSI: {indicators.get('rsi')}, MACD: {indicators.get('macd')}, Vol: {indicators.get('volume_change')}
-            
             MISSIONE:
-            1. Identifica il 'Fatal Flaw' (errore fatale) o il 'Success Pattern'.
-            2. Definisci una 'Golden Rule' (max 12 parole) che il bot DEVE seguire per non ripetere errori.
+            1. Valuta il trade secondo la filosofia {profile_type.upper()}.
+            2. Identifica se l'errore è stato strategico (rischio troppo alto/basso per il profilo) o tecnico.
+            3. Definisci una 'Golden Rule' (max 12 parole).
             
-            RISPONDI SOLO IN JSON:
-            {{
-                "analysis": "analisi tecnica dettagliata",
-                "lesson": "cosa abbiamo imparato",
-                "golden_rule": "regola sintetica"
-            }}
+            RISPONDI SOLO IN JSON: {{ "analysis": "analisi", "lesson": "lezione", "golden_rule": "regola" }}
             """
 
             async with self.semaphore:
@@ -399,14 +443,20 @@ class LLMAnalyst:
             content = json.loads(response.choices[0].message.content)
             new_rule = content.get("golden_rule", "Be careful.")
             
-            # --- SLIDING WINDOW MEMORY (v6.0) ---
-            lessons_db = []
+            # --- PROFILE-PARTITIONED SLIDING WINDOW (v15.0) ---
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            all_data = {"profiles": {}}
             if os.path.exists(self.lessons_file):
                 try:
                     with open(self.lessons_file, 'r') as f:
-                        data = json.load(f)
-                        lessons_db = data.get("history", [])
+                        all_data = json.load(f)
+                        if "profiles" not in all_data:
+                            # Migrate legacy or handle empty
+                            all_data = {"profiles": {"aggressive": {"history": all_data.get("history", []), "lessons": all_data.get("lessons", "")}}}
                 except: pass
+            
+            p_data = all_data.get("profiles", {}).get(profile_type, {"history": [], "lessons": ""})
+            lessons_db = p_data.get("history", [])
 
             # Aggiungiamo la nuova lezione in testa
             lessons_db.insert(0, {
@@ -417,18 +467,23 @@ class LLMAnalyst:
                 "pnl": pnl
             })
 
-            # Cleanup: Teniamo solo le ultime 2500 lezioni (circa 14 giorni @ 180 trade/day)
+            # Cleanup: Teniamo solo le ultime 2500 lezioni per questo profilo
             cutoff = time.time() - (14 * 86400)
             lessons_db = [l for l in lessons_db if l['timestamp'] > cutoff][:2500]
 
-            # Generiamo il prompt context riassuntivo per le prossime decisioni
-            # Prendiamo le ultime 15 regole d'oro per dare più contesto senza saturare i token
+            # Generiamo il prompt context specifico per questo profilo
             rules_summary = " | ".join([l['rule'] for l in lessons_db[:15]])
             self.lessons_learned = rules_summary
+            
+            # Update all_data
+            all_data.setdefault("profiles", {})[profile_type] = {
+                "history": lessons_db,
+                "lessons": self.lessons_learned
+            }
 
             # Save per persistence
             with open(self.lessons_file, 'w') as f:
-                json.dump({"history": lessons_db, "lessons": self.lessons_learned}, f)
+                json.dump(all_data, f)
                 
             logger.warning(f"🎓 [AI MENTOR] New lesson learned for {symbol}: {new_rule}")
 
