@@ -42,11 +42,22 @@ class SignalManager:
         # 2. Strategic Consensus Path (Path B)
         weight = self.weights.get(type, 0.5) * weight_modifier
         
-        # Trend Bonus logic remains...
+        # Trend Bonus logic (Dynamic Penalty based on profile)
         if current_price and ema200:
             is_long = side.lower() in ['buy', 'long']
             is_uptrend = current_price > ema200
-            weight += 1.5 if (is_long and is_uptrend) or (not is_long and not is_uptrend) else -1.0
+            is_aligned = (is_long and is_uptrend) or (not is_long and not is_uptrend)
+            
+            # Read from profile (default: True/Strict)
+            trend_penalty_enabled = getattr(self.bot, 'trend_penalty_enabled', True)
+            
+            if is_aligned:
+                weight += 1.5
+            elif trend_penalty_enabled:
+                weight -= 1.0
+                logger.info(f"🛡️ [TREND GUARD] Penalty applied to {symbol} {side} (Non-aligned: -1.0 weight)")
+            else:
+                logger.info(f"🚀 [TREND ASSAULT] Skipping trend penalty for {symbol} {side} (Aggressive mode)")
 
         if symbol not in self.signals:
             self.signals[symbol] = {}

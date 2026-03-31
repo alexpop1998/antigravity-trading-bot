@@ -72,7 +72,11 @@ class CryptoBot:
         self.rsi_buy_level = int(params.get("rsi_buy_level", 30))
         self.rsi_sell_level = int(params.get("rsi_sell_level", 70))
         
-        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()} (ADX: {self.adx_threshold}, EMA_F: {self.ema_trend_filter}, Vol: {self.min_volume_24h/1e6:.1f}M)")
+        # --- NEW: ADVANCED STRATEGIC MODES (v16.7) ---
+        self.trend_penalty_enabled = bool(params.get("trend_penalty_enabled", True))
+        self.technical_confluence_mode = str(params.get("technical_confluence_mode", "strict")).lower()
+        
+        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()} (Penalty: {self.trend_penalty_enabled}, Confluence: {self.technical_confluence_mode.upper()})")
         
         # Select active exchange from environment
         self.active_exchange_name = os.getenv("ACTIVE_EXCHANGE", "binance").lower()
@@ -637,15 +641,36 @@ class CryptoBot:
         is_trending = adx > self.adx_threshold if not pd.isna(adx) else True
         
         # --- STRONGER TECHNICAL CONFLUENCE: RSI + MACD Hist + Bollinger ---
-        # Long: RSI <= rsi_buy_level
-        if rsi <= self.rsi_buy_level and macd_hist > -0.0001 and macd_hist > self.latest_data[symbol].get('macd_hist_prev', -1) and price <= (bb_lower * 1.01):
+        # Long Confluence
+        is_rsi_buy = rsi <= self.rsi_buy_level
+        is_macd_buy = macd_hist > -0.0001 and macd_hist > self.latest_data[symbol].get('macd_hist_prev', -1)
+        is_bb_buy = price <= (bb_lower * 1.01)
+        
+        # Decide based on confluence mode
+        if self.technical_confluence_mode == "loose":
+            # Loose: RSI OR Bollinger is enough
+            tech_buy_triggered = is_rsi_buy or is_bb_buy
+        else:
+            # Strict: RSI AND MACD AND Bollinger
+            tech_buy_triggered = is_rsi_buy and is_macd_buy and is_bb_buy
+
+        if tech_buy_triggered:
             # Check EMA Filter (if enabled for profile)
             if (not self.ema_trend_filter or price > ema200) and is_trending: # Trend-following LONG
                 tech_side = 'buy'
                 is_technical_signal = True
             
-        # Short: RSI >= rsi_sell_level
-        elif rsi >= self.rsi_sell_level and macd_hist < 0.0001 and macd_hist < self.latest_data[symbol].get('macd_hist_prev', 1) and price >= (bb_upper * 0.99):
+        # Short Confluence
+        is_rsi_sell = rsi >= self.rsi_sell_level
+        is_macd_sell = macd_hist < 0.0001 and macd_hist < self.latest_data[symbol].get('macd_hist_prev', 1)
+        is_bb_sell = price >= (bb_upper * 0.99)
+
+        if self.technical_confluence_mode == "loose":
+            tech_sell_triggered = is_rsi_sell or is_bb_sell
+        else:
+            tech_sell_triggered = is_rsi_sell and is_macd_sell and is_bb_sell
+
+        if tech_sell_triggered:
             # --- SHORTING MOMENTUM GUARD ---
             if change_5m_pct > 0.008: 
                 logger.info(f"🛡️ [SHORT GUARD] Skipping technical SHORT on {symbol}: Momentum too bullish ({change_5m_pct:.2%})")
