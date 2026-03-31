@@ -250,7 +250,8 @@ class CryptoBot:
                             side = 'LONG' if p_amt > 0 else 'SHORT'
                 if recovered_count > 0:
                     logger.info(f"✅ Recovered {recovered_count} active positions. Adapting to {self.profile_type.upper()}...")
-                    await self._reconcile_active_trades()
+                    # v15.2: Async task for background reconciliation
+                    asyncio.create_task(self._reconcile_active_trades())
                     logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions.")
             except Exception as e:
                 logger.error(f"⚠️ [RECOVERY ERROR] Position sync skipped: {e}")
