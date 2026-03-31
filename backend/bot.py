@@ -2147,11 +2147,13 @@ class CryptoBot:
                             logger.warning(f"🛡️ [STARTUP SHIELD] Global Panic suppressed during sync ({effective_pnl_pct:.2%}).")
                             return # Avoid proceeding to margin dangerous check if we are in protection
                 
-                elif effective_pnl_pct > -0.06: # Reset if we recover or restart with better balance (v9.9.11: relaxed for volatility)
+                # v15.4: Dynamic CB Reset (Reset if PnL recovered to 80% of the limit)
+                reset_threshold = -self.daily_loss_limit * 0.8
+                if effective_pnl_pct > reset_threshold:
                     if self.circuit_breaker_active:
-                        logger.warning(f"🟢 Circuit Breaker Reset: Current loss at {effective_pnl_pct:.2%}")
+                        logger.warning(f"🟢 [CB RESET] Circuit Breaker Disarmed: Current loss at {effective_pnl_pct:.2%} (Reset Threshold: {reset_threshold:.2%})")
                         self.circuit_breaker_active = False
-                        self.global_panic_notified = False # Reset flag when circuit breaker is reset
+                        self.global_panic_notified = False 
 
                 logger.info(f"Account Update (Real Balance): Wallet={wallet_balance:.2f}, Equity={equity:.2f}, PnL={unrealized_pnl:.2f} (Eff: {effective_pnl_pct:.2%})")
                 
