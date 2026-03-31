@@ -2114,6 +2114,10 @@ class CryptoBot:
                      logger.warning(f"🔄 [CAPITAL RESET] Major balance shift from ${self.initial_wallet_balance:.2f} to ${wallet_balance:.2f} with zero positions. Syncing benchmark.")
                      self.initial_wallet_balance = wallet_balance
                      self.db.save_state("initial_balance", self.initial_wallet_balance)
+                     # v15.7: EXPLICITLY RESET CB During Reset
+                     self.circuit_breaker_active = False
+                     self.global_panic_notified = False
+                     
                      # Re-calc to prevent immediate loop trigger
                      wallet_pnl_pct = 0
                      equity_pnl_pct = 0
