@@ -25,13 +25,13 @@ from ai_parameter_optimizer import AIParameterOptimizer
 load_dotenv(override=True)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("TradingBot")
 class CryptoBot:
-    def __init__(self, config_file=None):
+    def __init__(self, config_file=None, profile=None):
         # Load SaaS Client Risk Profiles
         load_dotenv(override=True)
         if config_file is None:
-            profile = os.getenv("CONFIG_PROFILE", "aggressive").lower()
+            if profile is None:
+                profile = os.getenv("CONFIG_PROFILE", "aggressive").lower()
             config_file = f"config_{profile}.json"
             logger.warning(f"🎯 [INIT] Loading Active Profile: {profile.upper()} ({config_file})")
             

@@ -12,10 +12,9 @@ async def test_all_profiles():
 
     for profile in profiles:
         print(f"\n--- Testing Profile: {profile.upper()} ---")
-        os.environ["CONFIG_PROFILE"] = profile
         
         try:
-            bot = CryptoBot()
+            bot = CryptoBot(profile=profile)
             analyst = LLMAnalyst(bot)
             
             # 1. Verify Config Loading
