@@ -1476,12 +1476,29 @@ class CryptoBot:
                     ext_cap = 35.0 if is_aggressive else 10.0
                     
                     if is_already_trading:
-                        # 1. Pyramiding Guard: Skip unless high conviction
-                        if consensus_score < 8.5 and not is_black_swan:
-                             logger.warning(f"🚫 [ANTI-PYRAMID] Symbol {symbol} already trading. Score {consensus_score:.1f} too low for second entry. Skipping.")
-                             self.active_positions[symbol] = None
-                             self.pending_orders_count = max(0, self.pending_orders_count - 1)
-                             return
+                        # --- TREND-FLIP GUARD (v15.3) ---
+                        # If the new signal is opposite to the existing position, FLUSH the old one first.
+                        current_side = 'LONG' if (matching_position and float(matching_position.get('positionAmt', matching_position.get('total', 0)) or 0) > 0) else 'SHORT'
+                        new_side_norm = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
+                        
+                        if current_side != new_side_norm:
+                             logger.warning(f"🔄 [TREND FLIP] {symbol} Reversal: Closing {current_side} before entering {new_side_norm}.")
+                             # Retrieve the local trade object for closure
+                             existing_trade = self.trade_levels.get(symbol)
+                             if existing_trade:
+                                  await self.close_position(symbol, existing_trade, reason="TREND_FLIP_FLUSH")
+                                  # Reset local state to allow the new entry logic to proceed normally
+                                  self.trade_levels[symbol] = None
+                                  is_already_trading = False 
+                        
+                        # Only proceed with Anti-Pyramiding if we didn't just flip
+                        if is_already_trading:
+                            # 1. Pyramiding Guard: Skip unless high conviction
+                            if consensus_score < 8.5 and not is_black_swan:
+                                 logger.warning(f"🚫 [ANTI-PYRAMID] Symbol {symbol} already trading. Score {consensus_score:.1f} too low for second entry. Skipping.")
+                                 self.active_positions[symbol] = None
+                                 self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                                 return
                         
                         # 2. Cumulative Margin Check
                         current_margin_usdt = 0
