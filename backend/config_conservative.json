@@ -19,7 +19,10 @@
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.04,
         "max_concurrent_positions": 10,
-        "max_global_margin_ratio": 0.50,
-        "daily_loss_limit": 2.0
+        "max_global_margin_ratio": 0.40,
+        "daily_loss_limit": 2.0,
+        "panic_drawdown_threshold": 0.08,
+        "breakeven_pct": 0.008,
+        "be_trigger_pct": 0.008
     }
 }

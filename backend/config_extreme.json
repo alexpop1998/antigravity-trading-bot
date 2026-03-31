@@ -11,13 +11,16 @@
         "leverage": 20,
         "usdt_per_trade": 0.0,
         "percent_per_trade": 50.0,
-        "max_margin_pct": 50.0,
+        "max_margin_pct": 25.0,
         "consensus_threshold": 2.0,
         "gemini_min_confidence": 0.70,
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.15,
         "max_concurrent_positions": 2,
         "max_global_margin_ratio": 0.95,
-        "daily_loss_limit": 50.0
+        "daily_loss_limit": 50.0,
+        "panic_drawdown_threshold": 0.25,
+        "breakeven_pct": 0.003,
+        "be_trigger_pct": 0.003
     }
 }

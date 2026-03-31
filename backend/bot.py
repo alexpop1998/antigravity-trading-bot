@@ -49,17 +49,22 @@ class CryptoBot:
         self.max_margin_pct = params.get("max_margin_pct", 15.0) # Absolute cap for AI boosting
         self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
-        self.breakeven_pct = 0.012
+        
+        # --- NEW: GRANULAR STRATEGIC PARAMETERS ---
+        self.breakeven_pct = float(params.get("breakeven_pct", 0.012))
+        self.be_trigger_pct = float(params.get("be_trigger_pct", self.breakeven_pct))
         self.max_concurrent_positions = params.get("max_concurrent_positions", 20)
         self.max_global_margin_ratio = params.get("max_global_margin_ratio", 0.75)
         self.daily_loss_limit = float(params.get("daily_loss_limit", 1.0)) / 100.0
-        self.panic_drawdown_threshold = self.daily_loss_limit * 2.5 # Panic selling at 2.5x the daily limit
+        self.panic_drawdown_threshold = float(params.get("panic_drawdown_threshold", self.daily_loss_limit * 2.5))
+        
         if self.panic_drawdown_threshold < 0.05:
             self.panic_drawdown_threshold = 0.05 # Minimum 5% hard ceiling
+            
         self.gemini_min_confidence = float(params.get("gemini_min_confidence", 0.90))
         self.current_margin_ratio = 0.0
         self.profile_type = self.risk_profile.get("profile_type", "aggressive").lower()
-        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()}")
+        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()} (Limits: DD={self.panic_drawdown_threshold:.1%}, BE={self.be_trigger_pct:.1%})")
         
         # Select active exchange from environment
         self.active_exchange_name = os.getenv("ACTIVE_EXCHANGE", "binance").lower()
@@ -855,7 +860,7 @@ class CryptoBot:
             
             # --- PROFILE-SPECIFIC BREAK-EVEN (v14.5) ---
             pnl_pct = (current_price - entry_price) / entry_price
-            be_threshold = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.012
+            be_threshold = self.be_trigger_pct
             
             if pnl_pct >= be_threshold and not trade.get('be_hit', False):
                 # Move SL to entry + 0.1% buffer to cover fees
@@ -916,7 +921,7 @@ class CryptoBot:
             
             # --- PROFILE-SPECIFIC BREAK-EVEN (v14.5 SHORT) ---
             pnl_pct = (entry_price - current_price) / entry_price
-            be_threshold = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.012
+            be_threshold = self.be_trigger_pct
             
             if pnl_pct >= be_threshold and not trade.get('be_hit', False):
                 # Move SL to entry - 0.1% buffer
@@ -1183,11 +1188,12 @@ class CryptoBot:
         if adjusted_usdt < min_margin and not self.circuit_breaker_active:
              adjusted_usdt = min_margin
 
-        # --- EMERGENCY GLOBAL MARGIN CAP (v10.5) ---
-        # Hard stop if we are already using > 85% of the account as margin
+        # --- EMERGENCY GLOBAL MARGIN CAP (v15.2 Strategic) ---
+        # Hard stop if we are already using > Profile Max (Institutional 20%, Extreme 95%, etc)
         current_used_margin = self.latest_account_data.get('used_margin', 0)
-        if current_used_margin > (current_equity * 0.85):
-             logger.error(f"☢️ [EMERGENCY] Global Margin Usage is too high ({current_used_margin:.2f} / {current_equity:.2f}). Blocking NEW entry.")
+        global_cap = current_equity * self.max_global_margin_ratio
+        if current_used_margin > global_cap:
+             logger.error(f"☢️ [EMERGENCY] Global Margin Usage is too high ({current_used_margin:.2f} / {global_cap:.2f} Cap). Blocking NEW entry.")
              return 0.0
 
         # --- DYNAMIC LEVERAGE CLAMP ---
@@ -2110,6 +2116,7 @@ class CryptoBot:
                             logger.warning(f"🛡️ [STARTUP SHIELD] Circuit Breaker suppressed during sync ({effective_pnl_pct:.2%}).")
                 
                 # --- NEW: GLOBAL PANIC SELL ---
+                # v15.2: Profile-specific Holistic Account Protection
                 if effective_pnl_pct <= -self.panic_drawdown_threshold:
                     if not self.global_panic_notified:
                         if not is_startup_protected:
