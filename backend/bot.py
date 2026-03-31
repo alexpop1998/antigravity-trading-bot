@@ -563,7 +563,11 @@ class CryptoBot:
                 # Update latest data record
                 self.latest_data[symbol] = {
                     'price': current_close,
+                    'prev_price': prev_close,
                     'rsi': round(current_rsi, 2) if not pd.isna(current_rsi) else "N/A",
+                    'macd_hist': round(current_macd_hist, 6) if not pd.isna(current_macd_hist) else 0,
+                    'atr': round(current_atr, 6) if not pd.isna(current_atr) else 0,
+                    'ema200': round(current_ema200, 6) if not pd.isna(current_ema200) else 0,
                     'prediction': predicted_price,
                     'imbalance': round(imbalance, 2),
                     'volume24h': quote_volume,
@@ -571,6 +575,7 @@ class CryptoBot:
                     'open_interest': current_oi,
                     'ls_ratio': current_ls
                 }
+
 
                 # 4. Final Strategy Audit
                 self._check_trading_signals(symbol, current_close, current_rsi, current_macd_hist, current_bb_lower, current_bb_upper, imbalance, current_ema200, quote_volume, current_atr, current_adx, mtf_context, change_5m_pct)
@@ -1105,14 +1110,22 @@ class CryptoBot:
         
         # --- NEW: AI PONDERED SIZING (v9.7.4) ---
         raw_ai_mod = kwargs.get('ai_strength', 1.0)
-        score_weight = consensus_score / 10.0
+        score_weight = (consensus_score / 10.0) if consensus_score else 0.5
         
-        is_aggressive = risk_pct > 5.0
-        dampening_factor = 0.8 if is_aggressive else 0.5 
+        is_aggressive = risk_pct >= 8.0 
+        dampening_factor = 1.0 if is_aggressive else 0.5 
         
-        ai_mod = 1.0 + (raw_ai_mod - 1.0) * dampening_factor * score_weight
-        # v10.5 Conservative refinement: 3% base, up to 10% max (mod 3.33)
-        ai_mod = max(0.8, min(1.8 if is_aggressive else 3.33, ai_mod))
+        # v13.0 Dynamic Aggressive: 10% to 20% mapping
+        if is_aggressive:
+             # Map ai_strength (confidence) to multiplier 1.0 - 2.0
+             # If strength is 0.85 -> 1.0. If 1.0 -> 2.0.
+             conf_norm = max(0.0, (raw_ai_mod - 0.85) / (1.0 - 0.85)) if raw_ai_mod >= 0.85 else 0.0
+             ai_mod = 1.0 + conf_norm
+             logger.info(f"🚀 [SIZING] Aggressive Profile: Dynamic mapping 10% -> {10.0 * ai_mod:.2f}% | AI Conf: {raw_ai_mod:.2f}")
+        else:
+             ai_mod = 1.0 + (raw_ai_mod - 1.0) * dampening_factor * score_weight
+             # v10.5 Conservative refinement: 3% base, up to 10% max (mod 3.33)
+             ai_mod = max(0.8, min(3.33, ai_mod))
         
         total_pct = risk_pct * ai_mod
         
@@ -1200,6 +1213,10 @@ class CryptoBot:
              adjusted_usdt = remaining_notional / clamped_leverage
              logger.warning(f"🛡️ [SIZING CAP] Global Exposure limit reached for {symbol}. Reducing new order to ${remaining_notional:.2f} Notional.")
 
+        if current_price <= 0:
+            logger.error(f"❌ Impossibile calcolare l'ordine per {symbol}: prezzo non disponibile (0).")
+            return 0.0
+
         # RE-CALCULATE amount with final leverage (v9.8.9 Fix)
         amount_to_buy = (adjusted_usdt * clamped_leverage) / current_price
         
@@ -1208,9 +1225,7 @@ class CryptoBot:
         if purchasing_power < 5.0:
             purchasing_power = 5.0
 
-        if current_price <= 0:
-            logger.error(f"❌ Impossibile calcolare l'ordine per {symbol}: prezzo zero.")
-            return 0.0
+
             
         amount = purchasing_power / current_price
         
@@ -1301,18 +1316,25 @@ class CryptoBot:
         
         lev_calc = base_lev - vol_penalty + trend_bonus
         
-        # 4. Dynamic Floor Based on Confidence (v9.8.7)
-        # Standard min is 5x. High confidence raises floor to 8x or 10x.
-        floor_lev = 5
-        if consensus_score >= 9.2:
-            floor_lev = 10
-        elif consensus_score >= 8.5:
-            floor_lev = 8
+        # 4. Dynamic Floor Based on Confidence (v13.0 Aggressive)
+        # Standard min is 5x. Aggressive raises floor to 10x.
+        floor_lev = 10 if is_aggressive else 5
+        if not is_aggressive:
+            if consensus_score >= 9.2:
+                floor_lev = 10
+            elif consensus_score >= 8.5:
+                floor_lev = 8
             
-        final_max = 25 if is_aggressive else 20
+        # 5. Major-Aware Caps (BTC/ETH up to 75x)
+        is_major = any(m in symbol.upper() for m in ["BTC/", "ETH/", "BITCOIN", "ETHEREUM"])
+        if is_aggressive:
+            final_max = 75 if is_major else 25
+        else:
+            final_max = 20
+            
         final_lev = max(floor_lev, min(final_max, round(lev_calc)))
         
-        logger.info(f"📐 [Leverage] {symbol} (v9.8.7): AI={ai_lev}, Trust={score_trust:.2f}, Floor={floor_lev}x -> Final={final_lev}x")
+        logger.info(f"📐 [Leverage] {symbol} (v13.0): AI={ai_lev}, Trust={score_trust:.2f}, Major={is_major}, Floor={floor_lev}x -> Final={final_lev}x")
         return final_lev
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
@@ -1372,11 +1394,9 @@ class CryptoBot:
 
                 # --- NEW SAFETY GUARD: Total Symbol Exposure Cap ---
                 current_equity = self.latest_account_data.get('equity', 0)
-                if current_equity > 0:
-                    # --- [UPGRADED] ANTI-PYRAMIDING & DYNAMIC CAP (v9.7.6) ---
-                    # --- [UPGRADED] ADAPTIVE ANTI-PYRAMIDING (v10.5) ---
                 
                 # v11.5: LIQUIDITY GUARD - Check spread for listings and high-risk entries
+
                 if signal_type == "NEW_LISTING" or (isinstance(is_black_swan, bool) and is_black_swan):
                     try:
                         orderbook = await self.exchange.fetch_order_book(symbol, limit=5)
@@ -1488,25 +1508,29 @@ class CryptoBot:
                 is_high_priority = signal_type == "WHALE"
                 is_side_flip = side.lower() != last_side
                 
-                # Cooldown Duration: 300s (5m) for standard, 900s (15m) for recent REJECTs
-                cooldown_active = (now - last_review) < 300 if last_review > 0 else False
+                # Cooldown Duration: 300s (5m) for standard
+                cooldown_active = (now - last_review) < 300 if (0 < last_review < now) else False
+                
+                # Check for "Future Scheduled Cooldowns" (Negative time bug fix)
+                if last_review > now:
+                     cooldown_active = True
                 
                 # v11.6.1: Startup Audit Bypass - Allow LLM review for everything in the first 5 minutes
                 is_startup_window = (now - self.start_time) < 300
                 
-                # v11.6.1: Startup Audit Bypass - Allow LLM review for everything in the first 5 minutes
-                is_startup_window = (now - self.start_time) < 300
+                # v13.0: Aggressive/Blitz Profile Bypass - Force Gemini to ignore cooldowns when on aggressive settings
+                is_blitz_profile = "blitz" in str(self.config_file).lower() or "aggressive" in str(self.config_file).lower() or self.leverage >= 20
                 
-                # v12.0.4: Blitz Profile Bypass - Force Gemini to ignore cooldowns when on the blitz profile
-                is_blitz_profile = "blitz" in str(self.config_file).lower() or self.leverage >= 20
-                
-                if (cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window) and not is_blitz_profile:
-                    logger.info(f"🚨🚨🚨 [BLITZ-FORCE-v12.0.8] Gemini analysis is FORCED for {symbol} (Profile: {self.config_file}) 🚨🚨🚨")
-                    # Note: We actually WANT to skip here if not is_blitz_profile, 
-                    # but I will change the logic to NEVER enter this if in Blitz mode.
-                    self.active_positions[symbol] = None
-                    self.pending_orders_count = max(0, self.pending_orders_count - 1)
-                    return
+                # Logic: If it's a Blitz/Aggressive profile, we NEVER enter this skip block.
+                if not is_blitz_profile:
+                    if (cooldown_active and not is_news_signal and not is_high_priority and not is_side_flip and not is_startup_window):
+                        logger.info(f"⏳ [COOLDOWN] Skipping secondary Gemini review for {symbol} (Last: {int(now - last_review)}s ago).")
+                        self.active_positions[symbol] = None
+                        self.pending_orders_count = max(0, self.pending_orders_count - 1)
+                        return
+                else:
+                    logger.info(f"🔥 [DYNAMIC MODE] Bypassing cooldown for {symbol} (Analyzing immediately)...")
+
 
                 # Initial defaults
                 approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = False, 1.0, self.leverage, 1.0, 1.0, None, "Pending Review"
@@ -1538,9 +1562,16 @@ class CryptoBot:
                         reason = "Failed to fetch ticker for listing"
                 else:
                     # Standard Multi-Indicator Strategy
+                    indicators = self.latest_data.get(symbol, {})
+                    # Add computed convenience fields for the LLM analyst
+                    indicators['price_vs_ema200'] = (indicators.get('price', 0) - indicators.get('ema200', 0)) / indicators.get('ema200', 1) if indicators.get('ema200', 0) > 0 else 0
+                    indicators['volume_change'] = 1.0 # Fallback 
+
                     approved, ai_strength, ai_leverage, ai_sl_mult, ai_tp_mult, ai_tp_price, reason = await self.analyst.decide_strategy(
                         symbol, side, signal_type, indicators, mtf_context=mtf_context, news_context=self.current_news
                     )
+
+
                     
                 # Update Cooldown state
                 # If REJECTED, set a longer cooldown (900s) to avoid spamming the same setup
@@ -1982,9 +2013,22 @@ class CryptoBot:
                 # This stops the "mess" by reacting to bleeding positions before they are closed.
                 wallet_pnl_pct = (wallet_balance - self.initial_wallet_balance) / self.initial_wallet_balance if self.initial_wallet_balance > 0 else 0
                 equity_pnl_pct = (equity - self.initial_wallet_balance) / self.initial_wallet_balance if self.initial_wallet_balance > 0 else 0
-                
+
                 # Use the worse of the two for the circuit breaker
                 effective_pnl_pct = min(wallet_pnl_pct, equity_pnl_pct)
+
+
+                # --- NEW: CAPITAL RESET DETECTION (v12.1.2) ---
+                # Detect and fix stale 'initial_balance' data if the difference is >80% and NO positions are open.
+                if abs(effective_pnl_pct) >= 0.80 and not active_pos and (time.time() - self.start_time) < 600:
+                     logger.warning(f"🔄 [CAPITAL RESET] Major balance shift from ${self.initial_wallet_balance:.2f} to ${wallet_balance:.2f} with zero positions. Syncing benchmark.")
+                     self.initial_wallet_balance = wallet_balance
+                     self.db.save_state("initial_balance", self.initial_wallet_balance)
+                     # Re-calc to prevent immediate loop trigger
+                     wallet_pnl_pct = 0
+                     equity_pnl_pct = 0
+                     effective_pnl_pct = 0
+
 
                 # --- NEW: STARTUP PROTECTION SHIELD (v4.2) ---
                 # v9.8.5.2: 15s shield to allow Binance API to return full active_pos list
@@ -2226,8 +2270,12 @@ class CryptoBot:
                 self.notifier.notify_trade(symbol, "CLOSE", current_price, amount, "CIRCUIT BREAKER")
             
             self.db.save_state("trade_levels", self.trade_levels)
-            logger.info("✅ All positions closed successfully.")
-            self.notifier.notify_alert("CRITICAL", "VENDITA DI EMERGENZA (GLOBAL PANIC)", "Tutte le posizioni sono state chiuse a causa del drawdown eccessivo.")
+            if active_pos:
+                logger.warning("✅ All positions closed successfully.")
+                self.notifier.notify_alert("CRITICAL", "VENDITA DI EMERGENZA (GLOBAL PANIC)", "Tutte le posizioni sono state chiuse a causa del drawdown eccessivo.")
+            else:
+                logger.info("ℹ️ [INFO] Emergency Cleanup: No active positions to close, alert suppressed.")
+
         except Exception as e:
             logger.error(f"Failed to execute emergency cleanup: {e}")
     async def reset_circuit_breaker(self):
