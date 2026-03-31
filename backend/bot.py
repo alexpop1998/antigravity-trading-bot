@@ -64,7 +64,15 @@ class CryptoBot:
         self.gemini_min_confidence = float(params.get("gemini_min_confidence", 0.90))
         self.current_margin_ratio = 0.0
         self.profile_type = self.risk_profile.get("profile_type", "aggressive").lower()
-        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()} (Limits: DD={self.panic_drawdown_threshold:.1%}, BE={self.be_trigger_pct:.1%})")
+        
+        # --- NEW: DYNAMIC TECHNICAL GUARDS (v16.6) ---
+        self.adx_threshold = int(params.get("adx_threshold", 25))
+        self.ema_trend_filter = bool(params.get("ema_trend_filter", True))
+        self.min_volume_24h = float(params.get("min_volume_24h", 5000000))
+        self.rsi_buy_level = int(params.get("rsi_buy_level", 30))
+        self.rsi_sell_level = int(params.get("rsi_sell_level", 70))
+        
+        logger.info(f"🏗️ [PROFILE] Operation Mode: {self.profile_type.upper()} (ADX: {self.adx_threshold}, EMA_F: {self.ema_trend_filter}, Vol: {self.min_volume_24h/1e6:.1f}M)")
         
         # Select active exchange from environment
         self.active_exchange_name = os.getenv("ACTIVE_EXCHANGE", "binance").lower()
@@ -617,33 +625,32 @@ class CryptoBot:
             return
 
         # --- LOGIC GUARD 1: Volume ---
-        # Require minimum $5M 24h volume for institutional stability (avoid shitcoin pumps)
-        if volume24h < 5000000:
+        # 1. Volume Filter (Profile-based)
+        if volume24h < self.min_volume_24h:
             return
 
-        # --- LOGIC GUARD 2: Trend Filter (200 EMA) ---
-        price_above_ema = price > ema200
-        
         # 2. Classic Technical Strategy (RSI + MACD + Bollinger)
         is_technical_signal = False
         tech_side = None
         
-        # --- ADX TREND FILTER ---
-        # Don't take trend-following signals if we're in a sideways range (ADX < 25)
-        is_trending = adx > 25 if not pd.isna(adx) else True
+        # --- ADX TREND FILTER (Profile-based) ---
+        is_trending = adx > self.adx_threshold if not pd.isna(adx) else True
         
         # --- STRONGER TECHNICAL CONFLUENCE: RSI + MACD Hist + Bollinger ---
-        if rsi < 30 and macd_hist > -0.0001 and macd_hist > self.latest_data[symbol].get('macd_hist_prev', -1) and price <= (bb_lower * 1.01):
-            if price_above_ema and is_trending: # Trend-following LONG
+        # Long: RSI <= rsi_buy_level
+        if rsi <= self.rsi_buy_level and macd_hist > -0.0001 and macd_hist > self.latest_data[symbol].get('macd_hist_prev', -1) and price <= (bb_lower * 1.01):
+            # Check EMA Filter (if enabled for profile)
+            if (not self.ema_trend_filter or price > ema200) and is_trending: # Trend-following LONG
                 tech_side = 'buy'
                 is_technical_signal = True
             
-        elif rsi > 70 and macd_hist < 0.0001 and macd_hist < self.latest_data[symbol].get('macd_hist_prev', 1) and price >= (bb_upper * 0.99):
+        # Short: RSI >= rsi_sell_level
+        elif rsi >= self.rsi_sell_level and macd_hist < 0.0001 and macd_hist < self.latest_data[symbol].get('macd_hist_prev', 1) and price >= (bb_upper * 0.99):
             # --- SHORTING MOMENTUM GUARD ---
-            # Don't short if there is strong bullish momentum in the last 5 minutes
-            if change_5m_pct > 0.008: # 0.8% in 5m is too strong to short technically
+            if change_5m_pct > 0.008: 
                 logger.info(f"🛡️ [SHORT GUARD] Skipping technical SHORT on {symbol}: Momentum too bullish ({change_5m_pct:.2%})")
-            elif not price_above_ema and is_trending: # Trend-following SHORT
+            # Check EMA Filter (if enabled for profile)
+            elif (not self.ema_trend_filter or price < ema200) and is_trending: # Trend-following SHORT
                 tech_side = 'sell'
                 is_technical_signal = True
 
