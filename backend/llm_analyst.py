@@ -145,12 +145,16 @@ class LLMAnalyst:
             }}
             """
 
+            # --- DYNAMIC TEMPERATURE (v16.2) ---
+            temp_map = {"institutional": 0.1, "conservative": 0.3, "aggressive": 0.7, "extreme": 0.8}
+            active_temp = temp_map.get(profile_type, 0.5)
+            
             async with self.semaphore:
                 response = await self.ai_client.chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={ "type": "json_object" },
-                    temperature=0.2
+                    temperature=active_temp
                 )
                 
                 response_json = json.loads(response.choices[0].message.content)
