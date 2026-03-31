@@ -78,11 +78,13 @@ class SignalManager:
         for t in expired_types:
             del self.signals[symbol][t]
 
-        # --- NEW: AI SPECULATIVE THRESHOLD (v3.5) ---
-        # Lower the threshold to 1.5 if an AI signal has extreme confidence (>90%)
-        effective_threshold = self.min_conviction
+        # --- NEW: DYNAMIC CONSENSUS THRESHOLD (v16.4) ---
+        # Read from active profile (e.g., 1.5 for Aggressive) rather than cached __init__ value
+        current_threshold = getattr(self.bot, 'consensus_threshold', 2.5)
+        effective_threshold = current_threshold
+        
         if type == "AI" and ai_confidence > 0.90:
-            effective_threshold = 1.5
+            effective_threshold = min(effective_threshold, 1.5)
             logger.warning(f"🚀 [AI SPECULATION] High Confidence AI Signal ({ai_confidence:.2f}) - Lowering threshold to {effective_threshold}")
 
         if abs(total_score) >= effective_threshold:
