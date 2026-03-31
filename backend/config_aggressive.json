@@ -57,7 +57,7 @@
         "max_concurrent_positions": 5,
         "max_global_margin_ratio": 0.75,
         "daily_loss_limit": 15.0,
-        "panic_drawdown_threshold": 0.15,
+        "panic_drawdown_threshold": 0.25,
         "breakeven_pct": 0.005,
         "be_trigger_pct": 0.005
     }
