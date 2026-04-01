@@ -134,10 +134,11 @@ class LLMAnalyst:
             verdict = response_json.get("verdict", "REJECT")
             confidence = response_json.get("confidence", 0.0)
             
-            if verdict == "APPROVE" and confidence < self.bot.gemini_min_confidence:
-                logger.warning(f"🛡️ [LLM GUARD] AI approved with {confidence}, but config requires {self.bot.gemini_min_confidence}. REJECTING.")
+            min_confidence = self.bot.config.get('trading_parameters', {}).get('min_ai_confidence', 0.55)
+            if verdict == "APPROVE" and confidence < min_confidence:
+                logger.warning(f"🛡️ [LLM GUARD] AI approved with {confidence:.2f}, below threshold {min_confidence}. REJECTING.")
                 verdict = "REJECT"
-                reasoning = f"Confidence threshold not met ({confidence} < {self.bot.gemini_min_confidence})"
+                reasoning = f"Confidence threshold not met ({confidence:.2f} < {min_confidence})"
             else:
                 reasoning = response_json.get("reasoning", "No reason provided.")
 
