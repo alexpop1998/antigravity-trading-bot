@@ -259,33 +259,37 @@ class CryptoBot:
 
     async def _reconcile_orphan_positions(self):
         """
-        [RECOVERY ENGINE - v19.0] 
+        [RECOVERY ENGINE - v20.0] 
         Identifies positions on the exchange missing from trade_levels and adopts them.
-        Ensures Stop Loss (SL) is applied to all active trades.
+        Ensures Stop Loss (SL) is applied to all active trades, including Bitget XXXX/USDT:USDT format.
         """
         try:
             logger.info("🔄 [RECOVERY] Scanning for orphaned positions...")
-            # Fetch all active positions from exchange
-            bal = await self.exchange.fetch_balance()
-            info = bal.get('info', [])
-            all_raw = info if isinstance(info, list) else info.get('positions', [])
+            # CCXT Unified: fetch_positions with symbols is more stable on Bitget
+            my_symbols = [s for s in self.exchange.symbols if '/USDT:USDT' in s or '/USDT' in s]
             
-            # Fallback for Bitget fetch_balance lack of positions info
-            if self.active_exchange_name == "bitget" and not all_raw:
-                all_raw = await self.exchange.fetch_positions()
+            try:
+                all_raw = await self.exchange.fetch_positions(my_symbols)
+            except Exception as e:
+                logger.warning(f"⚠️ fetch_positions with symbols failed: {e}. Falling back to fetch_balance info.")
+                bal = await self.exchange.fetch_balance()
+                info = bal.get('info', [])
+                all_raw = info if isinstance(info, list) else info.get('positions', [])
             
-            id_to_sym = {m['id']: s for s, m in self.exchange.markets.items()}
             adopted_count = 0
-
             for p in all_raw:
-                # CCXT Unified or Raw
-                p_id = p.get('instId', p.get('symbol'))
+                # 1. Normalize Symbol (Bitget XXXX/USDT:USDT -> XXXX/USDT)
+                raw_sym = p.get('symbol', p.get('instId'))
+                if not raw_sym: continue
+                
+                # Strip Bitget's complex suffix for internal tracking if needed
+                symbol = raw_sym.replace(':USDT', '') if ':USDT' in raw_sym else raw_sym
                 p_amt = float(p.get('total', p.get('positionAmt', p.get('contracts', 0))))
                 
                 if p_amt != 0:
-                    symbol = id_to_sym.get(p_id, p_id)
+                    # Check memory and DB
                     if symbol not in self.trade_levels or self.trade_levels[symbol] is None:
-                        logger.warning(f"🧟 [RECOVERY] Orphan found: {symbol} ({p_amt}). Adopting now...")
+                        logger.warning(f"🧟 [RECOVERY] Orphan found: {symbol} ({p_amt}). Adopting now (v20.0)...")
                         
                         entry_price = float(p.get('entryPrice', p.get('avgPrice', 0)))
                         if entry_price <= 0:
@@ -309,13 +313,16 @@ class CryptoBot:
                         }
                         self.active_positions[symbol] = 'LONG' if side == 'buy' else 'SHORT'
                         adopted_count += 1
+                        logger.info(f"✅ [RECOVERY] {symbol} adopted. SL: {self.trade_levels[symbol]['sl']}")
 
             if adopted_count > 0:
                 self.db.save_state("trade_levels", self.trade_levels)
-                logger.info(f"✅ [RECOVERY] Adopted {adopted_count} orphaned trades. SL/TP applied.")
+                # v20.1: Immediately notify and sync
+                logger.warning(f"✅ [RECOVERY] Successfully adopted {adopted_count} active positions into trade_levels.")
 
         except Exception as e:
             logger.error(f"❌ [RECOVERY ERROR] Failed to reconcile orphans: {e}")
+            traceback.print_exc()
 
     def _get_data_provider(self, symbol):
         """Returns the data provider for a given symbol."""
