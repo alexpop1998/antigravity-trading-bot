@@ -272,22 +272,30 @@ class CryptoBot:
                 for asset in top_assets:
                     symbol = asset['symbol']
                     try:
-                        # Fetch OHLCV candles so ML/Regime have real data
+                        import pandas as pd
+                        # Fetch 100 candles on 15m timeframe for ML + Regime
                         ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '15m', limit=100)
-                        if ohlcv and len(ohlcv) >= 10:
-                            closes = [c[4] for c in ohlcv]
-                            volumes = [c[5] for c in ohlcv]
+                        if ohlcv and len(ohlcv) >= 20:
+                            df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                            # Compute basic indicators on the DataFrame
+                            df['rsi'] = 50.0  # placeholder — real RSI needs ta-lib or pandas-ta
+                            df['macd_hist'] = df['close'].diff(3)
+                            df['bb_upper'] = df['close'].rolling(20).max()
+                            df['bb_lower'] = df['close'].rolling(20).min()
+                            df['atr'] = df['high'] - df['low']
+                            closes = df['close'].tolist()
+                            volumes = df['volume'].tolist()
                             indicators = {
                                 'close': closes[-1],
                                 'volume': volumes[-1],
                                 'volume_change': (volumes[-1] / volumes[-2] - 1) if volumes[-2] > 0 else 0,
                                 'rsi': asset.get('rsi', 50),
-                                'macd_hist': 0,
-                                'bb_upper': max(closes[-20:]),
-                                'bb_lower': min(closes[-20:]),
-                                'atr': (max(closes[-14:]) - min(closes[-14:])),
+                                'macd_hist': float(df['macd_hist'].iloc[-1]),
+                                'bb_upper': float(df['bb_upper'].iloc[-1]),
+                                'bb_lower': float(df['bb_lower'].iloc[-1]),
+                                'atr': float(df['atr'].iloc[-1]),
                                 'price_vs_ema200': closes[-1] / (sum(closes[-50:]) / min(50, len(closes))),
-                                'ohlcv_df': ohlcv  # passthrough for MLPredictor
+                                'df': df  # full DataFrame for MLPredictor
                             }
                             self.latest_data[symbol] = indicators
                         else:

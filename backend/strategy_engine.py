@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import pandas as pd
 from typing import Dict, Any, List, Optional
 from ml_predictor import MLPredictor
 from llm_analyst import LLMAnalyst
@@ -32,10 +31,10 @@ class StrategyEngine:
             # 1. Technical Regime Detection
             regime = self.regime_detector.detect_regime(data)
             
-            # 2. ML Prediction — needs a DataFrame with OHLCV columns; skip gracefully if empty
+            # 2. ML Prediction — use full DataFrame if available (100 candles)
             prediction = None
-            if data and isinstance(data, dict) and 'close' in data:
-                df = pd.DataFrame([data])
+            df = data.get('df') if data else None
+            if df is not None and hasattr(df, '__len__') and len(df) >= 50:
                 prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
             
             # 3. AI Decision via LLMAnalyst.decide_strategy (correct method name)
