@@ -8,7 +8,7 @@ logger = logging.getLogger("ListingRadar")
 class ListingRadar:
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        self.exchange = bot_instance.exchange
+        self.exchange = bot_instance.gateway.exchange
         self.known_symbols: Set[str] = set()
         self.is_running = False
 

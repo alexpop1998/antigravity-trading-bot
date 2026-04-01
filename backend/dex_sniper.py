@@ -14,8 +14,8 @@ class DEXSniper:
         # In a real scenario, this uses web3.py to query Uniswap V3 Router contract
         # For this infrastructure skeleton, we simulate the DEX price slightly lagging the CEX.
         cex_price = 3000.0
-        if symbol in self.bot.latest_data and self.bot.latest_data[symbol]:
-            cex_price = float(self.bot.latest_data[symbol].get('price', 3000.0))
+        if symbol in self.bot.latest_data and self.bot.latest_data.get(symbol):
+            cex_price = float(self.bot.latest_data.get(symbol, {}).get('price', 3000.0))
         
         # Simulate a sudden flash crash on DEX (~2% chance per tick)
         flash_crash_chance = random.random()

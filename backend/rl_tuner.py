@@ -7,8 +7,9 @@ import random
 logger = logging.getLogger("RLTuner")
 
 class RLTuner:
-    def __init__(self, config_path="client_config.json", interval_hours=24):
-        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_path)
+    def __init__(self, bot_instance=None, config_path="config_blitz.json", interval_hours=24):
+        self.bot = bot_instance
+        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", config_path)
         self.interval_hours = interval_hours
         self.learning_rate = 0.05
     
