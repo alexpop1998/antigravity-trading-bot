@@ -19,21 +19,19 @@ class ExchangeGateway:
         self.symbol_map = {} # Unslashed -> Canonical
 
     def _initialize_exchange(self):
-        if self.exchange_name == "bitget":
-            return ccxt.bitget({
-                'apiKey': os.getenv("BITGET_API_KEY"),
-                'secret': os.getenv("BITGET_API_SECRET"),
-                'password': os.getenv("BITGET_PASSWORD"),
-                'enableRateLimit': True,
-                'options': {'defaultType': 'swap'},
-            })
+        exchange_id = self.exchange_name
+        config = {
+            'apiKey': os.getenv(f"{exchange_id.upper()}_API_KEY"),
+            'secret': os.getenv(f"{exchange_id.upper()}_API_SECRET"),
+            'password': os.getenv(f"{exchange_id.upper()}_PASSWORD"),
+            'enableRateLimit': True,
+            'timeout': 15000,
+        }
+        if exchange_id == "bitget":
+            config['options'] = {'defaultType': 'swap'}
+            return ccxt.bitget(config)
         else:
-            # Default to Binance USDM
-            return ccxt.binanceusdm({
-                'apiKey': os.getenv("EXCHANGE_API_KEY"),
-                'secret': os.getenv("EXCHANGE_API_SECRET"),
-                'enableRateLimit': True,
-            })
+            return ccxt.binanceusdm(config)
 
     async def load_markets(self):
         """Pre-fetch and cache markets for fast symbol mapping."""
