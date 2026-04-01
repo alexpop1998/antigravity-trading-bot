@@ -298,22 +298,54 @@ class CryptoBot:
 
                         side = 'buy' if p_amt > 0 else 'sell'
                         
+                        is_long = side == 'buy'
+                        sl_price = entry_price * (1 - self.stop_loss_pct if is_long else 1 + self.stop_loss_pct)
+                        tp1_price = entry_price * (1 + self.take_profit_pct/2 if is_long else 1 - self.take_profit_pct/2)
+                        tp2_price = entry_price * (1 + self.take_profit_pct if is_long else 1 - self.take_profit_pct)
+                        
                         # Apply current profile's risk parameters
                         self.trade_levels[symbol] = {
                             "symbol": symbol,
                             "side": side,
                             "entry_price": entry_price,
                             "amount": abs(p_amt),
-                            "sl": entry_price * (1 - self.stop_loss_pct if side == 'buy' else 1 + self.stop_loss_pct),
-                            "tp1": entry_price * (1 + self.take_profit_pct/2 if side == 'buy' else 1 - self.take_profit_pct/2),
-                            "tp2": entry_price * (1 + self.take_profit_pct if side == 'buy' else 1 - self.take_profit_pct),
+                            "sl": sl_price,
+                            "tp1": tp1_price,
+                            "tp2": tp2_price,
                             "status": "RECOVERED_ZOMBIE",
                             "opened_at": time.time(),
                             "profile_type": self.profile_type
                         }
-                        self.active_positions[symbol] = 'LONG' if side == 'buy' else 'SHORT'
+                        self.active_positions[symbol] = 'LONG' if is_long else 'SHORT'
                         adopted_count += 1
-                        logger.info(f"✅ [RECOVERY] {symbol} adopted. SL: {self.trade_levels[symbol]['sl']}")
+                        logger.info(f"✅ [RECOVERY] {symbol} adopted. SL: {sl_price}")
+
+                        # [FIX TP/SL] Push Hard TP/SL to exchange for orphans
+                        try:
+                            # Use proper precision
+                            sl_price_fmt = float(self.exchange.price_to_precision(symbol, sl_price))
+                            tp_price_fmt = float(self.exchange.price_to_precision(symbol, tp2_price))
+                            
+                            close_side = 'sell' if is_long else 'buy'
+                            hold_side = 'long' if is_long else 'short'
+                            
+                            # 1. Place SL
+                            sl_params = {'stopPrice': sl_price_fmt, 'triggerPrice': sl_price_fmt, 'reduceOnly': True, 'triggerType': 'mark_price'}
+                            if self.active_exchange_name == "bitget":
+                                sl_params.update({'holdSide': hold_side, 'marginCoin': 'USDT', 'planType': 'loss_plan'})
+                            
+                            logger.info(f"⚙️ [ORPHAN RECOVERY] Placing Hard SL for {symbol} at {sl_price_fmt}")
+                            await self.exchange.create_order(symbol, 'market', close_side, abs(p_amt), params=sl_params)
+                            
+                            # 2. Place TP
+                            tp_params = {'stopPrice': tp_price_fmt, 'triggerPrice': tp_price_fmt, 'reduceOnly': True, 'triggerType': 'mark_price'}
+                            if self.active_exchange_name == "bitget":
+                                tp_params.update({'holdSide': hold_side, 'marginCoin': 'USDT', 'planType': 'profit_plan'})
+                            
+                            logger.info(f"⚙️ [ORPHAN RECOVERY] Placing Hard TP for {symbol} at {tp_price_fmt}")
+                            await self.exchange.create_order(symbol, 'market', close_side, abs(p_amt), params=tp_params)
+                        except Exception as e:
+                            logger.error(f"⚠️ [ORPHAN RECOVERY] Failed to place Hard TP/SL for {symbol}: {e}")
 
             if adopted_count > 0:
                 self.db.save_state("trade_levels", self.trade_levels)
@@ -2834,12 +2866,24 @@ class CryptoBot:
                 if not is_active:
                     continue
                     
-                # v17.11: Check if already tracked, BUT force-re-sync if it's a recovered position (to fix stale entry prices)
+                # v20.2: Normalize symbol for matching (Bitget handling)
+                norm_sym = symbol.replace(':USDT', '') if ':USDT' in symbol else symbol
+                
+                # Check if already tracked, but force-re-sync if it's a recovered position
+                is_tracked = False
+                matched_key = symbol
+                
                 if self.trade_levels.get(symbol) is not None:
+                    is_tracked = True
+                elif self.trade_levels.get(norm_sym) is not None:
+                    is_tracked = True
+                    matched_key = norm_sym
+                
+                if is_tracked:
                     # If it's already there but marked as RECOVERED, keep going to update entry/leverage
-                    if self.trade_levels[symbol] and self.trade_levels[symbol].get('status', '').startswith('RECOVERED'):
-                        logger.info(f"🔄 [REFRESH] Re-syncing existing recovered position for {symbol} to fix potential stale data...")
-                        pass # Continue with recovery logic to overwrite with fresh exchange info
+                    if self.trade_levels[matched_key] and str(self.trade_levels[matched_key].get('status', '')).startswith('RECOVERED'):
+                        logger.info(f"🔄 [REFRESH] Re-syncing existing recovered position for {matched_key} to fix potential stale data...")
+                        symbol = matched_key # Use the tracked key
                     else:
                         continue
 
@@ -2934,11 +2978,47 @@ class CryptoBot:
                 except Exception as lev_err:
                     logger.error(f"⚠️ [LEVERAGE FAIL] Could not sync leverage for {symbol}: {lev_err}")
                 
-                # Immediate safety check (e.g. if already in profit)
+                # v21.0: [CRITICAL] Ensure HARD Stop Loss exists on Exchange for recovered positions
                 try:
-                    self._check_soft_stop_loss(symbol, current_price)
-                except Exception as audit_err:
-                    logger.error(f"⚠️ Initial audit failed for recovered {symbol}: {audit_err}")
+                    # Place or Update Hard SL Order on Exchange
+                    sl_side = 'sell' if is_long else 'buy'
+                    hold_side = 'long' if is_long else 'short'
+                    
+                    sl_params = {
+                        'stopPrice': sl_price,
+                        'triggerPrice': sl_price,
+                        'reduceOnly': True,
+                        'triggerType': 'mark_price'
+                    }
+                    if self.active_exchange_name == "bitget":
+                        sl_params.update({'holdSide': hold_side, 'marginCoin': 'USDT'})
+                    
+                    logger.warning(f"⚙️ [RECOVERY SL] Placing active SL order on exchange for {symbol} at {sl_price}...")
+                    # Success testing confirmed 'market' order with stopPrice params works for Bitget trigger orders
+                    await self.exchange.create_order(symbol, 'market', sl_side, amount, params=sl_params)
+                    logger.info(f"✅ [RECOVERY SL] Hard SL successfully placed on exchange for {symbol}.")
+                except Exception as sl_order_err:
+                    logger.error(f"⚠️ [RECOVERY SL FAIL] Failed to place hard SL for {symbol}: {sl_order_err}")
+
+                # [CRITICAL] Ensure HARD TP exists on Exchange for recovered positions
+                try:
+                    tp_side = 'sell' if is_long else 'buy'
+                    hold_side = 'long' if is_long else 'short'
+                    
+                    tp_params = {
+                        'stopPrice': tp2_price,
+                        'triggerPrice': tp2_price,
+                        'reduceOnly': True,
+                        'triggerType': 'mark_price'
+                    }
+                    if self.active_exchange_name == "bitget":
+                        tp_params.update({'holdSide': hold_side, 'marginCoin': 'USDT'})
+                    
+                    logger.warning(f"⚙️ [RECOVERY TP] Placing active TP order on exchange for {symbol} at {tp2_price}...")
+                    await self.exchange.create_order(symbol, 'market', tp_side, amount, params=tp_params)
+                    logger.info(f"✅ [RECOVERY TP] Hard TP successfully placed on exchange for {symbol}.")
+                except Exception as tp_order_err:
+                    logger.error(f"⚠️ [RECOVERY TP FAIL] Failed to place hard TP for {symbol}: {tp_order_err}")
             
             # Save state to DB
             self.db.save_state("trade_levels", self.trade_levels)
@@ -2948,9 +3028,19 @@ class CryptoBot:
 
     async def monitor_position_health_loop(self):
         """Background task to periodically evaluate active positions with AI."""
-        await asyncio.sleep(600) # Initial 10m wait to let things settle
+        # Initial wait to let bot settle
+        await asyncio.sleep(600) 
+        
+        iteration = 0
         while True:
             try:
+                # v21.5: [CRITICAL] Run Orphan Recovery every 10 iterations (~20 minutes)
+                if iteration % 10 == 0:
+                    logger.warning("🔍 [SCHEDULED] Running Orphan Position Recovery audit...")
+                    await self.sync_zombie_positions()
+                
+                iteration += 1
+                
                 active_symbols = [s for s, level in self.trade_levels.items() if level is not None]
                 if active_symbols:
                     logger.info(f"🔍 [AI AUDIT] Periodically reviewing {len(active_symbols)} active positions...")
@@ -2959,6 +3049,7 @@ class CryptoBot:
                         await asyncio.sleep(5) # Rate limit protection
             except Exception as e:
                 logger.error(f"Error in position health loop: {e}")
+            
             await asyncio.sleep(120) # Run every 2 minutes
 
     async def _audit_single_position(self, symbol):
