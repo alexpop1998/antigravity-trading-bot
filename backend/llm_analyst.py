@@ -69,7 +69,7 @@ class LLMAnalyst:
 
             # --- DYNAMIC PROFILE PROMPTS (v17.0) ---
             profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            ai_prompts = getattr(self.bot.risk_profile, 'ai_prompts', {})
+            ai_prompts = self.bot.config.get('ai_prompts', {})
             active_profile_prompt = ai_prompts.get("llm_philosophy", "Focus on high-conviction technical alignment.")
 
             # --- ANTI-BIAS NOTE (Dynamic) ---
@@ -207,7 +207,7 @@ class LLMAnalyst:
         try:
             # --- DYNAMIC MONITORING PHILOSOPHY (v17.0) ---
             profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            ai_prompts = getattr(self.bot.risk_profile, 'ai_prompts', {})
+            ai_prompts = self.bot.config.get('ai_prompts', {})
             philosophy = ai_prompts.get("llm_philosophy", "Monitor standard indicators.")
 
             prompt = f"""

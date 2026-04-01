@@ -40,12 +40,17 @@ class StrategyEngine:
             
             # 3. AI Decision via LLMAnalyst.decide_strategy (correct method name)
             indicators = data if data else {}
-            approved, confidence, leverage, tp_mult, sl_mult, reason = await self.analyst.decide_strategy(
+            result = await self.analyst.decide_strategy(
                 symbol=symbol,
                 side="buy",
                 signal_type="DELIBERATIVE_SCAN",
                 indicators=indicators
             )
+            # Safe unpack: decide_strategy returns (approved, confidence, leverage, tp_mult, sl_mult, reason)
+            approved = result[0] if result else False
+            confidence = result[1] if result and len(result) > 1 else 0.0
+            leverage = result[2] if result and len(result) > 2 else self.bot.leverage
+            reason = result[5] if result and len(result) > 5 else "N/A"
             
             # 4. Consensus Score
             score = self.calculate_consensus_score(regime, prediction, approved, confidence)
