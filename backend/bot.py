@@ -374,11 +374,15 @@ class CryptoBot:
                             recovered_count += 1
                 if recovered_count > 0:
                     logger.info(f"✅ Recovered {recovered_count} active positions. Adapting to {self.profile_type.upper()}...")
-                    # v19.0: Atomic orphan recovery to adopt missing trade_levels
-                    await self._reconcile_orphan_positions()
-                    # v15.2: Async task for background reconciliation
+                
+                # v20.1: [CRITICAL] Orphan recovery MUST run regardless of fetch_balance results
+                # This is the primary engine for Bitget position adoption
+                await self._reconcile_orphan_positions()
+                
+                if recovered_count > 0 or any(self.trade_levels.values()):
+                    # v15.2: Async task for background reconciliation and SL checks
                     asyncio.create_task(self._reconcile_active_trades())
-                    logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions.")
+                    logger.warning("✅ [RECOVERY] Recovery cycle triggered for active positions.")
             except Exception as e:
                 logger.error(f"⚠️ [RECOVERY ERROR] Position sync skipped: {e}")
 
