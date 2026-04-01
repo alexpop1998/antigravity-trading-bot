@@ -336,7 +336,7 @@ if __name__ == "__main__":
     try:
         # Final check: Testnet connectivity with clean keys
         # Multi-Reload is disabled to prevent infinite loops when config files are auto-tuned
-        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+        uvicorn.run(app, host="0.0.0.0", port=8000)
     except Exception as e:
         # CRITICAL: Capture the ultimate crash that takes the server down
         with open("crash.log", "a") as f:
