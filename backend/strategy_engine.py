@@ -33,8 +33,8 @@ class StrategyEngine:
             # 1. Technical Regime Detection
             regime = self.regime_detector.detect_regime(data)
             
-            # 2. ML Prediction (Prophet/Price Action)
-            prediction = await self.predictor.predict(symbol, data)
+            # 2. ML Prediction (Dynamic Random Forest)
+            prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, data)
             
             # 3. AI Sentiment (Gemini - if cooldown permits)
             ai_evaluation = await self.analyst.evaluate_symbol(symbol, data)
