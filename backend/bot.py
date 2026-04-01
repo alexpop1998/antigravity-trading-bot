@@ -268,7 +268,8 @@ class CryptoBot:
                 
                 await self.sync_state()
                 top_assets = await self.scanner.scan()
-                for symbol in top_assets:
+                for asset in top_assets:
+                    symbol = asset['symbol']
                     indicators = self.latest_data.get(symbol, {})
                     analysis = await self.strategy.analyze_opportunity(symbol, indicators)
                     if analysis['score'] >= 0.8:
