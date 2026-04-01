@@ -1221,10 +1221,23 @@ class CryptoBot:
             raw_price = order_response.get('price')
             execution_price = float(raw_avg if raw_avg is not None else (raw_price if raw_price is not None else 0))
             
-            # Fallback for execution price if not in response
+            # Fallback for execution price if not in response (v17.20 Bitget Sync)
             if execution_price <= 0:
+                # 1. Try last known price from latest_data
                 execution_price = self.latest_data[symbol].get('price', 0) if symbol in self.latest_data else 0
-                logger.warning(f"⚠️ Could not get execution price from order response for {symbol}. Using last known price: {execution_price}")
+                
+                # 2. If still 0 (e.g. recovered zombie), fetch fresh ticker (v17.20 Absolute Fail-safe)
+                if execution_price <= 0:
+                    try:
+                        ticker = await self.exchange.fetch_ticker(symbol)
+                        execution_price = float(ticker.get('last') or ticker.get('close') or 0)
+                        logger.info(f"🔍 [PRICE SYNC] Fetched fresh ticker for {symbol} exit: {execution_price}")
+                    except: pass
+                
+                if execution_price <= 0:
+                    # 3. Final fallback to entry_price to show 0% instead of -100%
+                    execution_price = float(trade.get('entry_price', 0))
+                    logger.warning(f"⚠️ [REPORTING FAIL] Could not get execution price for {symbol}. Using entry price as fallback.")
             
             if partial_pct >= 1.0:
                 logger.info(f"Position closed successfully for {symbol} @ {execution_price}.")
@@ -2279,6 +2292,9 @@ class CryptoBot:
             self.latest_account_data['unrealized_pnl'] = unrealized_pnl
             self.latest_account_data['positions'] = active_pos # CRITICAL: Update the position list used by Sizing/Audit
             self.latest_account_data['alerts'] = self.alert_history
+            
+            # v17.20: Persist latest_account_data to DB for generate_report.py visibility
+            self.db.save_state("latest_account_data", self.latest_account_data)
             
             if self.initial_wallet_balance is None:
                 self.initial_wallet_balance = equity

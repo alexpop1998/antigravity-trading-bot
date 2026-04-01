@@ -82,6 +82,16 @@ def generate():
             # Ripristinato in v9.8.2: Filtra per data d'inizio (Oggi 29/03)
             cursor.execute("SELECT * FROM trade_history WHERE timestamp >= ? ORDER BY timestamp ASC", (START_DATE,))
             rows = cursor.fetchall()
+            
+            # --- NEW: Load Active Positions (v17.20) ---
+            cursor.execute("SELECT value FROM bot_state WHERE key='latest_account_data'")
+            account_row = cursor.fetchone()
+            active_positions = []
+            if account_row:
+                try:
+                    account_data = json.loads(account_row[0])
+                    active_positions = account_data.get('positions', [])
+                except: pass
         
         cumulative_pnl = 0
         shadow_cumulative_pnl = 0
@@ -219,6 +229,18 @@ def generate():
             <canvas id="mainChart"></canvas>
         </div>
 
+        <div class="table-box" style="margin-bottom: 30px;">
+            <h4 style="margin: 0 0 15px 10px;">Posizioni Aperte (Real-time)</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Strumento</th><th>Entrata</th><th>Prezzo Mark</th><th>PnL Non Realizzato</th><th>ROE %</th>
+                    </tr>
+                </thead>
+                <tbody id="open-positions-body"></tbody>
+            </table>
+        </div>
+
         <div class="table-box">
             <h4 style="margin: 0 0 15px 10px;">Cronologia Operazioni Concluse</h4>
             <table>
@@ -234,6 +256,7 @@ def generate():
 
     <script>
         const tradeData = {json.dumps(trade_data_json)};
+        const openPositions = {json.dumps(active_positions)};
         if(tradeData.length === 0) {{
             tradeData.push({{
                 timestamp: "{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 
@@ -256,6 +279,29 @@ def generate():
                 <td style="opacity:0.6; font-size:11px">${{t.reason}}</td>
             </tr>`;
         }}).join('');
+
+        const openBody = document.getElementById('open-positions-body');
+        if (openPositions.length === 0) {{
+            openBody.innerHTML = '<tr><td colspan="5" style="text-align:center; opacity:0.5; padding:20px;">Nessuna posizione aperta al momento.</td></tr>';
+        }} else {{
+            openBody.innerHTML = openPositions.map(p => {{
+                // Extract Bitget V2 data (info.openPriceAvg / info.markPrice / unrealizedPL)
+                const info = p.info || {{}};
+                const entry = parseFloat(p.entryPrice || info.openPriceAvg || 0);
+                const mark = parseFloat(p.markPrice || info.markPrice || 0);
+                const upnl = parseFloat(p.unrealizedPnl || info.unrealizedPL || 0);
+                const roe = entry > 0 ? (p.side === 'long' ? (mark-entry)/entry : (entry-mark)/entry) * 15 * 100 : 0;
+                const pClass = upnl >= 0 ? 'pos' : 'neg';
+                
+                return `<tr>
+                    <td style="font-weight:600">${{p.symbol.split('/')[0]}} <span style="font-size:10px; opacity:0.5">${{p.leverage}}x</span></td>
+                    <td>$${{entry.toFixed(4)}}</td>
+                    <td>$${{mark.toFixed(4)}}</td>
+                    <td class="${{pClass}}" style="font-weight:700">${{upnl >= 0 ? '+' : ''}}$${{upnl.toFixed(2)}}</td>
+                    <td class="${{pClass}}">${{roe >= 0 ? '+' : ''}}${{roe.toFixed(2)}}%</td>
+                </tr>`;
+            }}).join('');
+        }}
 
         const ctx = document.getElementById('mainChart').getContext('2d');
         new Chart(ctx, {{
