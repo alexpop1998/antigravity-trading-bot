@@ -2845,8 +2845,15 @@ class CryptoBot:
         """
         try:
             if self.active_exchange_name == "bitget":
-                # v17.1: Removed self.symbols restriction to scan the entire account for untracked positions
-                positions = await self.exchange.fetch_positions()
+                # Bitget CCXT requires symbols for fetch_positions
+                my_symbols = [s for s in self.exchange.symbols if '/USDT:USDT' in s or '/USDT' in s]
+                try:
+                    positions = await self.exchange.fetch_positions(my_symbols)
+                except Exception as e:
+                    logger.warning(f"⚠️ fetch_positions failed during zombie sync: {e}. Falling back to fetch_balance.")
+                    bal = await self.exchange.fetch_balance()
+                    info = bal.get('info', [])
+                    positions = info if isinstance(info, list) else info.get('positions', [])
             else:
                 positions = await self.exchange.fetch_positions()
             # v17.13: Use raw list, filtering will be handled inside the loop for Bitget 'total' compatibility
