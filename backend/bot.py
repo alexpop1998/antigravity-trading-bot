@@ -48,7 +48,7 @@ class CryptoBot:
         self.percent_per_trade = params.get("percent_per_trade", 2.5) # % of equity per trade
         self.max_margin_pct = params.get("max_margin_pct", 15.0) # Absolute cap for AI boosting
         self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
-        self.take_profit_pct = params.get("take_profit_pct", 0.06)
+        self.take_profit_pct = float(params.get("take_profit_pct", 0.04))
         
         # --- NEW: GRANULAR STRATEGIC PARAMETERS ---
         self.breakeven_pct = float(params.get("breakeven_pct", 0.012))
@@ -147,9 +147,10 @@ class CryptoBot:
             'alerts': []
         }
         
-        # Track locally how many positions are being opened (before account update cycle confirms)
+        # State management flags
         self.pending_orders_count = 0
         self.order_lock = asyncio.Lock()
+        self.missing_pos_counter: Dict[str, int] = defaultdict(int)
         
         # Keep track of active positions (LONG/SHORT/None)
         self.active_positions: Dict[str, Optional[str]] = {symbol: None for symbol in self.symbols}
@@ -270,6 +271,12 @@ class CryptoBot:
                         full_symbol = next((s for s, m in self.exchange.markets.items() if m['id'] == p_id), None)
                         if full_symbol:
                             side = 'LONG' if p_amt > 0 else 'SHORT'
+                            if full_symbol not in self.symbols:
+                                self.symbols.append(full_symbol)
+                                # Initialize structures
+                                if full_symbol not in self.latest_data:
+                                    self.latest_data[full_symbol] = {'price': abs(float(pos.get('avgPrice', 0))), 'prediction': 'Initial Sync...'}
+                            recovered_count += 1
                 if recovered_count > 0:
                     logger.info(f"✅ Recovered {recovered_count} active positions. Adapting to {self.profile_type.upper()}...")
                     # v15.2: Async task for background reconciliation
@@ -374,8 +381,10 @@ class CryptoBot:
             try:
                 # CCXT way to set margin/leverage on Binance Futures
                 market = self.exchange.market(symbol)
-                await self.exchange.set_leverage(self.leverage, market['id'])
-                logger.info(f"Set leverage to {self.leverage}x for {symbol}")
+                # v17.3: Dynamic floor protection (max of target or config floor)
+                target_lev = max(self.leverage, self.leverage_range[0])
+                await self.exchange.set_leverage(target_lev, market['id'])
+                logger.info(f"Set leverage to {target_lev}x for {symbol}")
             except Exception as e:
                 logger.error(f"Could not set leverage for {symbol}: {e}")
 
@@ -718,9 +727,15 @@ class CryptoBot:
 
         # --- LOGIC GUARD 3: Volatility (ATR-based skip) ---
         # Skip if ATR is less than 0.2% of price (stagnant) or more than 5% (extreme volatility)
+        # v17.6: Bypass for Institutional profile (allows long-stagnant strategic holds)
         atr_pct = (atr / price) if price > 0 else 0
-        if atr_pct < 0.002 or atr_pct > 0.05:
-            return
+        if self.profile_type != 'institutional':
+            if atr_pct < 0.002 or atr_pct > 0.05:
+                # logger.debug(f"📐 [STAGNATION SHIELD] Filtering {symbol} (ATR: {atr_pct:.4%})")
+                return
+        else:
+            if atr_pct > 0.08: # Even Institutional has a hard cap for technical madness
+                return
 
         # 3. AI Predictive Alpha (Machine Learning Classifier)
         prediction = self.latest_data[symbol].get('prediction')
@@ -728,6 +743,7 @@ class CryptoBot:
             direction = prediction['direction']
             confidence = prediction['confidence']
             # Confidence Threshold: 0.70 (Increased from 0.55 for higher quality)
+            price_above_ema = price > ema200 if ema200 else True
             if direction == 1 and confidence > 0.70 and price_above_ema:
                 asyncio.create_task(self.handle_signal(symbol, "AI", "buy", weight_modifier=1.2, current_price=price, ema200=ema200, ai_confidence=confidence, mtf_context=mtf_context))
             elif direction == 0 and confidence > 0.70 and not price_above_ema:
@@ -873,7 +889,23 @@ class CryptoBot:
                 asyncio.create_task(self.close_position(symbol, trade))
                 return
         
-        # --- Trailing Stop-Loss Logic ---
+        # --- [CRITICAL] DYNAMIC TP2: GEMINI CONSULTATION (v17.5) ---
+        if trade.get('status') == 'RUNNING_DYNAMIC' and self.profile_type in ['blitz', 'aggressive']:
+            last_check = trade.get('last_dynamic_check', 0)
+            if time.time() - last_check > 300: # Every 5 minutes
+                trade['last_dynamic_check'] = time.time()
+                # Run evaluation in background to avoid blocking HFT loop
+                asyncio.create_task(self._handle_dynamic_tp2_evaluation(symbol, trade, current_price))
+            
+            # While in Dynamic Mode, we also enforce a Tightening Trailing Stop (1.5% from ATH)
+            ath = trade.get('highest_price', current_price) if is_long else trade.get('lowest_price', current_price)
+            trailing_floor = ath * 0.985 if is_long else ath * 1.015
+            if (is_long and current_price < trailing_floor) or (not is_long and current_price > trailing_floor):
+                logger.warning(f"🔔 [DYNAMIC TRAILING HIT] {symbol} hit protective floor {trailing_floor:.4f}. Closing last 50%.")
+                asyncio.create_task(self.close_position(symbol, trade, reason="DYNAMIC_TRAILING_EXIT"))
+                return
+        
+        # Determine Stop-Loss and Take-Profit Levels
         # DEEPSEEK REFACTOR: Disable trailing stop for News (GATEKEEPER) for the first 15m
         if trade.get('trailing_delayed'):
             elapsed = time.time() - float(trade.get('opened_at', 0))
@@ -929,15 +961,31 @@ class CryptoBot:
                     pnl_tp1 = (current_price - entry_price) / entry_price
                     min_tp1 = 0.005 if self.profile_type in ['aggressive', 'extreme'] else 0.010
                     if pnl_tp1 < min_tp1: 
-                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < {min_tp1:.2%}")
+                         logger.info(f"⏳ [TP1 GUARD] Skipping premature TP1 for {symbol}: {pnl_tp1:.2%} < {min_tp1:.2%} | Current: {current_price} | TP1: {tp1}")
                     else:
                         # Aggressive Recovery Exit (v9.8.5)
                         # If it's a recovered zombie and ROI > 20%, close 100% immediately
+                        # Aggressive Recovery Exit (v17.5 Dynamic)
+                        # If it's a recovered zombie and ROI > 20%, we hit TP1 and enter DYNAMIC mode for the rest (maximize profit)
                         roe_pct = pnl_tp1 * getattr(self, 'leverage', 1.0)
-                        if trade.get('status') == 'RECOVERED_ZOMBIE' and roe_pct > 0.20:
-                             logger.warning(f"🆘 [AGGRESSIVE ZOMBIE EXIT] {symbol} at {roe_pct:.2%} ROE (>20%). Closing 100% (TP2).")
-                             asyncio.create_task(self.close_position(symbol, trade, partial_pct=1.0, reason="AGGRESSIVE_ZOMBIE_EXIT"))
-                             return # Exit fully
+                        
+                        # v17.16: Recognition of all Recovery versions (V1, V11, etc)
+                        is_recov = str(trade.get('status', '')).startswith('RECOVERED_ZOMBIE')
+                        
+                        if is_recov and roe_pct > 0.15:
+                             if self.profile_type in ['blitz', 'aggressive']:
+                                 logger.warning(f"🚀 [DYNAMIC ZOMBIE ADOPTION] {symbol} at {roe_pct:.2%} ROE. Closing 50% (TP1) and moving to DYNAMIC TP2.")
+                                 asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="DYNAMIC_ZOMBIE_TP1"))
+                                 trade['tp1_hit'] = True
+                                 trade['status'] = 'RUNNING_DYNAMIC'
+                                 trade['last_dynamic_check'] = time.time()
+                                 # Move SL to entry + 0.5% (Safe)
+                                 trade['sl'] = entry_price * 1.005
+                                 return
+                             else:
+                                 logger.warning(f"🆘 [AGGRESSIVE ZOMBIE EXIT] {symbol} at {roe_pct:.2%} ROE (>20%). Closing 100% (TP2).")
+                                 asyncio.create_task(self.close_position(symbol, trade, partial_pct=1.0, reason="AGGRESSIVE_ZOMBIE_EXIT"))
+                                 return 
                         
                         logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price} (+{pnl_tp1:.2%})")
                         asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT_TP1"))
@@ -998,16 +1046,33 @@ class CryptoBot:
                     else:
                         # Aggressive Recovery Exit (v9.8.5)
                         # If it's a recovered zombie and ROI > 20%, close 100% immediately
+                        # Aggressive Recovery Exit (v17.5 Dynamic)
                         roe_pct = pnl_tp1 * getattr(self, 'leverage', 1.0)
                         if trade.get('status') == 'RECOVERED_ZOMBIE' and roe_pct > 0.20:
-                             logger.warning(f"🆘 [AGGRESSIVE ZOMBIE EXIT] {symbol} at {roe_pct:.2%} ROE (>20%). Closing 100% (TP2).")
-                             asyncio.create_task(self.close_position(symbol, trade, partial_pct=1.0, reason="AGGRESSIVE_ZOMBIE_EXIT"))
-                             return # Exit fully
+                             if self.profile_type in ['blitz', 'aggressive']:
+                                 logger.warning(f"🚀 [DYNAMIC ZOMBIE ADOPTION] {symbol} at {roe_pct:.2%} ROE. Closing 50% (TP1) and moving to DYNAMIC TP2.")
+                                 asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="DYNAMIC_ZOMBIE_TP1"))
+                                 trade['tp1_hit'] = True
+                                 trade['status'] = 'RUNNING_DYNAMIC'
+                                 trade['last_dynamic_check'] = time.time()
+                                 trade['sl'] = entry_price * 0.995 # Protective move for shorts
+                                 return
+                             else:
+                                 logger.warning(f"🆘 [AGGRESSIVE ZOMBIE EXIT] {symbol} at {roe_pct:.2%} ROE (>20%). Closing 100% (TP2).")
+                                 asyncio.create_task(self.close_position(symbol, trade, partial_pct=1.0, reason="AGGRESSIVE_ZOMBIE_EXIT"))
+                                 return 
 
                         logger.warning(f"🎯 PARTIAL TP1 HIT for {symbol} at {current_price} (+{pnl_tp1:.2%})")
                         asyncio.create_task(self.close_position(symbol, trade, partial_pct=0.5, reason="PARTIAL_EXIT_TP1"))
                         trade['tp1_hit'] = True
-                        # --- [CRITICAL] SOLID BREAK-EVEN ---
+                        # --- [CRITICAL] DYNAMIC TP2 ACTIVATION (v17.5) ---
+                        # For Blitz and Aggressive, we don't close 100% at TP2.
+                        # We enter Gemini-Managed Dynamic mode for the last 50%.
+                        if self.profile_type in ['blitz', 'aggressive']:
+                            trade['status'] = 'RUNNING_DYNAMIC'
+                            trade['last_dynamic_check'] = time.time()
+                            logger.warning(f"🚀 [DYNAMIC TP2 Alpha] {symbol} is now managed by Gemini for the last 50%.")
+                        
                         # Move SL to entry - 0.3% to lock in costs.
                         offset = entry_price * 0.003
                         trade['sl'] = entry_price - offset
@@ -1028,7 +1093,38 @@ class CryptoBot:
             self.trade_levels[symbol] = None
             self.db.save_state("trade_levels", self.trade_levels)
 
-    async def close_position(self, symbol, trade, partial_pct=1.0, reason=None):
+    async def _handle_dynamic_tp2_evaluation(self, symbol, trade, current_price):
+        """Consults Gemini to decide if we should hold or close the last 50% (v17.5)."""
+        try:
+            logger.info(f"🧠 [AI TP2] Consulting Gemini for dynamic exit evaluation on {symbol}...")
+            
+            # Fetch indicators for the symbol
+            indicators = self.latest_data.get(symbol, {})
+            pnl_pct = (current_price - trade['entry_price']) / trade['entry_price'] if trade['side'] == 'long' else (trade['entry_price'] - current_price) / trade['entry_price']
+            
+            action, confidence, reasoning = await self.analyst.evaluate_active_position(symbol, trade['side'], indicators, pnl_pct * 100)
+            
+            if action in ["CLOSE", "PIVOT"] and confidence >= 0.70:
+                logger.warning(f"🆘 [DYNAMIC TP2 EXIT] Gemini signals exhaustion for {symbol}: {reasoning}. Closing now.")
+                await self.close_position(symbol, trade, reason=f"DYNAMIC_AI_EXIT_{action}")
+            else:
+                logger.debug(f"💎 [DYNAMIC TP2 HOLD] Gemini suggests {action} for {symbol}: {reasoning}. Trend remains valid.")
+                
+        except Exception as e:
+            logger.error(f"❌ Error during Dynamic TP2 evaluation for {symbol}: {e}")
+
+    def _standardize_order_response(self, response):
+        """Recursively drills down into nested lists to find a dictionary response (v17.4 Robust)."""
+        if isinstance(response, list):
+            if len(response) > 0:
+                return self._standardize_order_response(response[0])
+            else:
+                return {}
+        if isinstance(response, dict):
+            return response
+        return {}
+
+    async def close_position(self, symbol, trade, partial_pct=1.0, reason="EXIT"):
         try:
             side = str(trade.get('side', 'buy')).lower()
             is_long = side in ['buy', 'long']
@@ -1039,13 +1135,34 @@ class CryptoBot:
             if trade and 'amount' in trade and trade['amount'] is not None:
                 total_amount = float(trade['amount'])
             
-            # If trade state is missing or corrupted, try to fetch from exchange directly
+            # If trade state is missing or corrupted
             if total_amount <= 0:
                 logger.warning(f"⚠️ [RECOVERY] Trade state for {symbol} is missing amount. Fetching from Balance...")
-                # v9.9.3: Priority fetch from Balance (reliable on Testnet)
-                bal = await self.exchange.fetch_balance()
-                raw_positions = bal.get('info', {}).get('positions', [])
+                # v17.7: Ultra-Robust Balance/Position Extraction
+                bal_raw = await self.exchange.fetch_balance()
+                # Defensive drill-down
+                if isinstance(bal_raw, list):
+                    bal = bal_raw[0] if len(bal_raw) > 0 else {}
+                else:
+                    bal = bal_raw
+                
+                # Double-check bal is now a dict
+                if not isinstance(bal, dict):
+                    bal = {}
+                    
+                info = bal.get('info', {})
+                if isinstance(info, list): 
+                    info = info[0] if len(info) > 0 else {}
+                
+                raw_positions = info.get('positions', [])
+                if not raw_positions:
+                     # Check 'data' as fallback
+                     data = bal.get('data', {})
+                     if isinstance(data, list): data = data[0] if len(data) > 0 else {}
+                     raw_positions = data.get('positions', [])
+                     
                 for p in raw_positions:
+                    if not isinstance(p, dict): continue
                     p_id = p.get('symbol')
                     # Match by ID or CCXT symbol
                     market = self.exchange.markets.get(symbol, {})
@@ -1072,20 +1189,31 @@ class CryptoBot:
             
             # --- EMERGENCY EXECUTION BLOCK (v9.9.3) ---
             try:
-                order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, {'reduceOnly': True})
+                # v17.17 Bitget-Hedged-Mode Exit Fix: Force holdSide and marginCoin
+                params = {'reduceOnly': True}
+                if self.active_exchange_name == "bitget":
+                    params.update({'holdSide': side, 'marginCoin': 'USDT'})
+                
+                order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, params)
             except Exception as e:
                 # v9.9.3 TRIA/USDT FIX: If "greater than 0" or precision error, try integer-only fallback
                 if "precision" in str(e).lower() or "greater than 0" in str(e).lower():
                     logger.warning(f"🆘 [FALLBACK EXIT] Attempting integer-only close for {symbol} due to API Error.")
                     amount_to_close = int(amount_to_close)
                     if amount_to_close > 0:
-                         order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, {'reduceOnly': True})
+                         # v17.17 Bitget-Hedged-Mode Exit Fix: Force holdSide and marginCoin
+                         params = {'reduceOnly': True}
+                         if self.active_exchange_name == "bitget":
+                             params.update({'holdSide': side, 'marginCoin': 'USDT'})
+                         
+                         order_response = await self.exchange.create_order(symbol, 'market', close_side, amount_to_close, None, params)
                     else:
                          raise e
                 else:
                     raise e
             
-            # Extract execution details
+            # Extract execution details using Robust Standardization (v17.4)
+            order_response = self._standardize_order_response(order_response)
             order_id = order_response.get('id')
             # Bitget/CCXT might return None for price or average in market orders
             raw_avg = order_response.get('average')
@@ -1173,11 +1301,10 @@ class CryptoBot:
         
         # v13.0 Dynamic Aggressive: 10% to 20% mapping
         if is_aggressive:
-             # Map ai_strength (confidence) to multiplier 1.0 - 2.0
-             # If strength is 0.85 -> 1.0. If 1.0 -> 2.0.
-             conf_norm = max(0.0, (raw_ai_mod - 0.85) / (1.0 - 0.85)) if raw_ai_mod >= 0.85 else 0.0
-             ai_mod = 1.0 + conf_norm
-             logger.info(f"🚀 [SIZING] Aggressive Profile: Dynamic mapping 10% -> {10.0 * ai_mod:.2f}% | AI Conf: {raw_ai_mod:.2f}")
+             # v17.6: Aggressive Profile - No dampening, high daring.
+             # Use risk_pct directly as the base without AI modification unless AI is extremely high
+             ai_mod = max(1.0, raw_ai_mod) 
+             logger.info(f"🚀 [SIZING] Aggressive Profile: Base {risk_pct}% * Mod {ai_mod:.2f} = {risk_pct * ai_mod:.2f}%")
         else:
              ai_mod = 1.0 + (raw_ai_mod - 1.0) * dampening_factor * score_weight
              # v10.5 Conservative refinement: 3% base, up to 10% max (mod 3.33)
@@ -1214,7 +1341,15 @@ class CryptoBot:
         volatility_modifier = max(0.9, min(market_cap_val, baseline_atr_pct / atr_pct if atr_pct > 0 else 1.0))
         regime_mult = min(market_cap_val, self.latest_data.get(symbol, {}).get('regime_multiplier', 1.0))
         
+        # v17.6: For Aggressive profiles, we don't reduce size for low ATR (daring mode)
+        if is_aggressive:
+            volatility_modifier = max(1.0, volatility_modifier)
+            regime_mult = max(1.0, regime_mult)
+            
         adjusted_usdt = base_usdt * volatility_modifier * regime_mult
+        
+        # v17.6 Debug Sizing (Visible in logs)
+        logger.info(f"📊 [SIZING DATA] {symbol} | Base: ${base_usdt:.2f} | Final: ${adjusted_usdt:.2f} | Equity: ${current_equity:.2f} | Risk%: {total_pct:.1f}%")
         
         # --- GLOBAL SAFETY CAP (DYNAMIC v9.7.4) ---
         max_limit_val = getattr(self, 'max_margin_pct', 15.0)
@@ -1239,15 +1374,20 @@ class CryptoBot:
              logger.error(f"☢️ [EMERGENCY] Global Margin Usage is too high ({current_used_margin:.2f} / {global_cap:.2f} Cap). Blocking NEW entry.")
              return 0.0
 
-        # --- DYNAMIC LEVERAGE CLAMP ---
-        # Using dynamic leverage range from config
-        min_lev = self.leverage_range[0]
-        max_lev = self.leverage_range[1]
+        # --- DYNAMIC LEVERAGE CLAMP (v17.4 Core Floor) ---
+        min_lev = getattr(self, 'leverage_range', [1.0, 50.0])[0]
+        max_lev = getattr(self, 'leverage_range', [1.0, 50.0])[1]
+        
+        # v17.7: Strong Floor Enforcement
         clamped_leverage = max(min_lev, min(max_lev, leverage))
         
         if raw_ai_mod >= 1.5 and leverage > max_lev:
              clamped_leverage = min(max_lev, leverage)
              logger.info(f"🔥 [AI LEVERAGE BOOST] Conviction High: Allowing {clamped_leverage}x leverage for {symbol}.")
+        
+        # Final Force Floor (Strategic)
+        clamped_leverage = max(clamped_leverage, min_lev)
+        logger.info(f"📐 [LEVERAGE] {symbol}: Planning {clamped_leverage}x (Base: {leverage}x, Range: {min_lev}-{max_lev}x)")
 
         # --- [FIX] PORTFOLIO-AWARE SIZING (v9.9.0) ---
         # 1. Get existing notional for this symbol
@@ -1664,20 +1804,22 @@ class CryptoBot:
                 
                 # Dynamic leverage calculation (using AI suggestion as a target)
                 if signal_type == "GATEKEEPER":
-                    active_leverage = 5 # News trades use low leverage
-                    logger.info(f"🛡️ [NEWS LEVERAGE] Using safe 5x for {symbol} News Trade.")
+                    # v17.7: Even News trades respect the profile floor (no more 5x silent drop)
+                    active_leverage = max(10, self.leverage_range[0]) 
+                    logger.info(f"🛡️ [NEWS LEVERAGE] Adjusted to {active_leverage}x (Profile Floor) for {symbol} News Trade.")
                 elif is_black_swan:
                     base_leverage = self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price, ai_leverage=ai_leverage)
                     active_leverage = min(20, base_leverage) # Hard cap at 20x for High Impact Events
                 else:
                     active_leverage = self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price, ai_leverage=ai_leverage)
                 
-                # REINFORCE: set_leverage is CRITICAL before order
+                # REINFORCE: set_leverage is CRITICAL before order (v17.16 Absolute Lock)
                 try:
-                    market = self.exchange.market(symbol)
-                    # Force update the leverage for this specific trade
-                    await self.exchange.set_leverage(int(active_leverage), market['id'])
-                    logger.info(f"⚙️ [LEVERAGE SET] {symbol} adjusted to {active_leverage}x for this trade.")
+                    target_lev = int(active_leverage)
+                    # v17.16: Force BOTH sides for Bitget Hedged Mode compatibility (Ensure no 5x fallback)
+                    await self.exchange.set_leverage(target_lev, symbol, params={'marginCoin': 'USDT', 'holdSide': 'long'})
+                    await self.exchange.set_leverage(target_lev, symbol, params={'marginCoin': 'USDT', 'holdSide': 'short'})
+                    logger.info(f"⚙️ [LEVERAGE SYNC] {symbol} locked to {target_lev}x (BOTH SIDES) for this trade.")
                 except Exception as e:
                     logger.error(f"Failed to set leverage for {symbol}: {e}")
                 
@@ -2011,58 +2153,82 @@ class CryptoBot:
         v15.2: Retroactive Risk Adaptation.
         """
         try:
-            logger.info(f"🔄 [ADAPTATION] Reconciling {len(self.trade_levels)} targets with current {self.profile_type} limits...")
+            logger.info(f"🔄 [ADAPTATION] Reconciling targets with current {self.profile_type.upper()} parameters...")
             
-            p_matrix = {
-                "institutional": {"sl": 1.5, "tp1": 3.0, "tp2": 6.0},
-                "conservative": {"sl": 1.2, "tp1": 1.8, "tp2": 4.0},
-                "aggressive": {"sl": 0.8, "tp1": 0.8, "tp2": 2.5},
-                "extreme": {"sl": 0.5, "tp1": 1.5, "tp2": 5.0}
-            }
+            # --- [CRITICAL] PROFILE ADOPTION ENGINE (v17.2) ---
+            # Instead of hardcoded matrix, we use the actual config values 
+            # loaded in __init__ for the current active profile.
             
-            settings = p_matrix.get(self.profile_type, p_matrix["aggressive"])
+            def_sl = self.stop_loss_pct or 0.02
+            def_tp = self.take_profit_pct or 0.05
             
+            # Boost SL for institutional wide-stop protection if needed
+            if self.profile_type == "institutional":
+                def_sl = max(def_sl, 0.03)
+
             for symbol, trade in self.trade_levels.items():
-                if not trade or trade.get('profile_type') == self.profile_type:
+                if not trade:
                     continue
                 
-                # Check current market state for the symbol
-                price_data = self.latest_data.get(symbol)
-                if not price_data or price_data.get('atr') == 0:
-                    logger.warning(f"⚠️ [ADAPTATION] Skipping {symbol}: Missing price/ATR data.")
+                # Check if we should re-calculate (profile mismatch or zombie)
+                is_zombie = trade.get('status') == 'RECOVERED_ZOMBIE'
+                profile_mismatch = trade.get('profile_type') != self.profile_type
+                
+                if not (is_zombie or profile_mismatch):
                     continue
+                
+                # Check current market state (priority to latest_data)
+                price_data = self.latest_data.get(symbol, {})
+                current_price = price_data.get('price', trade.get('entry_price', 0))
+                
+                if current_price <= 0:
+                     logger.warning(f"⚠️ [ADAPTATION] Skipping {symbol}: Missing base price.")
+                     continue
                 
                 old_profile = trade.get('profile_type', 'unknown')
-                current_price = price_data['price']
-                current_atr = price_data['atr']
+                entry_price = float(trade.get('entry_price', current_price))
+                is_long = trade.get('side', 'long').lower() in ['buy', 'long']
                 
-                # Recalculate levels
-                sl_dist = current_atr * settings['sl']
-                tp1_dist = current_atr * settings['tp1']
-                tp2_dist = current_atr * settings['tp2']
+                logger.info(f"🛡️ [PROFILE ADOPTION] Adapting {symbol} from {old_profile.upper()} to {self.profile_type.upper()}...")
                 
-                is_long = trade['side'] == 'buy'
-                if is_long:
-                    trade['sl'] = current_price - sl_dist
-                    trade['tp1'] = current_price + tp1_dist
-                    trade['tp2'] = current_price + tp2_dist
-                else:
-                    trade['sl'] = current_price + sl_dist
-                    trade['tp1'] = current_price - tp1_dist
-                    trade['tp2'] = current_price - tp2_dist
+                # Use entry_price for target recalculation
+                sl_price = entry_price * (1 + def_sl if not is_long else 1 - def_sl)
+                tp1_price = entry_price * (1 - def_tp/2 if not is_long else 1 + def_tp/2) # 50% TP at half-way
+                tp2_price = entry_price * (1 - def_tp if not is_long else 1 + def_tp)
                 
                 # Precision adjustment
-                trade['sl'] = float(self.exchange.price_to_precision(symbol, trade['sl']))
-                trade['tp1'] = float(self.exchange.price_to_precision(symbol, trade['tp1']))
-                trade['tp2'] = float(self.exchange.price_to_precision(symbol, trade['tp2']))
-                
+                try:
+                    sl_price = float(self.exchange.price_to_precision(symbol, sl_price))
+                    tp1_price = float(self.exchange.price_to_precision(symbol, tp1_price))
+                    tp2_price = float(self.exchange.price_to_precision(symbol, tp2_price))
+                except: pass
+
+                trade['sl'] = sl_price
+                trade['tp1'] = tp1_price
+                trade['tp2'] = tp2_price
                 trade['profile_type'] = self.profile_type
-                logger.warning(f"🔄 [ADAPTATION] {symbol} moved from {old_profile.upper()} to {self.profile_type.upper()}. New SL: {trade['sl']}, TP1: {trade['tp1']}")
+                trade['status'] = 'ADAPTED' if not is_zombie else 'RECOVERED_ADAPTED'
                 
+                # Sync Leverage immediately for this symbol (with v17.17 robust lock)
+                target_lev = max(int(self.leverage), int(self.leverage_range[0]))
+                try:
+                    # Force both sides for absolute lockdown
+                    await self.exchange.set_leverage(target_lev, symbol, params={'marginCoin': 'USDT', 'holdSide': 'long'})
+                    await self.exchange.set_leverage(target_lev, symbol, params={'marginCoin': 'USDT', 'holdSide': 'short'})
+                    logger.info(f"⚙️ [LEVERAGE LOCK] {symbol} confirmed at {target_lev}x.")
+                except Exception as ex: 
+                    logger.warning(f"⚠️ [LEVERAGE SYNC FAIL] {symbol}: {ex}")
+                
+                # Trigger an immediate audit to see if we should close right now
+                self._check_soft_stop_loss(symbol, current_price)
+
+            # Update DB after mass adaptation
             self.db.save_state("trade_levels", self.trade_levels)
+            logger.info(f"✅ [ADAPTATION COMPLETE] All positions aligned with {self.profile_type.upper()}.")
             
         except Exception as e:
             logger.error(f"❌ Error during trade reconciliation: {e}")
+            logger.error(traceback.format_exc())
 
     async def _update_account_state(self):
         """Standardizes and updates the current account state (equity, positions, PnL)."""
@@ -2092,10 +2258,12 @@ class CryptoBot:
             id_to_symbol = {m['id']: s for s, m in self.exchange.markets.items()}
             
             for p in all_raw_pos:
-                # Standardize amount extraction (positionAmt for Binance, total/available for Bitget V2)
-                p_amt = float(p.get('positionAmt', p.get('total', p.get('available', 0))))
+                # v17.15 Robust Extraction: Check info nesting for Bitget V2
+                p_info = p if 'symbol' in p and 'total' in p else p.get('info', {})
+                p_amt = float(p.get('positionAmt') or p.get('total') or p_info.get('total') or p_info.get('size', 0))
+                
                 if p_amt != 0:
-                    p_id = p.get('symbol', p.get('instId'))
+                    p_id = p.get('symbol', p.get('instId') or p_info.get('symbol'))
                     full_symbol = id_to_symbol.get(p_id, p_id)
                     p['symbol'] = full_symbol
                     p['amount'] = p_amt
@@ -2291,18 +2459,26 @@ class CryptoBot:
                 # Combine all sources of signal activity
                 symbols_to_check = list(set(self.symbols + pos_symbols + state_symbols + bal_symbols))
                 
-                # v10.5 [ADAPTIVE ANTI-PYRAMID]
-                # Stricter: Always check symbols that are in trade_levels but NOT in pos_symbols (POTENTIAL MANUAL CLOSE)
-                # v9.8.5.2: Safeguard with is_startup_protected to avoid clearing recovered zombies during initial sync
+                # v11.0: Robust Manual Closure Detection (3-cycle threshold)
+                # We only clear the state if the position is missing for 3 consecutive sync cycles
                 manual_check_targeted = [s for s in state_symbols if s not in pos_symbols and self.trade_levels.get(s)]
-                if manual_check_targeted and not is_startup_protected:
-                     logger.warning(f"🔓 [PYRAMID UNLOCKED] Manual closure detected on Binance for {manual_check_targeted}. Freeing internal state.")
-                     for s in manual_check_targeted:
-                         self.trade_levels[s] = None
-                         self.active_positions[s] = None
-                     
-                     # Force state save
-                     self.db.save_state("trade_levels", self.trade_levels)
+                
+                for s in manual_check_targeted:
+                    self.missing_pos_counter[s] += 1
+                    if self.missing_pos_counter[s] >= 3 and not is_startup_protected:
+                        logger.warning(f"🔓 [PYRAMID UNLOCKED] Manual closure confirmed on {self.active_exchange_name.upper()} for {s}. Freeing internal state.")
+                        self.trade_levels[s] = None
+                        self.active_positions[s] = None
+                        self.missing_pos_counter[s] = 0
+                        # Force state save
+                        self.db.save_state("trade_levels", self.trade_levels)
+                    elif self.missing_pos_counter[s] < 3:
+                        logger.debug(f"🔍 [SYNC] Position {s} missing from active list ({self.missing_pos_counter[s]}/3). Waiting for confirmation.")
+
+                # Reset counter for symbols that are present
+                for s in pos_symbols:
+                    if s in self.missing_pos_counter:
+                        self.missing_pos_counter[s] = 0
 
                 # Increase chunked scanning to ensure no trade is missed
                 for i in range(0, len(symbols_to_check), 15): 
@@ -2514,19 +2690,39 @@ class CryptoBot:
         """
         try:
             if self.active_exchange_name == "bitget":
-                positions = await self.exchange.fetch_positions(self.symbols)
+                # v17.1: Removed self.symbols restriction to scan the entire account for untracked positions
+                positions = await self.exchange.fetch_positions()
             else:
                 positions = await self.exchange.fetch_positions()
-            active_pos = [p for p in positions if float(p.get('amount', 0) or p.get('contracts', 0) or 0) != 0]
+            # v17.13: Use raw list, filtering will be handled inside the loop for Bitget 'total' compatibility
+            active_pos = [p for p in positions] 
             
             for pos in active_pos:
                 symbol = pos['symbol']
                 
-                # Check if already tracked (possibly migrated)
-                if self.trade_levels.get(symbol) is not None:
+                # v17.13: Robust Amount Detection (Bitget 'total' support)
+                info = pos.get('info', {})
+                # Some exchanges use 'amount' or 'contracts', Bitget V2 uses 'total' or 'size'
+                is_active = (
+                    float(pos.get('amount', 0) or 0) != 0 or 
+                    float(pos.get('contracts', 0) or 0) != 0 or 
+                    float(info.get('total', 0) or info.get('size', 0) or 0) != 0
+                )
+                if not is_active:
                     continue
+                    
+                # v17.11: Check if already tracked, BUT force-re-sync if it's a recovered position (to fix stale entry prices)
+                if self.trade_levels.get(symbol) is not None:
+                    # If it's already there but marked as RECOVERED, keep going to update entry/leverage
+                    if self.trade_levels[symbol] and self.trade_levels[symbol].get('status', '').startswith('RECOVERED'):
+                        logger.info(f"🔄 [REFRESH] Re-syncing existing recovered position for {symbol} to fix potential stale data...")
+                        pass # Continue with recovery logic to overwrite with fresh exchange info
+                    else:
+                        continue
 
                 logger.warning(f"🧟 [ZOMBIE FOUND] Rediscovered untracked position for {symbol}. Restoring monitoring...")
+                # v17.12 FINAL DEBUG: Inspect RAW data for sync calibration
+                logger.warning(f"🔍 [RAW POS DATA] {symbol}: {pos}")
                 
                 # Ensure symbol is in our monitor list
                 if symbol not in self.symbols:
@@ -2542,37 +2738,79 @@ class CryptoBot:
                         self.trade_levels[symbol] = None
 
                 # Reconstruct a basic trade state
-                side = pos['side'].lower()
-                entry_price = float(pos['entryPrice'])
+                # v17.10: Ultimate Entry Price Extraction (Prioritizing CCXT Normalization)
+                info = pos.get('info', {})
+                # Diagnostic script proved pos.get('entryPrice') is the most reliable for Bitget Swap
+                entry_price = float(pos.get('entryPrice') or info.get('openPriceAvg') or info.get('averagePrice') or pos.get('avgCost') or pos.get('markPrice', 0))
                 current_price = float(pos.get('markPrice', entry_price))
                 amount = abs(float(pos.get('amount', pos.get('positionAmt', 0))))
                 
-                # Fallback to Risk Profile defaults for recovered positions
-                # v9.8.5: Uses actual config instead of arbitrary 25% TP
+                # Use current profile defaults (aligned with _reconcile_active_trades)
                 def_sl = self.stop_loss_pct or 0.02
                 def_tp = self.take_profit_pct or 0.05
                 
-                sl_price = entry_price * (1 + def_sl if side == 'short' else 1 - def_sl)
-                tp1_price = entry_price * (1 - def_tp/2 if side == 'short' else 1 + def_tp/2) # Partial TP at half final TP
-                tp2_price = entry_price * (1 - def_tp if side == 'short' else 1 + def_tp)
+                # Recalculate targets based on Profile
+                side = pos['side'].lower()
+                is_long = side in ['buy', 'long']
+                sl_price = entry_price * (1 + def_sl if not is_long else 1 - def_sl)
+                tp1_price = entry_price * (1 - def_tp/2 if not is_long else 1 + def_tp/2)
+                tp2_price = entry_price * (1 - def_tp if not is_long else 1 + def_tp)
                 
+                # Precision adjustment
+                try:
+                    sl_price = float(self.exchange.price_to_precision(symbol, sl_price))
+                    tp1_price = float(self.exchange.price_to_precision(symbol, tp1_price))
+                    tp2_price = float(self.exchange.price_to_precision(symbol, tp2_price))
+                except: pass
+
+                # v17.11: Compare against old state to see if we corrected something
+                old_entry = 0
+                if self.trade_levels.get(symbol) and isinstance(self.trade_levels[symbol], dict):
+                    old_entry = float(self.trade_levels[symbol].get('entry_price', 0))
+
                 self.trade_levels[symbol] = {
-                    'side': 'long' if side == 'long' else 'short',
+                    'side': 'long' if is_long else 'short',
                     'entry_price': entry_price,
                     'sl': sl_price,
                     'tp1': tp1_price,
                     'tp2': tp2_price,
                     'amount': amount,
-                    'open_time': time.time() - 3600, # Fake an hour age to allow stagnation check if needed
-                    'status': 'RECOVERED_ZOMBIE',
+                    'open_time': time.time() - 3600, 
+                    'status': 'RECOVERED_ZOMBIE_V11', # Incremental version to force state refresh
+                    'profile_type': self.profile_type,
                     'tp1_hit': False,
-                    'highest_price': current_price if side == 'long' else 0,
-                    'lowest_price': current_price if side == 'short' else 999999
+                    'highest_price': current_price if is_long else 0,
+                    'lowest_price': current_price if not is_long else 999999
                 }
-                logger.warning(f"🛡️ [RECOVERY] {symbol} restored with Profile Defaults: SL @ {sl_price:.4f}, TP1 @ {tp1_price:.4f}")
                 
-                # --- IMMEDIATE AUDIT (v9.8.5) ---
-                # Check if we should close this right now (e.g. if already deep in profit)
+                if old_entry > 0 and abs(old_entry - entry_price) / entry_price > 0.01:
+                    logger.warning(f"🎯 [DATA CORRECTED] {symbol} Entry updated: {old_entry:.4f} -> {entry_price:.4f} (Mismatch corrected)")
+                
+                logger.warning(f"🛡️ [RECOVERY] {symbol} restored with {self.profile_type.upper()} Defaults: SL @ {sl_price:.4f}, TP1 @ {tp1_price:.4f}")
+                
+                # Set leverage immediately (with Bitget Hedged-Mode compatibility v17.10)
+                target_lev = max(int(self.leverage), int(self.leverage_range[0]))
+                try:
+                    # v17.10: Force sync leverage with holdSide AND marginCoin AND verification
+                    side_param = 'long' if is_long else 'short'
+                    logger.info(f"⚙️ [LEVERAGE SYNC] Forcing {symbol} to {target_lev}x ({side_param.upper()})...")
+                    # Try setting leverage with both holdSide and marginCoin for universal Bitget v2 support
+                    await self.exchange.set_leverage(target_lev, symbol, params={'holdSide': side_param, 'marginCoin': 'USDT'})
+                    
+                    # Verify immediately
+                    updated_pos = await self.exchange.fetch_positions([symbol])
+                    current_lev = 0
+                    if updated_pos:
+                        current_lev = float(updated_pos[0].get('leverage', 0))
+                    
+                    if int(current_lev) == int(target_lev):
+                        logger.info(f"✅ [LEVERAGE SYNC] {symbol} confirmed at {target_lev}x.")
+                    else:
+                        logger.warning(f"⚠️ [LEVERAGE DRIFT] {symbol} mismatch. Target {target_lev}x, Exchange {current_lev}x. Proceeding with caution.")
+                except Exception as lev_err:
+                    logger.error(f"⚠️ [LEVERAGE FAIL] Could not sync leverage for {symbol}: {lev_err}")
+                
+                # Immediate safety check (e.g. if already in profit)
                 try:
                     self._check_soft_stop_loss(symbol, current_price)
                 except Exception as audit_err:

@@ -50,6 +50,15 @@ def diagnostic_check():
              # Try to fetch positions to verify futures access
              positions = exchange.fetch_positions()
              print(f"📊 Active Positions: {len(positions)}")
+             for pos in positions:
+                 if float(pos.get('amount', pos.get('contracts', 0) or 0)) != 0:
+                     leverage = pos.get('leverage', 1)
+                     side = pos['side']
+                     entry = float(pos['entryPrice'])
+                     mark = float(pos['markPrice'])
+                     pnl_pct = (mark - entry) / entry if side == 'long' else (entry - mark) / entry
+                     roe = pnl_pct * float(leverage) * 100
+                     print(f"  - {pos['symbol']}: {side} {pos['contracts']} @ {entry} (Mark: {mark}) | Lev: {leverage}x | ROE: {roe:.2f}%")
              
     except Exception as e:
         print(f"❌ Connection Error: {e}")
