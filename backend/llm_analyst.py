@@ -13,10 +13,11 @@ class LLMAnalyst:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.api_key = os.getenv("LLM_API_KEY")
-        self.model_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
         
-        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.0-flash-lite-preview-02-05")
+        model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
+        # Build URL dynamically from env so model can be changed without code edits
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         self.semaphore = asyncio.Semaphore(2) # Limit concurrent decisions to avoid rate limits
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()
