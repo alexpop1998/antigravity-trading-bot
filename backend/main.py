@@ -105,12 +105,8 @@ async def startup_event():
                 logger.error(traceback.format_exc())
         return asyncio.create_task(wrapper())
 
-    # Start the bot's background update loop
-    safe_run(trading_bot.update_loop(), "Bot Update Loop")
-    await asyncio.sleep(2)
-    safe_run(trading_bot.account_update_loop(), "Account Update Loop")
-    await asyncio.sleep(2)
-    safe_run(trading_bot.funding_rate_loop(), "Funding Rate Loop")
+    # Start the bot's background update loop (v30.0 Unified Heartbeat)
+    safe_run(trading_bot.start_all_loops(), "Modular Bot Orchestrator")
     await asyncio.sleep(2)
     
     # Start the websocket broadcaster
