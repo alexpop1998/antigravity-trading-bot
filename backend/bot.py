@@ -208,9 +208,6 @@ class CryptoBot:
         # 2-minute rolling window for VeloCity Emergency Exit
         self.price_history_2m: Dict[str, deque] = defaultdict(lambda: deque(maxlen=12))
         
-        self.min_leverage = 2
-        self.max_leverage = 25
-        
         self.sector_manager = SectorManager()
         self.regime_detector = RegimeDetector()
         self.ai_optimizer = AIParameterOptimizer(self)
@@ -219,15 +216,106 @@ class CryptoBot:
         # Recupero stato persistente
         saved_levels = self.db.load_state("trade_levels")
         if saved_levels:
-            self.trade_levels = saved_levels
-            logger.info("📦 Stato trade_levels recuperato correttamente.")
+            # v19.0: Atomic merge to avoid losing state
+            for sym, data in saved_levels.items():
+                if data: self.trade_levels[sym] = data
+            logger.info("📦 Stato trade_levels recuperato correttamente dal database.")
         
         saved_balance = self.db.load_state("initial_balance")
         if saved_balance:
             self.initial_wallet_balance = float(saved_balance)
-            logger.info(f"🏦 Bilancio iniziale recuperato dal database: {self.initial_wallet_balance:.2f} USDT")
+            logger.info(f"🏦 Bilancio iniziale recuperato: {self.initial_wallet_balance:.2f} USDT")
         
         self.initialized = False
+
+    async def _atomic_position_check(self, symbol):
+        """
+        [ATOMIC GUARD - v19.0] 
+        Performs a real-time exchange check to prevent hedging and double entry.
+        Must be called INSIDE the order lock.
+        """
+        try:
+            logger.info(f"🔍 [ATOMIC GUARD] Verifying exchange state for {symbol}...")
+            # Use fetch_positions for highest reliability on derivatives
+            raw_pos = await self.exchange.fetch_positions([symbol])
+            
+            # Defensive drilling: Support multiple Bitget/Binance return formats
+            matching = next((p for p in raw_pos if p.get('symbol') == symbol and float(p.get('contracts', 0) or p.get('positionAmt', 0)) != 0), None)
+            
+            if matching:
+                side = 'LONG' if float(matching.get('contracts', matching.get('positionAmt', 0))) > 0 else 'SHORT'
+                logger.warning(f"🚫 [ATOMIC GUARD] {symbol} already has an active {side} position. Blocking NEW entry.")
+                # Update local state immediately to prevent future race conditions
+                self.active_positions[symbol] = side
+                return True, side
+            
+            return False, None
+        except Exception as e:
+            logger.error(f"⚠️ [ATOMIC GUARD ERROR] Failed to fetch positions for {symbol}: {e}")
+            # Fallback to local memory if exchange API is down, safety first
+            if self.active_positions.get(symbol):
+                return True, self.active_positions.get(symbol)
+            return False, None
+
+    async def _reconcile_orphan_positions(self):
+        """
+        [RECOVERY ENGINE - v19.0] 
+        Identifies positions on the exchange missing from trade_levels and adopts them.
+        Ensures Stop Loss (SL) is applied to all active trades.
+        """
+        try:
+            logger.info("🔄 [RECOVERY] Scanning for orphaned positions...")
+            # Fetch all active positions from exchange
+            bal = await self.exchange.fetch_balance()
+            info = bal.get('info', [])
+            all_raw = info if isinstance(info, list) else info.get('positions', [])
+            
+            # Fallback for Bitget fetch_balance lack of positions info
+            if self.active_exchange_name == "bitget" and not all_raw:
+                all_raw = await self.exchange.fetch_positions()
+            
+            id_to_sym = {m['id']: s for s, m in self.exchange.markets.items()}
+            adopted_count = 0
+
+            for p in all_raw:
+                # CCXT Unified or Raw
+                p_id = p.get('instId', p.get('symbol'))
+                p_amt = float(p.get('total', p.get('positionAmt', p.get('contracts', 0))))
+                
+                if p_amt != 0:
+                    symbol = id_to_sym.get(p_id, p_id)
+                    if symbol not in self.trade_levels or self.trade_levels[symbol] is None:
+                        logger.warning(f"🧟 [RECOVERY] Orphan found: {symbol} ({p_amt}). Adopting now...")
+                        
+                        entry_price = float(p.get('entryPrice', p.get('avgPrice', 0)))
+                        if entry_price <= 0:
+                            ticker = await self.exchange.fetch_ticker(symbol)
+                            entry_price = ticker.get('last', 0)
+
+                        side = 'buy' if p_amt > 0 else 'sell'
+                        
+                        # Apply current profile's risk parameters
+                        self.trade_levels[symbol] = {
+                            "symbol": symbol,
+                            "side": side,
+                            "entry_price": entry_price,
+                            "amount": abs(p_amt),
+                            "sl": entry_price * (1 - self.stop_loss_pct if side == 'buy' else 1 + self.stop_loss_pct),
+                            "tp1": entry_price * (1 + self.take_profit_pct/2 if side == 'buy' else 1 - self.take_profit_pct/2),
+                            "tp2": entry_price * (1 + self.take_profit_pct if side == 'buy' else 1 - self.take_profit_pct),
+                            "status": "RECOVERED_ZOMBIE",
+                            "opened_at": time.time(),
+                            "profile_type": self.profile_type
+                        }
+                        self.active_positions[symbol] = 'LONG' if side == 'buy' else 'SHORT'
+                        adopted_count += 1
+
+            if adopted_count > 0:
+                self.db.save_state("trade_levels", self.trade_levels)
+                logger.info(f"✅ [RECOVERY] Adopted {adopted_count} orphaned trades. SL/TP applied.")
+
+        except Exception as e:
+            logger.error(f"❌ [RECOVERY ERROR] Failed to reconcile orphans: {e}")
 
     def _get_data_provider(self, symbol):
         """Returns the data provider for a given symbol."""
@@ -279,6 +367,8 @@ class CryptoBot:
                             recovered_count += 1
                 if recovered_count > 0:
                     logger.info(f"✅ Recovered {recovered_count} active positions. Adapting to {self.profile_type.upper()}...")
+                    # v19.0: Atomic orphan recovery to adopt missing trade_levels
+                    await self._reconcile_orphan_positions()
                     # v15.2: Async task for background reconciliation
                     asyncio.create_task(self._reconcile_active_trades())
                     logger.warning(f"✅ [RECOVERY] Successfully adopted {recovered_count} active positions.")
@@ -755,31 +845,41 @@ class CryptoBot:
             
         now = time.time()
         
-        # --- POSITION CONFLICT RESOLVER (DeepSeek v3) ---
-        # 1. Time-Domain Lock check
+        # --- [V19.0] DEDUPLICATION & CONFLICT RESOLVER ---
+        # 1. Check local lock (HFT time-domain)
         if type in ["TECH", "AI"]:
             lock_time = self.hft_locks.get(symbol, 0)
-            if now - lock_time < 60:
-                logger.info(f"⏳ [TIME-DOMAIN LOCK] Ignoring strategic {type} signal for {symbol} (HFT priority active).")
+            if now - lock_time < 60: # 60s lock for standard signals
+                logger.info(f"⏳ [HFT LOCK] Ignoring strategic {type} signal for {symbol} (HFT priority active).")
                 return
 
-        # 2. Existing Position Logic check
+        # 2. Check active positions
         existing_pos = self.active_positions.get(symbol)
-        if existing_pos and type in ["TECH", "AI"]:
-            # Check if existing position is HFT
-            trade = self.trade_levels.get(symbol)
-            if trade and trade.get('signal_type') in ["LIQUIDATION", "DEX_ARBITRAGE"]:
-                # --- Emergency Flip Logic ---
-                # Allow flip only if consensus is high AND current trade is in loss
-                entry_price = float(trade.get('entry_price', 0))
-                is_long = trade.get('side') in ['buy', 'long']
-                pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
-                
-                # Signal strength check is done later via SignalManager, but we pre-check here
-                if pnl_pct > -0.005: # Only -0.5% threshold
-                    logger.info(f"🚫 [CONFLICT RESOLVER] Active HFT on {symbol} is stable. Ignoring strategic Flip.")
-                    return
+        if existing_pos:
+            existing_side = 'buy' if existing_pos == 'LONG' else 'sell'
+            if existing_side == side.lower():
+                logger.debug(f"ℹ️ [DEDUPLICATION] Already in {existing_pos} for {symbol}. Skipping redundant signal.")
+                return
+            
+            # --- REVERSAL / FLIP LOGIC ---
+            reversal_signals = ["GATEKEEPER", "NEWS", "NEW_LISTING", "EVENT_PUMP", "EVENT_DUMP", "LIQUIDATION"]
+            is_reversal = is_black_swan or type in reversal_signals or (type == "AI" and ai_confidence > 0.85)
+            
+            if not is_reversal:
+                logger.warning(f"🚫 [CONFLICT] Existing {existing_pos} for {symbol}. Aborting {side.upper()} {type}.")
+                return
+            
+            # Proceed to reversal (if not shielded)
+            if self._is_startup_shield_active():
+                logger.info(f"🛡️ [Shield] Skipping Emergency Reversal for {symbol} (Startup Protection active)")
+                return
 
+            logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
+            current_level = self.trade_levels.get(symbol)
+            await self.close_position(symbol, current_level, reason=f"REVERSAL_{type}")
+            # Continue to open the new side after closing
+
+        # --- CONSENSUS ENGINE ---
         approved, consensus_score = await self.signal_manager.add_signal(symbol, type, side, weight_modifier, current_price=current_price, ema200=ema200, ai_confidence=ai_confidence)
         
         if approved:
@@ -788,45 +888,14 @@ class CryptoBot:
                 self.hft_locks[symbol] = now
                 logger.warning(f"🔒 [TIME-DOMAIN LOCK] Lock ACTIVE for {symbol} (60s).")
 
-            # --- MASTER CONTROLLER: NET EXPOSURE & PRIORITY ---
-            existing_pos = self.active_positions.get(symbol)
-            if existing_pos:
-                # 1. Prevent conflicting positions (Long vs Short)
-                existing_side = 'buy' if existing_pos == 'LONG' else 'sell'
-                if existing_side != side.lower():
-                    # --- REVERSAL PRIORITY ---
-                    # If it's a Black Swan, Gatekeeper, high-priority event, or strong AI reversal
-                    reversal_signals = ["GATEKEEPER", "NEWS", "NEW_LISTING", "EVENT_PUMP", "EVENT_DUMP", "LIQUIDATION"]
-                    if is_black_swan or type in reversal_signals or (type == "AI" and ai_confidence > 0.85):
-                        if not self._is_startup_shield_active():
-                            logger.critical(f"🆘 [REVERSAL] Emergency Flip for {symbol}: Closing {existing_pos} for {side.upper()} {type}")
-                            # Fetch current level to ensure we close the right amount
-                            current_level = self.trade_levels.get(symbol)
-                            await self.close_position(symbol, current_level, reason=f"REVERSAL_{type}")
-                        else:
-                            logger.info(f"🛡️ [Shield] Skipping Emergency Reversal for {symbol} (Startup Protection active)")
-                            return
-                    else:
-                        logger.warning(f"🚫 [MASTER CONTROLLER] Conflicting signal for {symbol}: Already in {existing_pos}. Skipping {side.upper()} {type}.")
-                        return
-
-            # 2. Pause Standard Signals during High-Impact Events (HIE)
-            # Check if current trade is HIE and we are trying a standard signal
-            current_trade = self.trade_levels.get(symbol)
-            if current_trade:
-                is_hie_running = current_trade.get('signal_type') in ["WHALE", "LIQUIDATION", "RECOVERY", "REJECTION"]
-                if is_hie_running and type in ["TECH", "AI"]:
-                    logger.info(f"⏳ [MASTER CONTROLLER] Standard {type} signal paused for {symbol} due to active HIE scalp.")
-                    return
-
-            # Check global margin ratio instead of fixed position count
+            # Check global margin ratio
             if self.current_margin_ratio < self.max_global_margin_ratio or is_black_swan:
-                    self.active_positions[symbol] = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
-                    self.pending_orders_count += 1
-                    
-                    await self.execute_order(symbol, side.lower(), self.latest_data[symbol]['price'], 
-                                           is_black_swan=is_black_swan, consensus_score=consensus_score, 
-                                           signal_type=type, mtf_context=mtf_context)
+                self.active_positions[symbol] = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
+                self.pending_orders_count += 1
+                
+                await self.execute_order(symbol, side.lower(), current_price or 0.0, 
+                                       is_black_swan=is_black_swan, consensus_score=consensus_score, 
+                                       signal_type=type, mtf_context=mtf_context)
 
     def _check_soft_stop_loss(self, symbol, current_price):
         trade = self.trade_levels.get(symbol)
@@ -892,7 +961,7 @@ class CryptoBot:
         # --- [CRITICAL] DYNAMIC TP2: GEMINI CONSULTATION (v17.5) ---
         if trade.get('status') == 'RUNNING_DYNAMIC' and self.profile_type in ['blitz', 'aggressive']:
             last_check = trade.get('last_dynamic_check', 0)
-            if time.time() - last_check > 300: # Every 5 minutes
+            if time.time() - last_check > 600: # Every 10 minutes (Reduced to save cost)
                 trade['last_dynamic_check'] = time.time()
                 # Run evaluation in background to avoid blocking HFT loop
                 asyncio.create_task(self._handle_dynamic_tp2_evaluation(symbol, trade, current_price))
@@ -1534,6 +1603,11 @@ class CryptoBot:
         # 4. Dynamic Floor Based on Confidence (v13.0 Aggressive)
         # Using profile-defined leverage range
         floor_lev = self.leverage_range[0]
+        
+        # v17.8: BLITZ/EXTREME Hard Floor Enforcement (Always at least 15)
+        if self.profile_type in ['blitz', 'extreme']:
+            floor_lev = max(floor_lev, 15)
+            
         if not is_aggressive:
             if consensus_score >= 9.2:
                 floor_lev = max(floor_lev, 10)
@@ -1543,12 +1617,16 @@ class CryptoBot:
         # 5. Major-Aware Caps (BTC/ETH up to 75x for Aggressive/Blitz)
         is_major = any(m in symbol.upper() for m in ["BTC/", "ETH/", "BITCOIN", "ETHEREUM"])
         final_max = self.leverage_range[1]
-        if is_aggressive and is_major:
+        if (is_aggressive or self.profile_type == 'blitz') and is_major:
             final_max = 75
             
         final_lev = max(floor_lev, min(final_max, round(lev_calc)))
         
-        logger.info(f"📐 [Leverage] {symbol} (v17.0): AI={ai_lev}, Trust={score_trust:.2f}, Major={is_major}, Range=[{floor_lev}x - {final_max}x] -> Final={final_lev}x")
+        # v19.0: FORCE Blitz Floor (Emergency reinforcement)
+        if self.profile_type == 'blitz':
+            final_lev = max(final_lev, 15)
+            
+        logger.info(f"📐 [Leverage] {symbol} (v19.0): AI={ai_lev}, Trust={score_trust:.2f}, Major={is_major}, Range=[{floor_lev}0x - {final_max}x] -> Final={final_lev}x")
         return final_lev
 
     async def execute_order(self, symbol, side, current_price, is_black_swan=False, consensus_score=5.0, signal_type="TECH", mtf_context="N/A"):
@@ -1606,6 +1684,13 @@ class CryptoBot:
                         self.active_positions[symbol] = None
                         return
 
+                # --- [FIX] ATOMIC POSITION GUARD (v19.0) ---
+                # Real-time exchange check inside the lock to absolute-prevent hedging
+                has_pos, existing_side = await self._atomic_position_check(symbol)
+                if has_pos:
+                    logger.warning(f"🚫 [ATOMIC STOP] {symbol} already in {existing_side}. Aborting new {side.upper()} order.")
+                    return
+
                 # --- NEW SAFETY GUARD: Total Symbol Exposure Cap ---
                 current_equity = self.latest_account_data.get('equity', 0)
                 
@@ -1633,24 +1718,26 @@ class CryptoBot:
                             self.active_positions[symbol] = None
                             self.pending_orders_count = max(0, self.pending_orders_count - 1)
                             return
-                    # v11.4.1: Atomic Position Check (Bitget V2 / Binance Universal)
+                    # v17.8: ATOMIC POSITION CHECK (Bitget-Specific Upgrade)
+                    # Instead of fetch_balance, use fetch_positions for higher reliability in hedge mode
                     logger.info(f"🔍 [ATOMIC CHECK] Verifying real-time exchange position for {symbol}...")
-                    fresh_bal = await self.exchange.fetch_balance()
-                    info = fresh_bal.get('info', [])
-                    raw_positions = []
-                    if isinstance(info, list): raw_positions = info
-                    elif isinstance(info, dict): raw_positions = info.get('positions', [])
                     
-                    market = self.exchange.markets.get(symbol, {})
-                    market_id = market.get('id')
+                    try:
+                        raw_positions = await self.exchange.fetch_positions([symbol])
+                        # Bitget positions list might match symbol or ID
+                        matching_position = next((p for p in raw_positions if p.get('symbol') == symbol or p.get('contracts', 0) != 0), None)
+                    except Exception as e:
+                        logger.error(f"⚠️ fetch_positions failed for {symbol}: {e}. Falling back to balance sync.")
+                        fresh_bal = await self.exchange.fetch_balance()
+                        info = fresh_bal.get('info', [])
+                        raw_positions = info if isinstance(info, list) else info.get('positions', [])
+                        market = self.exchange.markets.get(symbol, {})
+                        market_id = market.get('id')
+                        matching_position = next((p for p in raw_positions if p.get('symbol') == symbol or p.get('symbol') == market_id), None)
                     
-                    # Bitget V2 uses 'symbol' field in the list, but it's the internal ID
-                    matching_position = next((p for p in raw_positions if p.get('symbol') == symbol or p.get('symbol') == market_id), None)
-                    
-                    # Self-Healing: Trust real-time exchange over local state
                     if matching_position:
-                        # Extract amount (positionAmt for Binance, total/amount for Bitget)
-                        amt = float(matching_position.get('positionAmt', 0)) or float(matching_position.get('total', 0)) or float(matching_position.get('amount', 0))
+                        # Extract amount (contracts for Bitget CCXT unified, total/amount for raw info)
+                        amt = float(matching_position.get('contracts', 0)) or float(matching_position.get('positionAmt', 0)) or float(matching_position.get('total', 0)) or float(matching_position.get('amount', 0))
                         is_p_active = abs(amt) > 0
                     else:
                         is_p_active = False
@@ -1673,9 +1760,16 @@ class CryptoBot:
                     ext_cap = 35.0 if is_aggressive else 10.0
                     
                     if is_already_trading:
-                        # --- TREND-FLIP GUARD (v15.3) ---
-                        # If the new signal is opposite to the existing position, FLUSH the old one first.
-                        current_side = 'LONG' if (matching_position and float(matching_position.get('positionAmt', matching_position.get('total', 0)) or 0) > 0) else 'SHORT'
+                        # --- TREND-FLIP GUARD (v17.8) ---
+                        # In Bitget Hedge Mode, we MUST close the opposite side before opening new one.
+                        # Determine current side from exchange data
+                        raw_side = matching_position.get('side', '').upper() # LONG/SHORT
+                        if not raw_side:
+                             # Fallback for raw info
+                             amt_val = float(matching_position.get('positionAmt', matching_position.get('total', 0)) or 0)
+                             raw_side = 'LONG' if amt_val > 0 else 'SHORT'
+                             
+                        current_side = raw_side
                         new_side_norm = 'LONG' if side.lower() in ['buy', 'long'] else 'SHORT'
                         
                         if current_side != new_side_norm:
@@ -1818,8 +1912,9 @@ class CryptoBot:
                 
                 # Dynamic leverage calculation (using AI suggestion as a target)
                 if signal_type == "GATEKEEPER":
-                    # v17.7: Even News trades respect the profile floor (no more 5x silent drop)
-                    active_leverage = max(10, self.leverage_range[0]) 
+                    # v17.8: Blitz profile always requires at least 15x
+                    floor = 15 if self.profile_type in ['blitz', 'extreme'] else 10
+                    active_leverage = max(floor, self.leverage_range[0]) 
                     logger.info(f"🛡️ [NEWS LEVERAGE] Adjusted to {active_leverage}x (Profile Floor) for {symbol} News Trade.")
                 elif is_black_swan:
                     base_leverage = self.calculate_dynamic_leverage(symbol, side, consensus_score, current_price, ai_leverage=ai_leverage)

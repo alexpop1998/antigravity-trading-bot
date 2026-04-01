@@ -54,7 +54,7 @@
             "JUP/USDT:USDT"
         ],
         "timeframe": "15m",
-        "rsi_period": 9,
+        "rsi_period": 8,
         "leverage": 10,
         "usdt_per_trade": 10,
         "percent_per_trade": 2.5,
