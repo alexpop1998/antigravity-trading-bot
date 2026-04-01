@@ -144,6 +144,7 @@ class CryptoBot:
         await self.sync_state()
         self.initialized = True
         logger.info("✅ [BOOT] System Ready. High-frequency heartbeats starting.")
+        await self.notifier.startup_notify()
 
     async def execute_order(self, symbol: str, side: str, analysis: Dict[str, Any]):
         """Standardized entry execution via Gateway."""

@@ -25,9 +25,9 @@ class NewsRadar:
                          "partnership", "mainnet", "upgrade", "acquired", "inflation", "rates"]
         self.seen_guids = set()
         
-        # Gemini setup (Native REST call for v30.16 stability)
+        # Gemini 2.0 Flash Lite (v30.16)
         self.api_key = os.getenv("LLM_API_KEY")
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
         
         # Concurrency control for AI Gatekeeper to avoid resource exhaustion
         self.semaphore = asyncio.Semaphore(3)
@@ -128,8 +128,11 @@ class NewsRadar:
                 logger.warning(f"Could not extract sufficient text from {link}. Using title only.")
                 article_content = title
                     
-            if not self.ai_client:
-                logger.warning("No LLM_API_KEY. Skipping Gatekeeper analysis.")
+            if not self.enabled:
+                logger.warning("Telegram Notifier DISATTIVATO: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel .env")
+            else:
+                logger.info("✅ Telegram Notifier ATTIVATO correttamente.")
+                asyncio.create_task(self.send_message("🚀 *Antigravity Trading Bot v30.0 ONLINE*"))
                 return
 
             async with self.semaphore:

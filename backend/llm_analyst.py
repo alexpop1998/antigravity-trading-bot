@@ -12,14 +12,15 @@ logger.setLevel(logging.INFO)
 class LLMAnalyst:
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        api_key = os.getenv("LLM_API_KEY")
+        self.api_key = os.getenv("LLM_API_KEY")
+        self.model_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
         base_url = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
         self.ai_client = AsyncOpenAI(
-            api_key=api_key,
+            api_key=self.api_key,
             base_url=base_url
-        ) if api_key else None
+        ) if self.api_key else None
         
-        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash-lite")
+        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.0-flash-lite-preview-02-05")
         self.semaphore = asyncio.Semaphore(2) # Limit concurrent decisions to avoid rate limits
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()
@@ -52,6 +53,12 @@ class LLMAnalyst:
         Performs a strategic AI review by analyzing current market data against 
         past trade results (RAG).
         """
+        if not self.enabled:
+            logger.warning("Telegram Notifier DISATTIVATO: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel .env")
+        else:
+            logger.info("✅ Telegram Notifier ATTIVATO correttamente.")
+            asyncio.create_task(self.send_message("🚀 *Antigravity Trading Bot v30.0 ONLINE*"))
+
         if not self.ai_client:
             logger.warning("LLM_API_KEY non configurata. Decisione automatica: APPROVE.")
             return True, 1.0, self.bot.leverage, 1.0, 1.0, "API_KEY_MISSING"
@@ -76,6 +83,10 @@ class LLMAnalyst:
             if profile_type in ["aggressive", "extreme", "blitz"]:
                 bias_note = "❗ NOTA CRITICA (ANTI-BIAS): Ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto. Non farti frenare dalle perdite precedenti; il tuo compito è catturare il prossimo movimento."
             
+            if not self.api_key:
+                logger.warning("Nessuna LLM_API_KEY trovata. Salto l'analisi Gatekeeper.")
+                return
+
             prompt = f"""
             Sei l'Analista Strategico di un Hedge Fund AI. Devi decidere se approvare un'operazione di trading ad alta frequenza.
             

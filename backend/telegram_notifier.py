@@ -13,7 +13,14 @@ class TelegramNotifier:
         self.active_exchange = os.getenv("ACTIVE_EXCHANGE", "unknown").upper()
         
         if not self.enabled:
-            logger.warning("Telegram Notifier disabilitato: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel .env")
+            logger.warning("⚠️ Telegram DISATTIVATO: TOKEN o CHAT_ID mancanti nel .env")
+        else:
+            logger.info(f"✅ Telegram ATTIVATO (token: ...{str(self.token)[-6:]}, chat: {self.chat_id})")
+
+    async def startup_notify(self):
+        """Invia la notifica di avvio. Da chiamare DOPO che l'event loop è attivo."""
+        if self.enabled:
+            await self.send_message("🚀 *Antigravity Bot v30.0 ONLINE*\n🤖 Sistema avviato correttamente.")
 
     async def send_message(self, message):
         if not self.enabled:
