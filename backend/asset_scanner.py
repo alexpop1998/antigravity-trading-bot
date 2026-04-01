@@ -19,6 +19,10 @@ class AssetScanner:
         self.allowed_symbols = symbols
         logger.info(f"🛡️ [AssetScanner] Filter updated: {len(symbols)} Mainnet symbols allowed.")
 
+    async def scan(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Alias for get_top_performing_assets (v30.0 Compatibility)."""
+        return await self.get_top_performing_assets(limit)
+
     async def get_top_performing_assets(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Scansiona tutti i mercati Futures USDT-M e restituisce i top N per (Volume * Volatilità).
