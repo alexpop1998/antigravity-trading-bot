@@ -88,6 +88,27 @@ class ExchangeGateway:
             logger.error(f"❌ Failed to fetch positions: {e}")
             return []
 
+    async def fetch_balance_safe(self) -> Dict[str, Any]:
+        """
+        Fetches account equity and balance safely, handling exchange-specific structures.
+        """
+        try:
+            balance = await self.exchange.fetch_balance()
+            equity = 0
+            
+            if self.exchange_name == "bitget":
+                equity = float(balance.get('info', {}).get('equity', 0))
+            else:
+                equity = float(balance.get('total', {}).get('USDT', 0))
+                
+            return {
+                'equity': equity,
+                'raw': balance
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch balance: {e}")
+            return {'equity': 0, 'raw': {}}
+
     async def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, params: Dict = None):
         """Standardized order placement with error handling."""
         try:

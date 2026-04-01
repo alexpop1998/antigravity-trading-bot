@@ -313,11 +313,11 @@ async def manual_audit():
         logger.warning("🧠 [MANUAL AUDIT] Triggering immediate AI self-correction cycle...")
         # Get last 50 trades to give plenty of context for the drawdown
         history = trading_bot.db.get_trades(limit=50)
-        await trading_bot.analyst.perform_self_audit(history)
+        await trading_bot.strategy.analyst.perform_self_audit(history)
         return {
             "status": "success", 
             "message": "AI Post-Mortem completato", 
-            "lessons": trading_bot.analyst.lessons_learned
+            "lessons": trading_bot.strategy.analyst.lessons_learned
         }
     except Exception as e:
         logger.error(f"Manual audit failed: {e}")
