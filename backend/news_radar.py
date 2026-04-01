@@ -127,12 +127,9 @@ class NewsRadar:
             if len(article_content) < 100:
                 logger.warning(f"Could not extract sufficient text from {link}. Using title only.")
                 article_content = title
-                    
-            if not self.enabled:
-                logger.warning("Telegram Notifier DISATTIVATO: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel .env")
-            else:
-                logger.info("✅ Telegram Notifier ATTIVATO correttamente.")
-                asyncio.create_task(self.send_message("🚀 *Antigravity Trading Bot v30.0 ONLINE*"))
+
+            if not self.api_key:
+                logger.warning("Nessuna LLM_API_KEY. Salto Gatekeeper.")
                 return
 
             async with self.semaphore:

@@ -53,12 +53,6 @@ class LLMAnalyst:
         Performs a strategic AI review by analyzing current market data against 
         past trade results (RAG).
         """
-        if not self.enabled:
-            logger.warning("Telegram Notifier DISATTIVATO: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID mancanti nel .env")
-        else:
-            logger.info("✅ Telegram Notifier ATTIVATO correttamente.")
-            asyncio.create_task(self.send_message("🚀 *Antigravity Trading Bot v30.0 ONLINE*"))
-
         if not self.ai_client:
             logger.warning("LLM_API_KEY non configurata. Decisione automatica: APPROVE.")
             return True, 1.0, self.bot.leverage, 1.0, 1.0, "API_KEY_MISSING"
