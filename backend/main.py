@@ -1,7 +1,9 @@
-import logging
-import os
+import time
+import uvicorn
 import asyncio
 import httpx
+import logging
+import os
 import traceback
 import sys
 from typing import Optional
@@ -158,4 +160,4 @@ async def get_index():
 if __name__ == "__main__":
     import uvicorn
     import time
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
