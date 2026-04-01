@@ -94,10 +94,16 @@ class ExchangeGateway:
         """
         try:
             balance = await self.exchange.fetch_balance()
-            equity = 0
+            equity = 0.0
             
             if self.exchange_name == "bitget":
-                equity = float(balance.get('info', {}).get('equity', 0))
+                # Bitget Swap usually returns equity in 'info' as a dict or inside a list
+                info = balance.get('info', {})
+                if isinstance(info, list):
+                    # Sum up equity if it's a list (unlikely for account equity, usually for assets)
+                    equity = sum(float(i.get('equity', 0)) for i in info if isinstance(i, dict))
+                else:
+                    equity = float(info.get('equity', 0) if isinstance(info, dict) else 0)
             else:
                 equity = float(balance.get('total', {}).get('USDT', 0))
                 
@@ -107,7 +113,7 @@ class ExchangeGateway:
             }
         except Exception as e:
             logger.error(f"❌ Failed to fetch balance: {e}")
-            return {'equity': 0, 'raw': {}}
+            return {'equity': 0.0, 'raw': {}}
 
     async def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, params: Dict = None):
         """Standardized order placement with error handling."""
