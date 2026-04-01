@@ -3,6 +3,8 @@ import feedparser
 import logging
 import httpx
 import os
+import json
+from typing import Dict, List, Any
 from bs4 import BeautifulSoup
 from openai import AsyncOpenAI
 
