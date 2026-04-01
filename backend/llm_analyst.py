@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 from typing import List, Dict, Any
-from openai import AsyncOpenAI
+import httpx
 
 logger = logging.getLogger("LLMAnalyst")
 logger.setLevel(logging.INFO)
@@ -14,11 +14,7 @@ class LLMAnalyst:
         self.bot = bot_instance
         self.api_key = os.getenv("LLM_API_KEY")
         self.model_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
-        base_url = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-        self.ai_client = AsyncOpenAI(
-            api_key=self.api_key,
-            base_url=base_url
-        ) if self.api_key else None
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
         
         self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.0-flash-lite-preview-02-05")
         self.semaphore = asyncio.Semaphore(2) # Limit concurrent decisions to avoid rate limits
@@ -53,9 +49,9 @@ class LLMAnalyst:
         Performs a strategic AI review by analyzing current market data against 
         past trade results (RAG).
         """
-        if not self.ai_client:
+        if not self.api_key:
             logger.warning("LLM_API_KEY non configurata. Decisione automatica: APPROVE.")
-            return True, 1.0, self.bot.leverage, 1.0, 1.0, "API_KEY_MISSING"
+            return True, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING"
 
         try:
             # 1. Recupera la memoria statistica (ultime 24 ore)
@@ -77,10 +73,6 @@ class LLMAnalyst:
             if profile_type in ["aggressive", "extreme", "blitz"]:
                 bias_note = "❗ NOTA CRITICA (ANTI-BIAS): Ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto. Non farti frenare dalle perdite precedenti; il tuo compito è catturare il prossimo movimento."
             
-            if not self.api_key:
-                logger.warning("Nessuna LLM_API_KEY trovata. Salto l'analisi Gatekeeper.")
-                return
-
             prompt = f"""
             Sei l'Analista Strategico di un Hedge Fund AI. Devi decidere se approvare un'operazione di trading ad alta frequenza.
             
@@ -121,15 +113,21 @@ class LLMAnalyst:
             # --- DYNAMIC TEMPERATURE (v17.0) ---
             active_temp = float(ai_prompts.get("llm_temperature", 0.5))
             
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": active_temp,
+                    "responseMimeType": "application/json"
+                }
+            }
+
             async with self.semaphore:
-                response = await self.ai_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={ "type": "json_object" },
-                    temperature=active_temp
-                )
-                
-                response_json = json.loads(response.choices[0].message.content)
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(self.gemini_url, json=payload)
+                    resp.raise_for_status()
+                    raw = resp.json()
+                    text = raw["candidates"][0]["content"]["parts"][0]["text"]
+                    response_json = json.loads(text)
             
             # Verdetto basato sulla soglia dinamica della configurazione
             verdict = response_json.get("verdict", "REJECT")

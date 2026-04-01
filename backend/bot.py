@@ -271,13 +271,38 @@ class CryptoBot:
                 top_assets = await self.scanner.scan()
                 for asset in top_assets:
                     symbol = asset['symbol']
-                    indicators = self.latest_data.get(symbol, {})
+                    try:
+                        # Fetch OHLCV candles so ML/Regime have real data
+                        ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '15m', limit=100)
+                        if ohlcv and len(ohlcv) >= 10:
+                            closes = [c[4] for c in ohlcv]
+                            volumes = [c[5] for c in ohlcv]
+                            indicators = {
+                                'close': closes[-1],
+                                'volume': volumes[-1],
+                                'volume_change': (volumes[-1] / volumes[-2] - 1) if volumes[-2] > 0 else 0,
+                                'rsi': asset.get('rsi', 50),
+                                'macd_hist': 0,
+                                'bb_upper': max(closes[-20:]),
+                                'bb_lower': min(closes[-20:]),
+                                'atr': (max(closes[-14:]) - min(closes[-14:])),
+                                'price_vs_ema200': closes[-1] / (sum(closes[-50:]) / min(50, len(closes))),
+                                'ohlcv_df': ohlcv  # passthrough for MLPredictor
+                            }
+                            self.latest_data[symbol] = indicators
+                        else:
+                            indicators = self.latest_data.get(symbol, {})
+                    except Exception as fe:
+                        logger.debug(f"OHLCV fetch skipped for {symbol}: {fe}")
+                        indicators = self.latest_data.get(symbol, {})
+                    
                     analysis = await self.strategy.analyze_opportunity(symbol, indicators)
                     if analysis['score'] >= 0.8:
                         await self.execute_order(symbol, 'buy', analysis)
             except Exception as e:
                 logger.error(f"❌ Analysis Loop: {e}")
             await asyncio.sleep(60)
+
 
     async def start_all_loops(self):
         """The Orchestrator."""
