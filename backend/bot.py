@@ -50,7 +50,7 @@ class CryptoBot:
         self.db = BotDatabase()
         self.notifier = TelegramNotifier()
         self.scanner = AssetScanner(self.gateway.exchange)
-        self.analyst = LLMAnalyst()
+        self.analyst = LLMAnalyst(self)
         self.sector_manager = SectorManager()
         
         # 6. Shared State
