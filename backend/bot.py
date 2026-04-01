@@ -1163,11 +1163,12 @@ class CryptoBot:
                      
                 for p in raw_positions:
                     if not isinstance(p, dict): continue
-                    p_id = p.get('symbol')
+                    p_id = p.get('symbol', p.get('instId'))
                     # Match by ID or CCXT symbol
                     market = self.exchange.markets.get(symbol, {})
                     if p_id == symbol or p_id == market.get('id'):
-                         total_amount = abs(float(p.get('positionAmt', 0)))
+                         # v17.18.2: Try 'total' or 'size' for Bitget V2
+                         total_amount = abs(float(p.get('positionAmt', p.get('total', p.get('size', 0)))))
                          break
 
             amount_to_close = total_amount * partial_pct
@@ -2743,7 +2744,8 @@ class CryptoBot:
                 # Diagnostic script proved pos.get('entryPrice') is the most reliable for Bitget Swap
                 entry_price = float(pos.get('entryPrice') or info.get('openPriceAvg') or info.get('averagePrice') or pos.get('avgCost') or pos.get('markPrice', 0))
                 current_price = float(pos.get('markPrice', entry_price))
-                amount = abs(float(pos.get('amount', pos.get('positionAmt', 0))))
+                # v17.18.2: Ultimate Amount Discovery (Bitget 'contracts' or info 'total')
+                amount = abs(float(pos.get('contracts') or pos.get('amount') or info.get('total') or info.get('size', 0)))
                 
                 # Use current profile defaults (aligned with _reconcile_active_trades)
                 def_sl = self.stop_loss_pct or 0.02
