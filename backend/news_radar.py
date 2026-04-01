@@ -23,15 +23,58 @@ class NewsRadar:
                          "partnership", "mainnet", "upgrade", "acquired", "inflation", "rates"]
         self.seen_guids = set()
         
-        # Gemini setup for the Gatekeeper
-        api_key = os.getenv("LLM_API_KEY")
-        self.ai_client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-        ) if api_key else None
+        # Gemini setup (Native REST call for v30.16 stability)
+        self.api_key = os.getenv("LLM_API_KEY")
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
         
         # Concurrency control for AI Gatekeeper to avoid resource exhaustion
         self.semaphore = asyncio.Semaphore(3)
+
+    async def analyze_article(self, article: Dict[str, str]):
+        if not self.api_key: return
+
+        async with self.semaphore:
+            prompt = f"""
+            Analyze this crypto news for immediate market impact (ALPHA). 
+            Title: {article['title']}
+            Summary: {article['summary'][:500]}
+            
+            Return JSON only: {{"impact": "high|medium|low", "sentiment": "bullish|bearish|neutral", "reason": "short explanation"}}
+            """
+            
+            payload = {
+                "contents": [{
+                    "parts": [{"text": prompt}]
+                }],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                }
+            }
+
+            try:
+                headers = {'Content-Type': 'application/json'}
+                response = await self.http_client.post(self.gemini_url, json=payload, headers=headers)
+                
+                if response.status_code != 200:
+                    logger.error(f"Gemini API Error: {response.status_code} - {response.text}")
+                    return
+
+                res_json = response.json()
+                generation = res_json['candidates'][0]['content']['parts'][0]['text']
+                analysis = json.loads(generation)
+                
+                if analysis.get('impact') == 'high':
+                    logger.critical(f"🚀 HIGH IMPACT NEWS! {article['title']} - Sentiment: {analysis['sentiment'].upper()}")
+                    # Route to bot orchestrator
+                    await self.bot.handle_signal(
+                        symbol="GLOBAL", 
+                        source="NEWS_RADAR", 
+                        side="buy" if analysis['sentiment'] == 'bullish' else "sell",
+                        confidence=0.85,
+                        metadata=analysis
+                    )
+            except Exception as e:
+                logger.error(f"Error in Gemini analysis: {e}")
 
     async def poll_news(self):
         logger.info("Starting News Radar V2 (Multi-Source & Gatekeeper)...")
