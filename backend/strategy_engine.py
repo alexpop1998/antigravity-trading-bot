@@ -18,7 +18,7 @@ class StrategyEngine:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.predictor = MLPredictor()
-        self.analyst = LLMAnalyst()
+        self.analyst = LLMAnalyst(self.bot)
         self.regime_detector = RegimeDetector()
         
         # v29 logic config
