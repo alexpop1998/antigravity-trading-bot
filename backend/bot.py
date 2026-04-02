@@ -71,15 +71,19 @@ class CryptoBot:
         self.news_radar = NewsRadar(self)
         self.reporter = BotReporter()
         
+        # ⚡ [BLITZ TOTAL OVERRIDE] (v31.06 PRO)
+        if self.profile_type == 'blitz':
+            self.consensus_threshold = 0.70
+            logger.info(f"🚀 [INIT] Blitz Profile Active - Global Consensus Locked at {self.consensus_threshold}")
+        
         # 5. Shared State
         self.trade_levels = self.db.load_state("trade_levels") or {}
         self.active_positions = {}
         self.latest_data = {}
         self.latest_account_data = {'equity': 0.0, 'balance': 0.0, 'margin_ratio': 0.0}
         self.initial_wallet_balance = self.db.load_state("initial_balance") or 0.0
-        
-        # Locks & Cooldowns
-        self.order_lock = asyncio.Lock()
+        # Concurrency control for AI Gatekeeper (v31.06 Secure)
+        self.semaphore = asyncio.Semaphore(1)
         self.initialized = False
         self.start_time = time.time()
 

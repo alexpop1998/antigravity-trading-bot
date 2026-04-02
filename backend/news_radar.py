@@ -30,8 +30,8 @@ class NewsRadar:
         model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         
-        # Concurrency control for AI Gatekeeper to avoid resource exhaustion
-        self.semaphore = asyncio.Semaphore(3)
+        # Concurrency control for AI Gatekeeper (v31.06 PRO)
+        self.semaphore = asyncio.SequentialSemaphore(1) if hasattr(asyncio, "SequentialSemaphore") else asyncio.Semaphore(1)
 
     async def analyze_article(self, article: Dict[str, str]):
         if not self.api_key: return

@@ -18,7 +18,7 @@ class LLMAnalyst:
         model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
         # Build URL dynamically from env so model can be changed without code edits
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
-        self.semaphore = asyncio.Semaphore(2) # Limit concurrent decisions to avoid rate limits
+        self.semaphore = asyncio.SequentialSemaphore(1) if hasattr(asyncio, "SequentialSemaphore") else asyncio.Semaphore(1)
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()
         self.cooldown_map = {} # v29 cooldown tracking
