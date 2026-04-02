@@ -32,6 +32,7 @@ class CryptoBot:
         # 1. Database & Notifier
         self.db = BotDatabase()
         self.notifier = TelegramNotifier()
+        self.ai_semaphore = asyncio.Semaphore(1) # 🛡️ GLOBAL AI GATEKEEPER
         
         # 2. Config Loading
         self.config = self._load_config()
