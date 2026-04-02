@@ -66,21 +66,20 @@ async def lifespan(app: FastAPI):
         dex_sniper = DEXSniper(bot_instance=trading_bot)
         listing_radar = ListingRadar(bot_instance=trading_bot)
 
-        # 3. Start Background Tasks
+        # 3. Background Tasks (Log-Only for Core Bot, others manual)
         def safe_run(coro, task_name):
             async def wrapper():
                 try:
                     await coro
                 except Exception as e:
                     logger.error(f"❌ FATAL ERROR in background task '{task_name}': {e}")
-                    logger.error(traceback.format_exc())
             return asyncio.create_task(wrapper())
 
-        safe_run(trading_bot.start_all_loops(), "Orchestrator")
+        # Logic: initialize() in bot.py ALREADY starts the background loops.
+        # We only need to trigger the other collectors here.
         safe_run(news_radar.poll_news(), "NewsRadar")
         safe_run(whale_tracker.monitor_whales(), "WhaleTracker")
         safe_run(social_scraper.monitor_socials(), "SocialScraper")
-        # Add more as needed...
         
         logger.info("✅ [LIFESPAN] Systems fully operational.")
         yield
