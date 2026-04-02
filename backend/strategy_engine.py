@@ -22,10 +22,12 @@ class StrategyEngine:
         self.regime_detector = RegimeDetector()
         
         # v29 logic config
-        self.adx_threshold = 25
-        self.rsi_buy_level = 30
-        self.rsi_sell_level = 70
-        self.technical_confluence_mode = "strict" # v29 favorite
+        # Dynamic parameters from Bot Config
+        tp = getattr(bot_instance, 'config', {}).get('trading_parameters', {})
+        self.adx_threshold = tp.get('adx_threshold', 25)
+        self.rsi_buy_level = tp.get('rsi_buy_level', 30)
+        self.rsi_sell_level = tp.get('rsi_sell_level', 70)
+        self.technical_confluence_mode = tp.get('technical_confluence_mode', 'strict')
     
     async def get_technical_score(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """

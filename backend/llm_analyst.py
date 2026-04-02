@@ -58,6 +58,10 @@ class LLMAnalyst:
             return True, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING"
 
         try:
+            # 🛡️ Burst Rate-Limit Protection (v31.06)
+            # Spreads requests when multiple candidates are analyzed in the same sweep.
+            await asyncio.sleep(2)
+            
             # 1. Recupera la memoria statistica (ultime 24 ore)
             stats = self.bot.db.get_ai_performance_stats(hours=24)
             memory_context = "\nPERFORMANCE RECENTE (STATISTICHE AGGREGATE - 24H):\n"

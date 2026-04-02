@@ -7,7 +7,7 @@ class SignalManager:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.signals = {} # symbol -> { type: { 'side': 'buy'/'sell', 'weight': 0.0, 'timestamp': ts } }
-        self.min_conviction = getattr(bot_instance, 'consensus_threshold', 2.5)
+        self.min_conviction = getattr(bot_instance, 'consensus_threshold', 0.70)
         
         # Signal TTL (Time-To-Live in seconds)
         self.ttls = {
@@ -91,7 +91,7 @@ class SignalManager:
 
         # --- NEW: DYNAMIC CONSENSUS THRESHOLD (v16.4) ---
         # Read from active profile (e.g., 1.5 for Aggressive) rather than cached __init__ value
-        current_threshold = getattr(self.bot, 'consensus_threshold', 2.5)
+        current_threshold = getattr(self.bot, 'consensus_threshold', 0.70)
         effective_threshold = current_threshold
         
         if type == "AI" and ai_confidence > 0.90:
