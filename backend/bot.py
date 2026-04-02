@@ -22,9 +22,8 @@ logger = logging.getLogger("CryptoBot")
 class CryptoBot:
     def __init__(self, profile=None):
         load_dotenv(override=True)
-        if profile is None:
-            profile = os.getenv("CONFIG_PROFILE", "aggressive").lower()
-        
+        # 🟢 UNIFIED PROFILE LOADING (v30.51)
+        profile = os.getenv('ACTIVE_PROFILE', os.getenv('CONFIG_PROFILE', 'aggressive')).lower()
         self.profile_type = profile
         self.config_file = f"config_{profile}.json"
         
