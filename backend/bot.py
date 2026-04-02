@@ -207,8 +207,15 @@ class CryptoBot:
                 
             amount = notional / price
             return float(self.gateway.exchange.amount_to_precision(symbol, amount))
+    def add_alert(self, source, message, severity="INFO"):
+        """Standardized alerting mechanism for background modules."""
+        icon = "💡" if severity == "INFO" else "⚠️" if severity == "WARNING" else "🚨"
+        log_msg = f"{icon} [{source}] {message}"
+        logger.warning(log_msg)
+        try:
+            asyncio.create_task(self.notifier.send_message(f"🔔 *{source} ALERT*\n{message}"))
         except:
-            return 0
+            pass
 
     async def run_reactive_safety_loop(self):
         """[HIGH FREQ] - Reflexes (10s)"""
@@ -307,6 +314,9 @@ class CryptoBot:
                     analysis = await self.strategy.analyze_opportunity(symbol, indicators)
                     if analysis['score'] >= 0.8:
                         await self.execute_order(symbol, 'buy', analysis)
+                    
+                    # 🚀 v30.29: Add delay to avoid Gemini rate limits (503 errors)
+                    await asyncio.sleep(2)
             except Exception as e:
                 logger.error(f"❌ Analysis Loop: {e}")
             await asyncio.sleep(60)
