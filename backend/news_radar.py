@@ -30,7 +30,7 @@ class NewsRadar:
         # FORCED STABLE MODEL (v31.11)
         model_name = "gemini-1.5-flash"
         # Build URL dynamically from env so model can be changed without code edits
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={self.api_key}"
         
         # Using Centralized AI Gatekeeper (v31.07)
         self.semaphore = self.bot.ai_semaphore
