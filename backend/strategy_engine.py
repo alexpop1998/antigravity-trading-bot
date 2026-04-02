@@ -75,28 +75,36 @@ class StrategyEngine:
             logger.error(f"❌ Error during strategy evaluation for {symbol}: {e}")
             return {'symbol': symbol, 'score': 0.0, 'error': str(e)}
 
-    def calculate_consensus_score(self, regime, prediction, ai_approved: bool, ai_confidence: float) -> float:
+    def calculate_consensus_score(self, regime, prediction, ai_approved, ai_confidence):
         """
-        Weighted scoring:
-        - Technical Regime: 30%
-        - ML Prediction:    30%
-        - AI Approval:      40%
+        Calculates a final decision score (0.0 to 1.0) based on modular consensus.
+        Threshold for execution is typically 0.80.
         """
         score = 0.0
         
-        # Technical Score (30%)
-        if regime in ("TRENDING_UP", "BREAKOUT"):
-            score += 0.3
-        elif regime == "NEUTRAL":
-            score += 0.1
-        
-        # ML Score (30%) — MLPredictor returns {'direction': 1, 'confidence': 0.x}
-        if prediction and isinstance(prediction, dict):
-            if prediction.get('direction') == 1:
-                score += 0.3 * prediction.get('confidence', 0.5)
-        
-        # AI Score (40%)
+        # 1. AI Weight (40%)
         if ai_approved:
-            score += 0.4 * min(ai_confidence, 1.0)
-        
+            score += (0.4 * ai_confidence)
+            
+        # 2. ML Weight (30%)
+        if prediction and isinstance(prediction, dict) and prediction.get('confidence'):
+            score += (0.3 * prediction['confidence'])
+            
+        # 3. Technical Regime Weight (30%)
+        if regime and regime[0] != 'UNKNOWN':
+            # Simple mapping: 0.3 for positive regimes
+            if regime[0] in ["TRENDING_UP", "BREAKOUT"]:
+                score += 0.3
+            elif regime[0] == "NEUTRAL":
+                score += 0.1
+            
+        # --- BLITZ PROFILE OVERRIDE (v30.28) ---
+        # In Blitz mode, we prioritize speed. If AI is extremely confident, 
+        # we allow the trade even if ML/Regime are still calibrating.
+        profile = getattr(self.bot, 'profile_type', 'aggressive').lower()
+        if profile == 'blitz' and ai_approved and ai_confidence > 0.85:
+            if score < 0.81:
+                logger.info(f"⚡ [BLITZ BOOST] High AI confidence ({ai_confidence:.2f}) boosting score {score:.2f} -> 0.81")
+                score = 0.81
+
         return round(score, 4)

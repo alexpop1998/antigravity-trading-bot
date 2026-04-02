@@ -6,7 +6,7 @@ import os
 import json
 from typing import Dict, List, Any
 from bs4 import BeautifulSoup
-from openai import AsyncOpenAI
+import httpx
 
 logger = logging.getLogger("NewsRadarV2")
 logger.setLevel(logging.INFO)
@@ -25,9 +25,10 @@ class NewsRadar:
                          "partnership", "mainnet", "upgrade", "acquired", "inflation", "rates"]
         self.seen_guids = set()
         
-        # Gemini 2.0 Flash Lite (v30.16)
+        # Gemini 2.5 Flash (v30.28 Stable)
         self.api_key = os.getenv("LLM_API_KEY")
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-preview-02-05:generateContent?key={self.api_key}"
+        model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         
         # Concurrency control for AI Gatekeeper to avoid resource exhaustion
         self.semaphore = asyncio.Semaphore(3)
@@ -145,13 +146,19 @@ class NewsRadar:
                 RISPONDI ESATTAMENTE SOLO CON "YES" O "NO". Nessuna spiegazione.
                 """
                 
-                ai_response = await self.ai_client.chat.completions.create(
-                    model=os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash"),
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1
-                )
-                
-                verdict = ai_response.choices[0].message.content.strip().upper()
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "responseMimeType": "text/plain"
+                    }
+                }
+
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(self.gemini_url, json=payload)
+                    resp.raise_for_status()
+                    res_json = resp.json()
+                    verdict = res_json['candidates'][0]['content']['parts'][0]['text'].strip().upper()
                 
                 if "YES" in verdict:
                     logger.info(f"🟢 Gatekeeper APPROVED: {title}. Executing high-priority signal analysis.")
@@ -166,20 +173,20 @@ class NewsRadar:
                     
                     if sentiment_score < 30:
                         logger.error("🛑 SENTIMENT IS DEADLY. EXECUTING EMERGENCY SHORT ON ALL ASSETS.")
-                        for symbol in self.bot.symbols:
+                        for symbol in self.bot.latest_data.keys():
                             # --- PRICE SPIKE CHECK (DeepSeek v3) ---
                             # If it's a SHORT signal but price already dumped > 2% in 2m, skip to avoid "selling bottom"
-                            recent_change = self.bot.latest_data[symbol].get('changePercent', 0)
+                            recent_change = self.bot.latest_data.get(symbol, {}).get('changePercent', 0)
                             if recent_change < -2.0:
                                 logger.info(f"⏭️ Skipping SHORT on {symbol}: Price already dumped {recent_change:.2%}")
                                 continue
                             asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "sell", is_black_swan=True))
                     elif sentiment_score > 70:
                         logger.info("🚀 SENTIMENT IS EUPHORIC. EXECUTING EMERGENCY LONG ON ALL ASSETS.")
-                        for symbol in self.bot.symbols:
+                        for symbol in self.bot.latest_data.keys():
                             # --- PRICE SPIKE CHECK (DeepSeek v3) ---
                             # If it's a LONG signal but price already pumped > 2% in 2m, skip to avoid "buying top"
-                            recent_change = self.bot.latest_data[symbol].get('changePercent', 0)
+                            recent_change = self.bot.latest_data.get(symbol, {}).get('changePercent', 0)
                             if recent_change > 2.0:
                                 logger.info(f"⏭️ Skipping LONG on {symbol}: Price already pumped {recent_change:.2%}")
                                 continue

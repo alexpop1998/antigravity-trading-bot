@@ -3,7 +3,7 @@ import logging
 import os
 import httpx
 import json
-from openai import AsyncOpenAI
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -17,19 +17,10 @@ class SocialScraper:
         self.api_key = os.getenv("CRYPTOPANIC_API_KEY")
         self.last_news_id = None
         
-        # LLM Config
-        llm_api_key = os.getenv("LLM_API_KEY")
-        llm_base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-        self.model_name = os.getenv("LLM_MODEL_NAME", "gpt-4-turbo")
-        
-        if llm_api_key and llm_api_key != "YOUR_LLM_KEY":
-            self.client = AsyncOpenAI(
-                api_key=llm_api_key,
-                base_url=llm_base_url
-            )
-        else:
-            self.client = None
-            logger.warning("LLM_API_KEY not found. News analysis will be restricted.")
+        # LLM Config (Gemini REST v30.28)
+        self.api_key_llm = os.getenv("LLM_API_KEY")
+        model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key_llm}"
 
     async def fetch_cryptopanic_news(self):
         if not self.api_key or self.api_key == "YOUR_CRYPTOPANIC_KEY":
@@ -51,7 +42,7 @@ class SocialScraper:
             return []
 
     async def analyze_sentiment(self, text):
-        if not self.client:
+        if not self.api_key_llm:
             return None
             
         prompt = f"""
@@ -67,13 +58,20 @@ class SocialScraper:
         """
         
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                response_format={ "type": "json_object" }
-            )
-            return json.loads(response.choices[0].message.content)
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "responseMimeType": "application/json"
+                }
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(self.gemini_url, json=payload)
+                resp.raise_for_status()
+                res_json = resp.json()
+                text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+                return json.loads(text_response)
         except Exception as e:
             logger.error(f"Sentiment analysis error: {e}")
             return None
@@ -95,7 +93,7 @@ class SocialScraper:
                 if analysis and analysis.get('confidence', 0) > 0.8:
                     symbol = f"{analysis['ticker']}/USDT:USDT"
                     # Check if symbol is in our bot's monitored symbols
-                    if any(s.startswith(analysis['ticker']) for s in self.bot.symbols):
+                    if any(s.startswith(analysis['ticker']) for s in self.bot.latest_data.keys()):
                         side = 'buy' if analysis['sentiment'] == 'BULLISH' else 'sell'
                         current_price = self.bot.latest_data.get(symbol, {}).get('price', 0)
                         
