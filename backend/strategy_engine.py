@@ -165,9 +165,9 @@ class StrategyEngine:
         return 100 - (100 / (1 + rs))
 
     def _calculate_atr(self, df, period=14):
-        high_low = df['h'] - df['l']
-        high_close = (df['h'] - df['c'].shift()).abs()
-        low_close = (df['l'] - df['c'].shift()).abs()
+        high_low = df['high'] - df['low']
+        high_close = (df['high'] - df['close'].shift()).abs()
+        low_close = (df['low'] - df['close'].shift()).abs()
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
         true_range = ranges.max(axis=1)
         return true_range.rolling(window=period).mean()
