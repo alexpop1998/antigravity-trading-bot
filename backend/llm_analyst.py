@@ -14,6 +14,7 @@ class LLMAnalyst:
         self.bot = bot_instance
         self.api_key = os.getenv("LLM_API_KEY")
         
+        model_name = "gemini-1.5-flash"
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1/models/{model_name}:generateContent?key={self.api_key}"
         # Using Centralized AI Gatekeeper (v31.07)
         self.semaphore = self.bot.ai_semaphore
