@@ -37,6 +37,9 @@ class NewsRadar:
         if not self.api_key: return
 
         async with self.semaphore:
+            # 🛡️ Anti-429 Burst Protection (v31.07)
+            await asyncio.sleep(12)
+            
             prompt = f"""
             Analyze this crypto news for immediate market impact (ALPHA). 
             Title: {article['title']}
