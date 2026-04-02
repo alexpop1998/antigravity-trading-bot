@@ -101,6 +101,8 @@ class CryptoBot:
         """Executes a market order with dynamic sizing and leverage."""
         async with self.order_lock:
             try:
+                logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Side: {side.upper()} | Score: {analysis.get('score', 0)}")
+                
                 # 🛡️ Conflict Resolver (Flip Logic)
                 positions = await self.gateway.fetch_positions_robustly()
                 existing = next((p for p in positions if p['symbol'] == symbol), None)
@@ -113,18 +115,29 @@ class CryptoBot:
                             await self.gateway.close_all_for_symbol(symbol)
                             await asyncio.sleep(1)
                         else:
+                            logger.info(f"⏭️ [CONFLICT] Mismatched side for {symbol}, but signal not strong enough to flip.")
                             return
 
                 price = self.latest_data.get(symbol, {}).get('price', 0)
-                if price <= 0: return
+                if price <= 0: 
+                    logger.error(f"❌ [EXECUTION ERROR] Valid price not found for {symbol}")
+                    return
                 
                 amount = self._calculate_order_amount(symbol, price)
-                leverage = analysis.get('leverage', self.leverage)
+                leverage = int(analysis.get('leverage', self.leverage))
                 
-                if amount <= 0: return
+                logger.info(f"📦 [SIZING] Symbol: {symbol} | Price: {price} | Amount: {amount} | Lev: {leverage}x")
+                
+                if amount <= 0: 
+                    logger.error(f"❌ [EXECUTION ERROR] Amount calculation resulted in 0 for {symbol}")
+                    return
 
-                await self.gateway.set_leverage(symbol, int(leverage))
+                # 🚀 SEND TO EXCHANGE
+                await self.gateway.set_leverage(symbol, leverage)
+                logger.info(f"⚙️ [LEVERAGE] Set to {leverage} for {symbol}")
+                
                 await self.gateway.place_order(symbol, side.lower(), amount)
+                logger.info(f"🔥 [EXCHANGE] Order placed for {symbol} | {side.upper()} @ {price}")
                 
                 # Register locally
                 is_long = side.lower() == 'buy'

@@ -111,6 +111,7 @@ class StrategyEngine:
                 'ai_reason': reason,
                 'confidence': confidence,
                 'leverage': leverage,
+                'side': 'buy' if score >= 0.5 else 'sell' # Explicit side mapping
             }
             
         except Exception as e:
