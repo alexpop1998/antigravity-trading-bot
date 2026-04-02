@@ -42,7 +42,17 @@ class CryptoBot:
         self.leverage = params.get("leverage", 10)
         self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
         self.take_profit_pct = params.get("take_profit_pct", 0.06)
-        self.consensus_threshold = float(params.get("consensus_threshold", 0.80))
+        # 🟢 ROBUST CONFIG LOADING (v30.50)
+        tp = self.config.get('trading_parameters', {})
+        t = self.config.get('trading', {})
+        
+        # Priority: trading_parameters -> trading -> fallback
+        self.consensus_threshold = float(tp.get('consensus_threshold', t.get('consensus_threshold', 0.81)))
+        
+        # --- BLITZ HARD OVERRIDE ---
+        if os.getenv('ACTIVE_PROFILE', 'aggressive').lower() == 'blitz':
+            self.consensus_threshold = 0.70
+            logger.info(f"⚡ [BLITZ BOOT] Forced consensus threshold to {self.consensus_threshold}")
         self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
         
         # 4. Modules
