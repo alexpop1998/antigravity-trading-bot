@@ -4,8 +4,10 @@ cd /root/antigravity-trading-bot
 export PYTHONPATH=/root/antigravity-trading-bot
 VENV_PYTHON="/root/antigravity-trading-bot/venv/bin/python3"
 
+# 🧹 Clean existing processes
 echo "🧹 [CLEANUP] Freeing port 8080 and clearing old logic..."
-fuser -k 8080/tcp 2>/dev/null || true
+fuser -k -9 8080/tcp || true
+sleep 5
 pkill -9 -f 'backend/main.py' 2>/dev/null || true
 sleep 1
 
