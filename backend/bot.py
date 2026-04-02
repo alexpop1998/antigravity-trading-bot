@@ -46,7 +46,8 @@ class CryptoBot:
         self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
         
         # 4. Modules
-        self.gateway = ExchangeGateway(self)
+        exchange_name = self.config.get("strategic_params", {}).get("active_exchange", os.getenv("ACTIVE_EXCHANGE", "bitget"))
+        self.gateway = ExchangeGateway(exchange_name)
         self.shield = SafetyShield(self)
         self.strategy = StrategyEngine(self)
         self.scanner = AssetScanner(self.gateway.exchange)
