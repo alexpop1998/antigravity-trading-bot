@@ -73,8 +73,14 @@ class CryptoBot:
 
     def _load_config(self):
         try:
+            # 🔴 DIAGNOSTIC LOG (v30.52)
+            abs_path = os.path.abspath(self.config_file)
+            logger.info(f"📂 [BOOT] Loading config from: {abs_path}")
+            
             with open(self.config_file, 'r') as f:
-                return json.load(f)
+                config = json.load(f)
+                logger.info(f"💾 [BOOT] Config content preview: {str(config)[:100]}...")
+                return config
         except Exception as e:
             logger.error(f"Error loading config {self.config_file}: {e}")
             return {}
