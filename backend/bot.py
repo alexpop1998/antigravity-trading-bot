@@ -216,9 +216,16 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         
+                        # 🚦 VERBOSE ANALYSIS
+                        logger.info(f"🧪 [ANALYSIS] Evaluating {symbol} | Current Threshold: {self.consensus_threshold}")
                         analysis = await self.strategy.analyze_opportunity(symbol, {'df': df})
-                        if analysis.get('score', 0) >= self.consensus_threshold:
+                        score = analysis.get('score', 0)
+                        
+                        if score >= self.consensus_threshold:
+                            logger.info(f"🎯 [TRIGGER] {symbol} score {score} meets threshold {self.consensus_threshold}!")
                             await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
+                        else:
+                            logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient (Min: {self.consensus_threshold})")
                     await asyncio.sleep(2) # Rate limit protection
                 await asyncio.sleep(60)
             except Exception as e:
