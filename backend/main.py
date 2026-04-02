@@ -52,37 +52,43 @@ async def lifespan(app: FastAPI):
         logger.info("🏁 [LIFESPAN] Initializing Trading Bot Cluster...")
         http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
         
-        # 1. Core Bot Sync
-        trading_bot = CryptoBot()
-        await trading_bot.initialize()
-        
-        # 2. Tool Initialization
-        news_radar = NewsRadar(bot_instance=trading_bot, http_client=http_client)
-        whale_tracker = WhaleTracker(bot_instance=trading_bot)
-        social_scraper = SocialScraper(bot_instance=trading_bot, http_client=http_client)
-        liquidation_hunter = LiquidationHunter(bot_instance=trading_bot)
-        macro_calendar = MacroCalendar(bot_instance=trading_bot)
-        rl_tuner = RLTuner(bot_instance=trading_bot)
-        dex_sniper = DEXSniper(bot_instance=trading_bot)
-        listing_radar = ListingRadar(bot_instance=trading_bot)
+    async def initialize_all():
+        global trading_bot, news_radar, whale_tracker, social_scraper, liquidation_hunter, macro_calendar, rl_tuner, dex_sniper, listing_radar
+        try:
+            # 1. Core Bot Sync
+            trading_bot = CryptoBot()
+            await trading_bot.initialize()
+            
+            # 2. Tool Initialization
+            news_radar = NewsRadar(bot_instance=trading_bot, http_client=http_client)
+            whale_tracker = WhaleTracker(bot_instance=trading_bot)
+            social_scraper = SocialScraper(bot_instance=trading_bot, http_client=http_client)
+            liquidation_hunter = LiquidationHunter(bot_instance=trading_bot)
+            macro_calendar = MacroCalendar(bot_instance=trading_bot)
+            rl_tuner = RLTuner(bot_instance=trading_bot)
+            dex_sniper = DEXSniper(bot_instance=trading_bot)
+            listing_radar = ListingRadar(bot_instance=trading_bot)
 
-        # 3. Background Tasks (Log-Only for Core Bot, others manual)
-        def safe_run(coro, task_name):
-            async def wrapper():
-                try:
-                    await coro
-                except Exception as e:
-                    logger.error(f"❌ FATAL ERROR in background task '{task_name}': {e}")
-            return asyncio.create_task(wrapper())
+            # 3. Background Tasks
+            def safe_run(coro, task_name):
+                async def wrapper():
+                    try:
+                        await coro
+                    except Exception as e:
+                        logger.error(f"❌ FATAL ERROR in background task '{task_name}': {e}")
+                return asyncio.create_task(wrapper())
 
-        # Logic: initialize() in bot.py ALREADY starts the background loops.
-        # We only need to trigger the other collectors here.
-        safe_run(news_radar.poll_news(), "NewsRadar")
-        safe_run(whale_tracker.monitor_whales(), "WhaleTracker")
-        safe_run(social_scraper.monitor_socials(), "SocialScraper")
-        
-        logger.info("✅ [LIFESPAN] Systems fully operational.")
-        yield
+            safe_run(news_radar.poll_news(), "NewsRadar")
+            safe_run(whale_tracker.monitor_whales(), "WhaleTracker")
+            safe_run(social_scraper.monitor_socials(), "SocialScraper")
+            
+            logger.info("✅ [LIFESPAN] All systems background-initialized.")
+        except Exception as e:
+            logger.error(f"❌ [BACKGROUND INIT FAILURE] {e}")
+            traceback.print_exc()
+
+    asyncio.create_task(initialize_all())
+    yield
     except Exception as e:
         logger.error(f"❌ [LIFESPAN FAILURE] {e}")
         traceback.print_exc()
