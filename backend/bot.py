@@ -187,13 +187,27 @@ class CryptoBot:
             
             risk_pct = self.config.get('trading_parameters', {}).get('percent_per_trade', 25.0) / 100.0
             margin_usdt = equity * risk_pct
+            
+            # 🔥 SMALL ACCOUNT OVERRIDE (v30.54)
+            # If account is small ($12), 25% is $3. Bitget often requires 5 USDT margin.
+            if margin_usdt < 5.1 and equity >= 5.1:
+                logger.info(f"⚠️ [SMALL ACCT] Low margin {margin_usdt:.2f} -> Forcing 5.1 USDT Floor")
+                margin_usdt = 5.1
+            elif equity < 5.1:
+                logger.error(f"❌ [SIZING] Equity too low ({equity:.2f}) to meet Bitget 5 USDT minimum.")
+                return 0
+
             notional = margin_usdt * self.leverage
             
+            # Ensure notional is also at least min_notional_usdt
             if notional < self.min_notional_usdt:
                 notional = self.min_notional_usdt
                 
             amount = notional / price
-            return float(self.gateway.exchange.amount_to_precision(symbol, amount))
+            final_amount = float(self.gateway.exchange.amount_to_precision(symbol, amount))
+            
+            logger.info(f"📦 [SIZING] Symbol: {symbol} | Price: {price} | Margin: {margin_usdt:.2f} | Notional: {notional:.2f} | Amount: {final_amount}")
+            return final_amount
         except Exception as e:
             logger.error(f"Error calculating size: {e}")
             return 0
