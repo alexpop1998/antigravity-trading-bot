@@ -108,4 +108,14 @@ class SafetyShield:
                 logger.info(f"🎯 [TAKE PROFIT 1] {symbol} hit TP1 level {tp1}. Profit: {pnl_pct:.2%}")
                 return True, "TAKE_PROFIT_1"
 
+        # ⏳ Level 4: Stagnation Exit (v30.60)
+        # If position is flat for too long (+/- 0.5% PnL after 4 hours)
+        opened_at = float(trade_info.get('opened_at', 0))
+        if opened_at > 0:
+            hold_time = time.time() - opened_at
+            if hold_time > 14400: # 4 Hours
+                if abs(pnl_pct) < 0.005: # Less than 0.5% movement
+                    logger.info(f"⏳ [STAGNATION] {symbol} flat for 4h ({pnl_pct:.2%}). Closing to free equity.")
+                    return True, "STAGNATION_EXIT"
+
         return False, ""

@@ -116,7 +116,36 @@ class CryptoBot:
         """Executes a market order with dynamic sizing and leverage."""
         async with self.order_lock:
             try:
-                logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Side: {side.upper()} | Score: {analysis.get('score', 0)}")
+                new_score = analysis.get('score', 0)
+                logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Side: {side.upper()} | Score: {new_score}")
+                
+                # ⚔️ [ATOMIC SWAP LOGIC] (v30.60)
+                active_positions = await self.gateway.fetch_positions_robustly()
+                if len(active_positions) >= self.max_concurrent_positions:
+                    if new_score >= 0.90:
+                        # Find weakest link
+                        weakest_symbol = None
+                        weakest_score = 2.0
+                        
+                        for p in active_positions:
+                            s = p['symbol']
+                            stored_trade = self.trade_levels.get(s, {})
+                            # Use stored score or default to threshold
+                            entry_score = stored_trade.get('entry_score', self.consensus_threshold)
+                            if entry_score < weakest_score:
+                                weakest_score = entry_score
+                                weakest_symbol = s
+                        
+                        if weakest_symbol and (new_score - weakest_score) >= 0.15:
+                            logger.critical(f"🔄 [ATOMIC SWAP] Replacing {weakest_symbol} (Score: {weakest_score}) with {symbol} (Score: {new_score})")
+                            await self.close_position(weakest_symbol, self.trade_levels.get(weakest_symbol), "SWAP_PRIORITY")
+                            await asyncio.sleep(1)
+                        else:
+                            logger.info(f"⏭️ [LIMIT] Max positions ({len(active_positions)}) and no suitable swap candidate.")
+                            return
+                    else:
+                        logger.info(f"⏭️ [LIMIT] Max positions reached ({len(active_positions)}).")
+                        return
                 
                 # 🛡️ Conflict Resolver (Flip Logic)
                 positions = await self.gateway.fetch_positions_robustly()
@@ -160,10 +189,11 @@ class CryptoBot:
                     "symbol": symbol,
                     "side": 'long' if is_long else 'short',
                     "entry_price": price,
+                    "entry_score": analysis.get('score', 0),
+                    "opened_at": time.time(),
                     "amount": amount,
                     "sl": price * (1 - self.stop_loss_pct if is_long else 1 + self.stop_loss_pct),
                     "tp1": price * (1 + self.take_profit_pct/2 if is_long else 1 - self.take_profit_pct/2),
-                    "opened_at": time.time(),
                     "tp1_hit": False
                 }
                 self.db.save_state("trade_levels", self.trade_levels)
