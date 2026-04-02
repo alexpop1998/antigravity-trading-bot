@@ -570,3 +570,55 @@ class CryptoBot:
             except Exception as e:
                 logger.error(f"Analysis Loop Error: {e}")
                 await asyncio.sleep(60)
+
+    async def run_news_radar_loop(self):
+        """[V29] Periodically polls news and handles high-impact signals."""
+        logger.info("📰 [BOOT] Starting News Radar loop...")
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                self.news_radar.http_client = client
+                await self.news_radar.poll_news()
+        except Exception as e:
+            logger.error(f"❌ News Radar Loop Error: {e}")
+
+    async def run_daily_audit_loop(self):
+        """[V29] Nightly AI self-reflection on past performance."""
+        while True:
+            try:
+                # Initial wait to not spam on restart
+                await asyncio.sleep(3600) 
+                logger.info("📊 [SCHEDULED] Initiating AI Performance Audit...")
+                history = self.db.load_state("trade_history") or [] # Simplified fetching
+                if history:
+                    await self.strategy.analyst.perform_self_audit(history)
+                await asyncio.sleep(82800) # Total 24h
+            except Exception as e:
+                logger.error(f"❌ Daily Audit Loop Error: {e}")
+                await asyncio.sleep(3600)
+
+    async def run_automated_report_loop(self):
+        """[V29] Hourly HTML Dashboard generation."""
+        while True:
+            try:
+                logger.info("📊 [REPORT] Regenerating Investor Dashboard...")
+                self.reporter.generate_html()
+                await asyncio.sleep(3600)
+            except Exception as e:
+                logger.error(f"❌ Reporter Loop Error: {e}")
+                await asyncio.sleep(600)
+
+async def main():
+    bot = CryptoBot()
+    await bot.initialize()
+    # Keep the main coroutine alive forever
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.warning("Bot stopped by user.")
+    except Exception as e:
+        logger.critical(f"FATAL ERROR: {e}")
