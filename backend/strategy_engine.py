@@ -144,9 +144,10 @@ class StrategyEngine:
         
         # --- BLITZ PROFILE OVERRIDE ---
         profile = getattr(self.bot, 'profile_type', 'aggressive').lower()
-        if profile == 'blitz' and ai_approved and ai_confidence > 0.85:
-            if score < 0.81:
-                score = 0.81
+        if profile == 'blitz' and ai_approved and ai_confidence > 0.75:
+            if score < 0.71:
+                logger.info(f"⚡ [BLITZ SPEED] Forcing score {score:.2f} -> 0.71 to capture entry.")
+                score = 0.71
 
         return max(0.0, min(1.0, round(score, 4)))
 
