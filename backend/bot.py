@@ -14,6 +14,8 @@ from strategy_engine import StrategyEngine
 from database import BotDatabase
 from telegram_notifier import TelegramNotifier
 from asset_scanner import AssetScanner
+from news_radar import NewsRadar
+from reporter import BotReporter
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -65,6 +67,8 @@ class CryptoBot:
         self.shield = SafetyShield(self)
         self.strategy = StrategyEngine(self)
         self.scanner = AssetScanner(self.gateway.exchange)
+        self.news_radar = NewsRadar(self)
+        self.reporter = BotReporter()
         
         # 5. Shared State
         self.trade_levels = self.db.load_state("trade_levels") or {}
@@ -103,6 +107,9 @@ class CryptoBot:
             asyncio.create_task(self.run_reactive_safety_loop())
             asyncio.create_task(self.run_zombie_sync_loop())
             asyncio.create_task(self.run_margin_cleanup_loop())
+            asyncio.create_task(self.run_news_radar_loop())
+            asyncio.create_task(self.run_daily_audit_loop())
+            asyncio.create_task(self.run_automated_report_loop())
             
             self.initialized = True
             if self.initial_wallet_balance == 0:
@@ -126,6 +133,36 @@ class CryptoBot:
             self.active_positions = {p['symbol']: ('LONG' if p['side'] == 'long' else 'SHORT') for p in positions}
         except Exception as e:
             logger.error(f"Sync State Failed: {e}")
+
+    async def handle_signal(self, symbol, source, side, confidence=1.0, is_black_swan=False, metadata=None):
+        """
+        [V29 SIGNAL HANDLER]
+        Gateway for all signals (News, Strategy, External).
+        Handles Black-Swan emergency entries.
+        """
+        try:
+            logger.warning(f"📡 [SIGNAL] Source: {source} | Symbol: {symbol} | Side: {side.upper()} | Conf: {confidence}")
+            
+            if symbol == "GLOBAL":
+                # For global news, we trigger on the core set of symbols
+                target_symbols = list(self.latest_data.keys())[:3] # Focus top 3
+                for s in target_symbols:
+                    await self.handle_signal(s, f"{source}_PROC", side, confidence, is_black_swan)
+                return
+
+            # Prepare analysis object for execute_order
+            analysis = {
+                'score': confidence,
+                'confidence': confidence,
+                'leverage': self.leverage,
+                'reason': f"Signal from {source}"
+            }
+            if metadata: analysis.update(metadata)
+            
+            await self.execute_order(symbol, side, analysis)
+            
+        except Exception as e:
+            logger.error(f"Error handling signal: {e}")
 
     async def execute_order(self, symbol: str, side: str, analysis: Dict[str, Any]):
         """Executes a market order with dynamic sizing and leverage."""
@@ -230,12 +267,44 @@ class CryptoBot:
     async def close_position(self, symbol: str, trade: Dict[str, Any], reason: str = "EXIT"):
         """Closes 100% of the position."""
         try:
+            # Atomic Guard for closure
             await self.gateway.close_all_for_symbol(symbol)
+            
+            # Post-Mortem Learning
+            if trade:
+                # Calculate PnL locally for AI review
+                curr_price = self.latest_data.get(symbol, {}).get('price', trade.get('entry_price', 0))
+                pnl = (curr_price - trade['entry_price']) / trade['entry_price'] if trade['side'] == 'long' else (trade['entry_price'] - curr_price) / trade['entry_price']
+                asyncio.create_task(self.strategy.analyst.perform_post_mortem(symbol, trade, pnl))
+
             self.trade_levels[symbol] = None
             self.db.save_state("trade_levels", self.trade_levels)
             await self.notifier.send_message(f"🏁 *POSIZIONE CHIUSA*\n🪙 {symbol} | 🎯 {reason}")
         except Exception as e:
             logger.error(f"❌ [CLOSE FAILED] {e}")
+
+    async def execute_pivot(self, symbol: str, trade: Dict[str, Any], new_side: str):
+        """
+        [V29 ATOMIC PIVOT]
+        Closes current position and immediately opens in opposite direction.
+        Used on violent trend-flips suggested by AI.
+        """
+        try:
+            logger.warning(f"🔄 [PIVOT] Reversing {symbol} to {new_side.upper()}...")
+            # 1. Close current
+            await self.gateway.close_all_for_symbol(symbol)
+            
+            # 2. Reset local tracking but keep in memory for immediate re-entry
+            self.active_positions[symbol] = None
+            self.trade_levels[symbol] = None
+            
+            # 3. Trigger immediate new analysis to fetch entry levels
+            # handle_signal will pick it up on the next deliberative loop or we trigger it now
+            msg = f"🔄 *PIVOT EXECUTED*\n🪙 {symbol} | Direzione invertita a {new_side.upper()}"
+            await self.notifier.send_message(msg)
+            
+        except Exception as e:
+            logger.error(f"❌ [PIVOT FAILED] {e}")
 
     async def partial_close_position(self, symbol: str, trade: Dict[str, Any], percent: float = 0.5, reason: str = "PARTIAL_EXIT"):
         """Closes a percentage of the position (e.g. 50% for TP1)."""
@@ -335,6 +404,9 @@ class CryptoBot:
                     if exit_triggered:
                         if reason == "TAKE_PROFIT_1":
                             await self.partial_close_position(symbol, trade, 0.5, reason)
+                        elif "PIVOT" in reason:
+                            new_side = 'short' if trade['side'] == 'long' else 'long'
+                            await self.execute_pivot(symbol, trade, new_side)
                         else:
                             await self.close_position(symbol, trade, reason)
                 

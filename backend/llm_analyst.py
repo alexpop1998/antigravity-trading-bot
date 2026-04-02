@@ -281,6 +281,105 @@ class LLMAnalyst:
         """Sets the cooldown timestamp for a symbol."""
         self.cooldown_map[symbol] = time.time()
 
+    async def perform_self_audit(self, trades_history: List[Dict[str, Any]]):
+        """
+        [V29 DAILY AUDIT]
+        Analizza i trade passati per estrarre lezioni e migliorare la strategia.
+        """
+        if not self.api_key or not trades_history:
+            return
+
+        try:
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            history_str = json.dumps([{
+                'symbol': t['symbol'], 'side': t['side'], 'pnl': t.get('pnl', 0), 
+                'outcome': 'WIN' if float(t.get('pnl', 0)) > 0 else 'LOSS',
+                'reason': t.get('reason', 'N/A')
+            } for t in trades_history[-20:]], indent=2)
+
+            prompt = f"""
+            Sei il Chief Risk Officer di un Hedge Fund. Profilo Attivo: {profile_type.upper()}.
+            Analizza questi ultimi 20 trade e identifica 3 REGOLE d'oro per evitare perdite future.
+            
+            STORICO TRADE:
+            {history_str}
+            
+            RISPONDI JSON: {{ "lessons": "Una stringa concisa con le 3 regole identificate." }}
+            """
+
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": { "temperature": 0.3, "responseMimeType": "application/json" }
+            }
+
+            async with self.semaphore:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(self.gemini_url, json=payload)
+                    resp.raise_for_status()
+                    res_json = resp.json()
+                    text = res_json['candidates'][0]['content']['parts'][0]['text']
+                    result = json.loads(text)
+                    new_lessons = result.get("lessons", self.lessons_learned)
+                
+                # --- PROFILE-PARTITIONED SAVE ---
+                all_data = {"profiles": {}}
+                if os.path.exists(self.lessons_file):
+                    with open(self.lessons_file, 'r') as f: all_data = json.load(f)
+                
+                p_data = all_data.get("profiles", {}).get(profile_type, {"history": [], "lessons": ""})
+                p_data["lessons"] = new_lessons
+                all_data.setdefault("profiles", {})[profile_type] = p_data
+                self.lessons_learned = new_lessons
+
+                with open(self.lessons_file, 'w') as f: json.dump(all_data, f)
+                logger.warning(f"🧠 [DAILY AUDIT - {profile_type.upper()}] New Lessons: {self.lessons_learned}")
+
+        except Exception as e:
+            logger.error(f"Errore durante self-audit AI: {e}")
+
+    async def perform_post_mortem(self, symbol: str, trade: Dict, pnl: float):
+        """
+        [V14.6 POST-MORTEM]
+        Analizza l'esito di un trade appena chiuso.
+        """
+        if not self.api_key: return
+        try:
+            if abs(pnl) < 0.003: return # Skip noise
+            
+            outcome = "WIN" if pnl > 0.005 else "LOSS"
+            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
+            
+            prompt = f"""
+            Analizza questo trade appena chiuso (Profilo {profile_type.upper()}).
+            Asset: {symbol} | Esito: {outcome} | PnL: {pnl:.2%}
+            Reasoning: {trade.get('reasoning', 'N/D')}
+            
+            Definisci una 'Golden Rule' (max 12 parole) per il futuro.
+            RISPONDI JSON: {{ "golden_rule": "regola" }}
+            """
+
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": { "temperature": 0.4, "responseMimeType": "application/json" }
+            }
+
+            async with self.semaphore:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.post(self.gemini_url, json=payload)
+                    resp.raise_for_status()
+                    res_json = resp.json()
+                    text = res_json['candidates'][0]['content']['parts'][0]['text']
+                    result = json.loads(text)
+            
+            new_rule = result.get("golden_rule", "")
+            if new_rule:
+                logger.warning(f"🎓 [AI MENTOR] New trade rule for {symbol}: {new_rule}")
+                # Log to lessons history (simplified for now)
+                self.lessons_learned = f"{new_rule} | {self.lessons_learned[:200]}"
+                # Save would go here...
+        except Exception as e:
+            logger.error(f"Error in post-mortem: {e}")
+
     async def refine_market_selection(self, candidates: List[Dict[str, Any]], limit: int = 50) -> List[str]:
         """
         Asks Gemini to pick the best trading candidates from a list of high-volume assets.
