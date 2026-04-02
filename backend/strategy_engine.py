@@ -148,6 +148,19 @@ class StrategyEngine:
                 indicators=indicators
             )
             
+            # 🛡️ BLITZ TECHNICAL FALLBACK (v31.07)
+            # If AI is rate-limited but technicals are explosive, allow entry.
+            if result[-1] == "RATE_LIMIT_429" and self.bot.profile_type == 'blitz':
+                if tech_score >= 0.85:
+                    logger.warning(f"🚀 [BLITZ FALLBACK] Gemini 429 but Tech Score {tech_score:.2f} is explosive. Approving scout position.")
+                    return {
+                        'symbol': symbol,
+                        'score': 0.75, # Synthetic score for threshold bypass
+                        'side': side,
+                        'reason': 'blitz_technical_fallback',
+                        'leverage': 15
+                    }
+
             # Safe unpack
             approved = result[0] if result else False
             ai_confidence = result[1] if result and len(result) > 1 else 0.0

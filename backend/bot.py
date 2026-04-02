@@ -82,8 +82,10 @@ class CryptoBot:
         self.latest_data = {}
         self.latest_account_data = {'equity': 0.0, 'balance': 0.0, 'margin_ratio': 0.0}
         self.initial_wallet_balance = self.db.load_state("initial_balance") or 0.0
-        # Concurrency control for AI Gatekeeper (v31.06 Secure)
-        self.semaphore = asyncio.Semaphore(1)
+        # 🛡️ GLOBAL AI CONCURRENCY CONTROL (v31.07)
+        # Shared across NewsRadar and LLMAnalyst to avoid 429 collisions.
+        self.ai_semaphore = asyncio.Semaphore(1)
+        self.semaphore = self.ai_semaphore
         self.initialized = False
         self.start_time = time.time()
 
@@ -601,7 +603,7 @@ class CryptoBot:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     self.news_radar.http_client = client
                     await self.news_radar.poll_news()
-                await asyncio.sleep(600) # Poll every 10 mins
+                await asyncio.sleep(1200) # Poll every 20 mins (Save AI Quota)
             except Exception as e:
                 logger.error(f"❌ News Radar Loop Error: {e}")
                 await asyncio.sleep(60)

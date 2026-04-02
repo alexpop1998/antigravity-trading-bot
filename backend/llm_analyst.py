@@ -18,7 +18,8 @@ class LLMAnalyst:
         model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
         # Build URL dynamically from env so model can be changed without code edits
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
-        self.semaphore = asyncio.SequentialSemaphore(1) if hasattr(asyncio, "SequentialSemaphore") else asyncio.Semaphore(1)
+        # Using Centralized AI Gatekeeper (v31.07)
+        self.semaphore = self.bot.ai_semaphore
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()
         self.cooldown_map = {} # v29 cooldown tracking
@@ -58,9 +59,9 @@ class LLMAnalyst:
             return True, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING"
 
         try:
-            # 🛡️ Burst Rate-Limit Protection (v31.06)
-            # Spreads requests when multiple candidates are analyzed in the same sweep.
-            await asyncio.sleep(2)
+            # 🛡️ Anti-429 Burst Protection (v31.07)
+            # Sequential delay to keep us under the ~5 RPM free limit.
+            await asyncio.sleep(12)
             
             # 1. Recupera la memoria statistica (ultime 24 ore)
             stats = self.bot.db.get_ai_performance_stats(hours=24)
@@ -434,6 +435,7 @@ class LLMAnalyst:
                 # If the model doesn't support json_object for bare arrays, it might wrap it or we just parse it
                 try:
                     result = json.loads(content)
+
                     if isinstance(result, dict) and "symbols" in result:
                         final_list = result["symbols"]
                     elif isinstance(result, list):
