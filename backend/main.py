@@ -136,7 +136,7 @@ async def get_status():
     if not trading_bot: return {"status": "starting"}
     return {
         "status": "online",
-        "exchange": trading_bot.active_exchange_name,
+        "exchange": getattr(trading_bot, 'active_exchange_name', trading_bot.config.get('strategic_params', {}).get('active_exchange', 'bitget')),
         "profile": trading_bot.profile_type,
         "active_trades": len([t for t in trading_bot.trade_levels.values() if t]),
         "heartbeat": time.time()

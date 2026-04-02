@@ -63,6 +63,7 @@ class CryptoBot:
         
         # 4. Modules
         exchange_name = self.config.get("strategic_params", {}).get("active_exchange", os.getenv("ACTIVE_EXCHANGE", "bitget"))
+        self.active_exchange_name = exchange_name  # Exposed attribute
         self.gateway = ExchangeGateway(exchange_name)
         self.shield = SafetyShield(self)
         self.strategy = StrategyEngine(self)
