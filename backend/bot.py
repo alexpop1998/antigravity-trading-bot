@@ -147,21 +147,39 @@ class CryptoBot:
         await self.notifier.startup_notify()
 
     async def execute_order(self, symbol: str, side: str, analysis: Dict[str, Any]):
-        """Standardized entry execution via Gateway."""
+        """Executes a market order with dynamic sizing and leverage."""
         async with self.order_lock:
             try:
-                pos = await self.gateway.fetch_positions_robustly()
-                if any(p['symbol'] == symbol for p in pos):
-                    logger.warning(f"🚫 [EXECUTION] {symbol} already open. Blocking.")
-                    return
+                # 🛡️ Conflict Resolver (Flip Logic v29.x Restore)
+                positions = await self.gateway.fetch_positions_robustly()
+                existing = next((p for p in positions if p['symbol'] == symbol), None)
+                if existing:
+                    existing_side = 'buy' if float(existing['positionAmt']) > 0 else 'sell'
+                    if existing_side != side.lower():
+                        # High-Priority Reversal Check
+                        is_strong = analysis.get('confidence', 0) > 0.85 or analysis.get('is_black_swan', False)
+                        if is_strong:
+                            logger.critical(f"🆘 [FLIP] Strong reversal for {symbol}. Closing {existing_side} for {side.upper()}.")
+                            await self.gateway.close_all_for_symbol(symbol)
+                            await asyncio.sleep(1) # Settlement delay
+                        else:
+                            logger.warning(f"🚫 [CONFLICT] Existing {existing_side} on {symbol}. Skipping {side.upper()}.")
+                            return
 
-                price = analysis.get('price', 0)
+                price = self.latest_data.get(symbol, {}).get('price', 0)
                 amount = self._calculate_order_amount(symbol, price)
+                leverage = analysis.get('leverage', self.leverage)
+                
                 if amount <= 0: return
 
-                await self.gateway.set_leverage(symbol, self.leverage)
-                logger.warning(f"🚀 [ORDER] Executing {side.upper()} {symbol}")
-                order = await self.gateway.place_order(symbol, side, amount)
+                await self.gateway.set_leverage(symbol, int(leverage))
+                await self.gateway.place_order(symbol, side.lower(), amount)
+                
+                # Register trade for monitoring
+                await self._register_trade(symbol, side.lower(), price, amount, analysis)
+                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}")
+            except Exception as e:
+                logger.error(f"❌ [EXECUTION FAILED] {e}")
                 
                 is_long = side.lower() == 'buy'
                 self.trade_levels[symbol] = {

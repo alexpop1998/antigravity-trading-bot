@@ -5,6 +5,8 @@ from ml_predictor import MLPredictor
 from llm_analyst import LLMAnalyst
 from regime_detector import RegimeDetector
 from signal_manager import SignalManager
+from sector_manager import SectorManager
+import pandas as pd
 
 logger = logging.getLogger("StrategyEngine")
 
@@ -20,6 +22,7 @@ class StrategyEngine:
         self.analyst = LLMAnalyst(bot_instance)
         self.regime_detector = RegimeDetector()
         self.signal_manager = SignalManager(bot_instance)
+        self.sector_manager = SectorManager()
         self.last_consensus: Dict[str, float] = {}
 
     async def analyze_opportunity(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -36,6 +39,32 @@ class StrategyEngine:
             df = data.get('df') if data else None
             if df is not None and hasattr(df, '__len__') and len(df) >= 50:
                 prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
+            
+            # 2.5 Multi-Timeframe (MTF) Confirmation (v29.x Restore)
+            mtf_approved = await self._check_mtf_trend(symbol)
+            if not mtf_approved:
+                logger.info(f"⏭️ [MTF GUARD] {symbol} rejected: Macro trend mismatch.")
+                return {'symbol': symbol, 'score': 0.0, 'reason': 'MTF_MISMATCH'}
+
+            # 2.6 Sector Guard (v29.x Restore)
+            sector = self.sector_manager.get_sector(symbol)
+            current_positions = getattr(self.bot, 'active_positions', {})
+            sector_count = sum(1 for s, side in current_positions.items() 
+                             if side is not None and self.sector_manager.get_sector(s) == sector)
+            if sector_count >= 5:
+                logger.warning(f"🛡️ [SECTOR GUARD] {symbol} rejected: Max exposure for {sector} reached ({sector_count}).")
+                return {'symbol': symbol, 'score': 0.0, 'reason': 'SECTOR_EXPOSURE'}
+
+            # 2.7 Funding Rate Penalty (v29.x Restore)
+            funding_multiplier = 1.0
+            try:
+                ticker = await self.bot.gateway.exchange.fetch_ticker(symbol)
+                funding = await self.bot.gateway.exchange.fetch_funding_rate(symbol)
+                funding_rate = float(funding.get('fundingRate', 0))
+                if funding_rate > 0.0005: # High funding for longs
+                    funding_multiplier = 0.5
+                    logger.warning(f"⚠️ [FUNDING PENALTY] {symbol} high funding: {funding_rate:.4%}")
+            except: pass
             
             # 3. AI Decision via LLMAnalyst.decide_strategy (correct method name)
             indicators = data if data else {}
@@ -108,3 +137,14 @@ class StrategyEngine:
                 score = 0.81
 
         return round(score, 4)
+
+    async def _check_mtf_trend(self, symbol: str) -> bool:
+        """Fetches 4h/1d candles to confirm macro direction."""
+        try:
+            ohlcv_4h = await self.bot.gateway.exchange.fetch_ohlcv(symbol, '4h', limit=50)
+            df_4h = pd.DataFrame(ohlcv_4h, columns=['t','o','h','l','c','v'])
+            ema200 = df_4h['c'].ewm(span=200, adjust=False).mean().iloc[-1]
+            return df_4h['c'].iloc[-1] > ema200 # Standard Trend-Following
+        except Exception as e:
+            logger.error(f"MTF Error for {symbol}: {e}")
+            return True # Neutral on error
