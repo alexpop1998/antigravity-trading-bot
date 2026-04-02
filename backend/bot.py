@@ -193,12 +193,12 @@ class CryptoBot:
             logger.error(f"❌ [CLOSE FAILED] {e}")
 
     def _calculate_order_amount(self, symbol, price):
-        """Standard Sizing (3% of Equity * Leverage)"""
+        """Standard Sizing (25% of Equity * Leverage for Blitz)"""
         try:
             equity = self.latest_account_data.get('equity', 0)
             if equity <= 0: return 0
             
-            risk_pct = self.config.get('trading_parameters', {}).get('percent_per_trade', 3.0) / 100.0
+            risk_pct = self.config.get('trading_parameters', {}).get('percent_per_trade', 25.0) / 100.0
             margin_usdt = equity * risk_pct
             notional = margin_usdt * self.leverage
             
@@ -207,6 +207,10 @@ class CryptoBot:
                 
             amount = notional / price
             return float(self.gateway.exchange.amount_to_precision(symbol, amount))
+        except Exception as e:
+            logger.error(f"Error calculating order amount: {e}")
+            return 0
+
     def add_alert(self, source, message, severity="INFO"):
         """Standardized alerting mechanism for background modules."""
         icon = "💡" if severity == "INFO" else "⚠️" if severity == "WARNING" else "🚨"
