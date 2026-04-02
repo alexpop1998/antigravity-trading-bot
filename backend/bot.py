@@ -231,16 +231,17 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         
-                        # 🚦 VERBOSE ANALYSIS
-                        logger.info(f"🧪 [ANALYSIS] Evaluating {symbol} | Current Threshold: {self.consensus_threshold}")
+                        # 🚦 VERBOSE ANALYSIS (v30.53 NUCLEAR)
+                        effective_threshold = 0.70 # Hard override to unblock trades
+                        logger.info(f"🧪 [ANALYSIS] Evaluating {symbol} | Effective Threshold: {effective_threshold}")
                         analysis = await self.strategy.analyze_opportunity(symbol, {'df': df})
                         score = analysis.get('score', 0)
                         
-                        if score >= self.consensus_threshold:
-                            logger.info(f"🎯 [TRIGGER] {symbol} score {score} meets threshold {self.consensus_threshold}!")
+                        if score >= effective_threshold:
+                            logger.info(f"🎯 [TRIGGER] {symbol} score {score} meets threshold {effective_threshold}!")
                             await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                         else:
-                            logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient (Min: {self.consensus_threshold})")
+                            logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient (Min: {effective_threshold})")
                     await asyncio.sleep(2) # Rate limit protection
                 await asyncio.sleep(60)
             except Exception as e:
