@@ -29,6 +29,10 @@ class CryptoBot:
         self.profile_type = profile
         self.config_file = f"config_{profile}.json"
         
+        # 1. Core Services
+        self.db = BotDatabase()
+        self.notifier = TelegramNotifier()
+        
         # 🛡️ GLOBAL AI CONCURRENCY (v31.12 UNLOCKED)
         # Increased to 5 for maximum speed after payment fix.
         self.ai_semaphore = asyncio.Semaphore(5)
