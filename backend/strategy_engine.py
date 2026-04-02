@@ -34,11 +34,19 @@ class StrategyEngine:
             # 1. Technical Regime Detection
             regime = self.regime_detector.detect_regime(data)
             
-            # 2. ML Prediction — use full DataFrame if available (100 candles)
+            # 2. ML Prediction - Enriched with Technical Indicators
             prediction = None
             df = data.get('df') if data else None
-            if df is not None and hasattr(df, '__len__') and len(df) >= 50:
-                prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
+            if df is not None and len(df) >= 50:
+                # Calculate required indicators for ML
+                df['rsi'] = self._calculate_rsi(df['close'])
+                df['atr'] = self._calculate_atr(df)
+                df['macd'], _, df['macd_hist'] = self._calculate_macd(df['close'])
+                df['bb_upper'], _, df['bb_lower'] = self._calculate_bollinger(df['close'])
+                df.dropna(inplace=True)
+                
+                if len(df) >= 20:
+                    prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
             
             # 2.5 Multi-Timeframe (MTF) Confirmation (v29.x Restore)
             mtf_approved = await self._check_mtf_trend(symbol)
@@ -148,3 +156,30 @@ class StrategyEngine:
         except Exception as e:
             logger.error(f"MTF Error for {symbol}: {e}")
             return True # Neutral on error
+
+    def _calculate_rsi(self, series, period=14):
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
+    def _calculate_atr(self, df, period=14):
+        high_low = df['h'] - df['l']
+        high_close = (df['h'] - df['c'].shift()).abs()
+        low_close = (df['l'] - df['c'].shift()).abs()
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = ranges.max(axis=1)
+        return true_range.rolling(window=period).mean()
+
+    def _calculate_macd(self, series, fast=12, slow=26, signal=9):
+        exp1 = series.ewm(span=fast, adjust=False).mean()
+        exp2 = series.ewm(span=slow, adjust=False).mean()
+        macd = exp1 - exp2
+        signal_line = macd.ewm(span=signal, adjust=False).mean()
+        return macd, signal_line, macd - signal_line
+
+    def _calculate_bollinger(self, series, period=20, std=2):
+        ma = series.rolling(window=period).mean()
+        msd = series.rolling(window=period).std()
+        return ma + std * msd, ma, ma - std * msd
