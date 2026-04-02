@@ -1,17 +1,17 @@
 #!/bin/bash
-# Antigravity v31.02 - Ultra-Stable Bootstrapper
+# Antigravity v31.05 - FINAL STABLE BOOTSTRAPPER
 cd /root/antigravity-trading-bot
-export PYTHONPATH=$PYTHONPATH:.
-source venv/bin/activate
+export PYTHONPATH=/root/antigravity-trading-bot
+VENV_PYTHON="/root/antigravity-trading-bot/venv/bin/python3"
 
-echo "🧹 [CLEANUP] Freeing ports and killing old instances..."
+echo "🧹 [CLEANUP] Freeing port 8080 and clearing old logic..."
 fuser -k 8080/tcp 2>/dev/null || true
 pkill -9 -f 'backend/main.py' 2>/dev/null || true
 sleep 1
 
-echo "🚀 [BOOT] Starting Trading Bot Cluster (Port 8080)..."
-nohup python3 backend/main.py > /root/antigravity-trading-bot/backend/bot_run.log 2>&1 &
-echo "✅ [DONE] Process PID: $!"
-echo "📊 [LOGS] Tailing log for first indicators..."
-sleep 2
-tail -n 20 /root/antigravity-trading-bot/backend/bot_run.log
+echo "🚀 [BOOT] Starting Trading Bot Cluster..."
+nohup $VENV_PYTHON backend/main.py > backend/bot_run.log 2>&1 &
+echo "✅ [DONE] Cluster PID: $!"
+echo "📊 [LOGS] Tailing for boot indicators..."
+sleep 3
+cat backend/bot_run.log
