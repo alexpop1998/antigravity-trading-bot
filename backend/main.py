@@ -147,6 +147,13 @@ async def get_status():
         "heartbeat": time.time()
     }
 
+@app.get("/api/report")
+async def get_report():
+    report_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "investor_report.html")
+    if os.path.exists(report_path):
+        return FileResponse(report_path)
+    return {"status": "error", "message": "Report not yet generated. Please wait for the next cycle."}
+
 @app.get("/api/manual-audit")
 async def manual_audit():
     try:

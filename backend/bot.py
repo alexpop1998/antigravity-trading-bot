@@ -116,8 +116,14 @@ class CryptoBot:
             asyncio.create_task(self.run_margin_cleanup_loop())
             asyncio.create_task(self.run_news_radar_loop())
             asyncio.create_task(self.run_daily_audit_loop())
+            # Start Report Loops (v31.02)
             asyncio.create_task(self.run_automated_report_loop())
-            
+            try:
+                self.reporter.generate_html()
+                logger.info("📊 [BOOT] Initial Investor Report generated.")
+            except Exception as e:
+                logger.error(f"❌ Failed to generate initial report: {e}")
+
             self.initialized = True
             # 🛡️ Notification Spam Guard (v31.02)
             last_boot = self.db.load_state("last_boot_time") or 0
@@ -585,13 +591,16 @@ class CryptoBot:
     async def run_news_radar_loop(self):
         """[V29] Periodically polls news and handles high-impact signals."""
         logger.info("📰 [BOOT] Starting News Radar loop...")
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                self.news_radar.http_client = client
-                await self.news_radar.poll_news()
-        except Exception as e:
-            logger.error(f"❌ News Radar Loop Error: {e}")
+        while True:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    self.news_radar.http_client = client
+                    await self.news_radar.poll_news()
+                await asyncio.sleep(600) # Poll every 10 mins
+            except Exception as e:
+                logger.error(f"❌ News Radar Loop Error: {e}")
+                await asyncio.sleep(60)
 
     async def run_daily_audit_loop(self):
         """[V29] Nightly AI self-reflection on past performance."""
