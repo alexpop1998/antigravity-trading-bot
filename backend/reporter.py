@@ -74,7 +74,7 @@ class BotReporter:
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <title>Antigravity | Institutional Report</title>
+    <title>FUTURES TRADING BOT | Institutional Report</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -137,7 +137,7 @@ class BotReporter:
     <div class="container">
         <div class="header">
             <div>
-                <div class="logo-text">ANTIGRAVITY <span>v31.05</span></div>
+                <div class="logo-text">FUTURES <span>TRADING BOT</span></div>
                 <p style="opacity:0.4; font-size:13px; margin:5px 0;">Digital Asset Performance Report</p>
             </div>
             <div style="text-align:right">
