@@ -70,11 +70,13 @@ class CryptoBot:
         self.trade_levels = self.db.load_state("trade_levels") or {}
         self.active_positions = {}
         self.latest_data = {}
-        self.latest_account_data = {'equity': 0.0, 'balance': 0.0}
+        self.latest_account_data = {'equity': 0.0, 'balance': 0.0, 'margin_ratio': 0.0}
+        self.initial_wallet_balance = self.db.load_state("initial_balance") or 0.0
         
         # Locks & Cooldowns
         self.order_lock = asyncio.Lock()
         self.initialized = False
+        self.start_time = time.time()
 
     def _load_config(self):
         try:
@@ -99,8 +101,14 @@ class CryptoBot:
             # Start Loops
             asyncio.create_task(self.run_deliberative_analysis_loop())
             asyncio.create_task(self.run_reactive_safety_loop())
+            asyncio.create_task(self.run_zombie_sync_loop())
+            asyncio.create_task(self.run_margin_cleanup_loop())
             
             self.initialized = True
+            if self.initial_wallet_balance == 0:
+                self.initial_wallet_balance = self.latest_account_data['equity']
+                self.db.save_state("initial_balance", self.initial_wallet_balance)
+
             await self.notifier.send_message(f"🚀 *SISTEMA ATTIVO*\nProfilo: {self.profile_type.upper()}\nSoglia: {self.consensus_threshold}")
         except Exception as e:
             logger.error(f"Initialization Failed: {e}")
@@ -108,12 +116,14 @@ class CryptoBot:
     async def sync_state(self):
         """Syncs balance and positions with exchange."""
         try:
-            balance = await self.gateway.exchange.fetch_balance()
-            self.latest_account_data['equity'] = float(balance.get('total', {}).get('USDT', 0))
-            self.latest_account_data['balance'] = float(balance.get('free', {}).get('USDT', 0))
+            balance_data = await self.gateway.fetch_balance_safe()
+            self.latest_account_data['equity'] = balance_data['equity']
+            # Estimate margin ratio
+            raw = balance_data['raw']
+            self.latest_account_data['margin_ratio'] = float(raw.get('info', {}).get('marginRatio', 0)) if isinstance(raw.get('info'), dict) else 0.0
             
             positions = await self.gateway.fetch_positions_robustly()
-            self.active_positions = {p['symbol']: ('LONG' if float(p['positionAmt']) > 0 else 'SHORT') for p in positions}
+            self.active_positions = {p['symbol']: ('LONG' if p['side'] == 'long' else 'SHORT') for p in positions}
         except Exception as e:
             logger.error(f"Sync State Failed: {e}")
 
@@ -182,6 +192,10 @@ class CryptoBot:
                     return
 
                 # 🚀 SEND TO EXCHANGE
+                # --- V29 LEVERAGE FLOOR ---
+                if self.profile_type in ['blitz', 'extreme']:
+                    leverage = max(leverage, 15)
+                
                 await self.gateway.set_leverage(symbol, leverage)
                 logger.info(f"⚙️ [LEVERAGE] Set to {leverage} for {symbol}")
                 
@@ -189,7 +203,12 @@ class CryptoBot:
                 logger.info(f"🔥 [EXCHANGE] Order placed for {symbol} | {side.upper()} @ {price}")
                 
                 # Register locally
-                is_long = side.lower() == 'buy'
+                is_long = side.lower() in ['buy', 'long']
+                
+                # --- V29 RISK MATRIX ---
+                sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
+                tp_pct = self.config.get("trading_parameters", {}).get("take_profit_pct", 0.04)
+                
                 self.trade_levels[symbol] = {
                     "symbol": symbol,
                     "side": 'long' if is_long else 'short',
@@ -197,16 +216,19 @@ class CryptoBot:
                     "entry_score": analysis.get('score', 0),
                     "opened_at": time.time(),
                     "amount": amount,
-                    "sl": price * (1 - self.stop_loss_pct if is_long else 1 + self.stop_loss_pct),
-                    "tp1": price * (1 + self.take_profit_pct/2 if is_long else 1 - self.take_profit_pct/2),
-                    "tp1_hit": False
+                    "sl": price * (1 - sl_pct if is_long else 1 + sl_pct),
+                    "tp1": price * (1 + tp_pct/2 if is_long else 1 - tp_pct/2),
+                    "tp2": price * (1 + tp_pct if is_long else 1 - tp_pct),
+                    "tp1_hit": False,
+                    "status": "RUNNING"
                 }
                 self.db.save_state("trade_levels", self.trade_levels)
-                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}")
+                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}\nLev: {leverage}x | Size: {amount}")
             except Exception as e:
                 logger.error(f"❌ [EXECUTION FAILED] {e}")
 
     async def close_position(self, symbol: str, trade: Dict[str, Any], reason: str = "EXIT"):
+        """Closes 100% of the position."""
         try:
             await self.gateway.close_all_for_symbol(symbol)
             self.trade_levels[symbol] = None
@@ -214,6 +236,30 @@ class CryptoBot:
             await self.notifier.send_message(f"🏁 *POSIZIONE CHIUSA*\n🪙 {symbol} | 🎯 {reason}")
         except Exception as e:
             logger.error(f"❌ [CLOSE FAILED] {e}")
+
+    async def partial_close_position(self, symbol: str, trade: Dict[str, Any], percent: float = 0.5, reason: str = "PARTIAL_EXIT"):
+        """Closes a percentage of the position (e.g. 50% for TP1)."""
+        try:
+            # Fetch current position to get exact contracts
+            pos = await self.gateway.fetch_atomic_position(symbol)
+            if not pos: return
+            
+            contracts_to_close = float(pos['amount']) * percent
+            side = 'sell' if pos['side'] == 'long' else 'buy'
+            
+            await self.gateway.place_order(symbol, side, contracts_to_close)
+            
+            # Update local state
+            if trade:
+                trade['amount'] = float(pos['amount']) - contracts_to_close
+                if "TP1" in reason:
+                    trade['tp1_hit'] = True
+                self.trade_levels[symbol] = trade
+                self.db.save_state("trade_levels", self.trade_levels)
+            
+            await self.notifier.send_message(f"✂️ *CHIUSURA PARZIALE ({percent*100:.0f}%)*\n🪙 {symbol} | 🎯 {reason}")
+        except Exception as e:
+            logger.error(f"❌ [PARTIAL CLOSE FAILED] {e}")
 
     def _calculate_order_amount(self, symbol, price):
         try:
@@ -248,51 +294,207 @@ class CryptoBot:
             return 0
 
     async def run_reactive_safety_loop(self):
+        """
+        [V30.60 HIGH-SPEED SAFETY]
+         독립적 인 루프 (Independent Loop). Fetch tickers directly for active positions 
+         to ensure SL/TP/SOS reflexes are sub-second.
+        """
         while True:
             try:
                 if not self.initialized: await asyncio.sleep(5); continue
-                positions = await self.gateway.fetch_positions_robustly()
-                for p in positions:
-                    symbol = p['symbol']
+                
+                # 🛡️ GLOBAL PANIC CHECK
+                equity = self.latest_account_data.get('equity', 0)
+                if await self.shield.check_panic_drawdown(equity, self.initial_wallet_balance):
+                    await self.emergency_cleanup_all()
+                    continue
+
+                # Fetch fresh tickers for ALL active symbols in one call if possible
+                active_symbols = list(self.active_positions.keys())
+                if not active_symbols:
+                    await asyncio.sleep(10); continue
+                
+                tickers = await self.gateway.exchange.fetch_tickers(active_symbols)
+                
+                for symbol in active_symbols:
                     trade = self.trade_levels.get(symbol)
-                    if trade:
-                        curr_price = self.latest_data.get(symbol, {}).get('price', 0)
-                        if curr_price <= 0: continue
-                        
-                        exit_triggered, reason = await self.shield.check_position(symbol, trade, curr_price)
-                        if exit_triggered:
+                    if not trade: continue
+                    
+                    ticker = tickers.get(symbol, {})
+                    curr_price = float(ticker.get('last', 0))
+                    if curr_price <= 0: continue
+                    
+                    # Update latest price for the rest of the bot
+                    if symbol not in self.latest_data: self.latest_data[symbol] = {}
+                    self.latest_data[symbol]['price'] = curr_price
+                    
+                    # Fetch ATR (stale ATR from analysis loop is fine for scaling SL)
+                    atr = self.latest_data.get(symbol, {}).get('atr', 0)
+                    
+                    exit_triggered, reason = await self.shield.check_position(symbol, trade, curr_price, current_atr=atr)
+                    if exit_triggered:
+                        if reason == "TAKE_PROFIT_1":
+                            await self.partial_close_position(symbol, trade, 0.5, reason)
+                        else:
                             await self.close_position(symbol, trade, reason)
-                await asyncio.sleep(10)
+                
+                await asyncio.sleep(5) # Real-time reflex (5s)
             except Exception as e:
                 logger.error(f"Safety Loop Error: {e}")
                 await asyncio.sleep(10)
 
+    async def run_zombie_sync_loop(self):
+        """
+        [V20.1 RECOVERY ENGINE]
+        Periodically checks for untracked positions and adopts them.
+        """
+        while True:
+            try:
+                if not self.initialized: await asyncio.sleep(30); continue
+                
+                zombies = await self.gateway.sync_zombie_positions()
+                for z in zombies:
+                    symbol = z['symbol']
+                    if symbol not in self.trade_levels or self.trade_levels[symbol] is None:
+                        logger.warning(f"🧟 [ZOMBIE] Adopting {symbol} ({z['side'].upper()})")
+                        # Recalculate targets based on Profile
+                        is_long = z['side'] == 'long'
+                        sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.05)
+                        tp_pct = self.config.get("trading_parameters", {}).get("take_profit_pct", 0.10)
+                        entry = z['entry_price']
+                        
+                        self.trade_levels[symbol] = {
+                            "symbol": symbol,
+                            "side": z['side'],
+                            "entry_price": entry,
+                            "opened_at": time.time() - 3600, # Fake an hour ago
+                            "amount": z['amount'],
+                            "sl": entry * (1 - sl_pct if is_long else 1 + sl_pct),
+                            "tp1": entry * (1 + tp_pct/2 if is_long else 1 - tp_pct/2),
+                            "tp2": entry * (1 + tp_pct if is_long else 1 - tp_pct),
+                            "tp1_hit": False,
+                            "status": "RECOVERED_ZOMBIE"
+                        }
+                        self.db.save_state("trade_levels", self.trade_levels)
+                        await self.notifier.send_message(f"🧟 *POSIZIONE ADOTTATA*\n🪙 {symbol} @ {entry}")
+                
+                await asyncio.sleep(300) # Every 5 minutes
+            except Exception as e:
+                logger.error(f"Zombie Sync Error: {e}")
+                await asyncio.sleep(60)
+
+    async def run_margin_cleanup_loop(self):
+        """
+        [V29 MARGIN DANGER]
+        Closes worst position if margin ratio exceeds 95%.
+        """
+        while True:
+            try:
+                if not self.initialized: await asyncio.sleep(30); continue
+                
+                margin_ratio = self.latest_account_data.get('margin_ratio', 0)
+                if margin_ratio >= 0.95:
+                    logger.critical(f"⚠️ [MARGIN DANGER] Ratio at {margin_ratio*100:.1f}%. Executing Cleanup.")
+                    positions = await self.gateway.fetch_positions_robustly()
+                    if positions:
+                        # Find worst PnL
+                        worst = min(positions, key=lambda x: x['unrealized_pnl'])
+                        logger.warning(f"🛡️ [CLEANUP] Closing worst position {worst['symbol']} (PnL: {worst['unrealized_pnl']})")
+                        await self.close_position(worst['symbol'], self.trade_levels.get(worst['symbol']), "MARGIN_CLEANUP")
+                
+                await asyncio.sleep(20)
+            except Exception as e:
+                logger.error(f"Margin Cleanup Error: {e}")
+                await asyncio.sleep(20)
+
+    async def emergency_cleanup_all(self):
+        """Emergency function to close every single open position immediately."""
+        try:
+            logger.warning("🛡️ Starting Emergency Cleanup of ALL positions...")
+            positions = await self.gateway.fetch_positions_robustly()
+            for pos in positions:
+                await self.close_position(pos['symbol'], self.trade_levels.get(pos['symbol']), "EMERGENCY_CLEANUP")
+            logger.warning("✅ All positions closed.")
+        except Exception as e:
+            logger.error(f"Emergency cleanup failed: {e}")
+
     async def run_deliberative_analysis_loop(self):
+        """
+        [v31.0 BRAIN]
+        Ranked Opportunity Scanner. 
+        Instead of First-Come-First-Served, it ranks the entire market and picks the BEST.
+        """
         while True:
             try:
                 if not self.initialized: await asyncio.sleep(10); continue
                 await self.sync_state()
-                assets = await self.scanner.scan()
+                
+                # 1. Scan Market for high-volume assets
+                active_symbols = list(self.active_positions.keys())
+                assets = await self.scanner.scan(active_symbols=active_symbols)
+                candidates = []
+                
+                logger.info(f"🔍 [SCANNER] Analyzing {len(assets)} potential assets for technical setups...")
+                
+                # 2. FAST TECHNICAL FILTERING (No LLM yet)
                 for asset in assets:
                     symbol = asset['symbol']
-                    ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '15m', limit=100)
-                    if ohlcv:
+                    try:
+                        ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '15m', limit=50)
+                        if not ohlcv: continue
+                        
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         
-                        # 🚦 VERBOSE ANALYSIS (v30.53 NUCLEAR)
-                        effective_threshold = 0.70 # Hard override to unblock trades
-                        logger.info(f"🧪 [ANALYSIS] Evaluating {symbol} | Effective Threshold: {effective_threshold}")
-                        analysis = await self.strategy.analyze_opportunity(symbol, {'df': df})
-                        score = analysis.get('score', 0)
+                        # Get Technical-only score (Cheap, no AI)
+                        tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
                         
-                        if score >= effective_threshold:
-                            logger.info(f"🎯 [TRIGGER] {symbol} score {score} meets threshold {effective_threshold}!")
-                            await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
-                        else:
-                            logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient (Min: {effective_threshold})")
-                    await asyncio.sleep(2) # Rate limit protection
-                await asyncio.sleep(60)
+                        if tech_snapshot['tech_score'] >= 0.4: # Low bar for candidate list
+                            candidates.append({
+                                'symbol': symbol,
+                                'tech_snapshot': tech_snapshot,
+                                'df': df
+                            })
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error filtering {symbol}: {e}")
+                
+                # 3. RANK BY TECHNICAL STRENGTH
+                candidates.sort(key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)
+                top_candidates = candidates[:5] # Audit only the best to save $$$
+                
+                if not top_candidates:
+                    logger.info("⏭️ [SCAN] No viable technical setups found in this sweep.")
+                else:
+                    logger.info(f"🏆 [TOP 5] Best tech setups: {[c['symbol'] for c in top_candidates]}")
+                
+                # 4. DEEP AI AUDIT (Only for the elite)
+                for cand in top_candidates:
+                    symbol = cand['symbol']
+                    tech_snapshot = cand['tech_snapshot']
+                    
+                    # Call Deep Analysis (Includes LLM)
+                    # Pass Funding Rate if available
+                    cand['data'] = {'df': cand['df'], 'funding_rate': self.latest_data.get(symbol, {}).get('funding_rate', 0)}
+                    analysis = await self.strategy.analyze_opportunity(symbol, cand['data'], tech_snapshot)
+                    score = analysis.get('score', 0)
+                    
+                    # 5. EXECUTION TRIGGER
+                    # Use a slightly dynamic threshold based on profile
+                    threshold = self.consensus_threshold
+                    if score >= threshold:
+                        logger.info(f"🎯 [TRIGGER] {symbol} (Ranked Top) score {score:.2f} meets threshold {threshold}!")
+                        await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
+                        # Optional: break if we hit max positions to avoid over-trading
+                        if len(self.active_positions) >= self.max_concurrent_positions:
+                            break
+                    else:
+                        logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient (Threshold: {threshold})")
+                
+                # Wait for next sweep
+                wait_time = 120 if len(self.active_positions) >= self.max_concurrent_positions else 60
+                logger.info(f"💤 [SLEEP] Sweep complete. Waiting {wait_time}s for next cycle.")
+                await asyncio.sleep(wait_time)
+                
             except Exception as e:
                 logger.error(f"Analysis Loop Error: {e}")
                 await asyncio.sleep(60)

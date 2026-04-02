@@ -21,6 +21,9 @@ class LLMAnalyst:
         self.semaphore = asyncio.Semaphore(2) # Limit concurrent decisions to avoid rate limits
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()
+        self.cooldown_map = {} # v29 cooldown tracking
+        self.cooldown_seconds = int(self.bot.config.get("strategic_params", {}).get("llm_cooldown_seconds", 60))
+        self.cooldown_bypass = self.bot.config.get("strategic_params", {}).get("llm_cooldown_bypass", False)
 
     def _load_lessons(self):
         try:
@@ -199,13 +202,14 @@ class LLMAnalyst:
 
     async def evaluate_active_position(self, symbol, side, indicators, current_pnl_pct):
         """
+        [V29 DYNAMIC TP2]
         Evaluates the health of an active position and suggests Scaling/Pivot.
+        Uses the Gemini implementation (fixed from legacy ai_client).
         """
-        if not self.ai_client:
-            return "HOLD", 0, "No AI Client"
+        if not self.api_key:
+            return "HOLD", 0, "No API Key"
 
         try:
-            # --- DYNAMIC MONITORING PHILOSOPHY (v17.0) ---
             profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
             ai_prompts = self.bot.config.get('ai_prompts', {})
             philosophy = ai_prompts.get("llm_philosophy", "Monitor standard indicators.")
@@ -228,33 +232,54 @@ class LLMAnalyst:
             3. PIVOT: Chiudi subito tutto e gira la posizione (solo su cambio trend violento).
             4. CLOSE: Chiudi tutto ora.
             
-            REGOLE SPECIFICHE {profile_type.upper()}:
-            - Abbiamo uno Stop Loss e un Trailing che ci proteggono, ma il tuo intervento 'manuale' è richiesto se i segnali tecnici deteriorano.
-            
             RISPONDI JSON: {{ "technical_status": "sintesi", "action": "HOLD/SCALE_OUT/PIVOT/CLOSE", "confidence": 0-1, "reasoning": "max 15 parole" }}
             """
 
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json"
+                }
+            }
+
             async with self.semaphore:
-                response = await self.ai_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={ "type": "json_object" },
-                    temperature=0.1
-                )
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.post(self.gemini_url, json=payload)
+                    resp.raise_for_status()
+                    raw = resp.json()
+                    text = raw["candidates"][0]["content"]["parts"][0]["text"]
+                    result = json.loads(text)
+            
+            action = result.get("action", "HOLD").upper()
+            confidence = float(result.get("confidence", 0.0))
+            reasoning = result.get("reasoning", "Monitoraggio standard.")
+            
+            if confidence < 0.65: # Threshold for active monitoring
+                return "HOLD", confidence, "Low confidence"
                 
-                result = json.loads(response.choices[0].message.content)
-                action = result.get("action", "HOLD").upper()
-                confidence = float(result.get("confidence", 0.0))
-                reasoning = result.get("reasoning", "Monitoraggio standard.")
-                
-                if confidence < 0.70: # Ignora azioni a bassa confidenza
-                    return "HOLD", confidence, "Low confidence"
-                    
-                return action, confidence, reasoning
+            return action, confidence, reasoning
 
         except Exception as e:
             logger.error(f"Errore durante monitoraggio posizione {symbol}: {e}")
             return "HOLD", 0.0, f"ERROR: {str(e)}"
+
+    def is_in_cooldown(self, symbol: str) -> bool:
+        """
+        [V11.8 COOLDOWN ENGINE]
+        Checks if a symbol is in AI cooldown.
+        Bypassable via config for Blitz/Extreme.
+        """
+        if self.cooldown_bypass:
+            return False
+            
+        last_time = self.cooldown_map.get(symbol, 0)
+        elapsed = time.time() - last_time
+        return elapsed < self.cooldown_seconds
+
+    def update_cooldown(self, symbol: str):
+        """Sets the cooldown timestamp for a symbol."""
+        self.cooldown_map[symbol] = time.time()
 
     async def refine_market_selection(self, candidates: List[Dict[str, Any]], limit: int = 50) -> List[str]:
         """

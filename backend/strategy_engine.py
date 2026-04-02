@@ -15,152 +15,185 @@ class StrategyEngine:
     The "Brain" of the bot. 
     Aggregates Technical, ML, and AI signals into a unified consensus.
     """
-    
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.predictor = MLPredictor()
-        self.analyst = LLMAnalyst(bot_instance)
+        self.analyst = LLMAnalyst()
         self.regime_detector = RegimeDetector()
-        self.signal_manager = SignalManager(bot_instance)
-        self.sector_manager = SectorManager()
-        self.last_consensus: Dict[str, float] = {}
-
-    async def analyze_opportunity(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        
+        # v29 logic config
+        self.adx_threshold = 25
+        self.rsi_buy_level = 30
+        self.rsi_sell_level = 70
+        self.technical_confluence_mode = "strict" # v29 favorite
+    
+    async def get_technical_score(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Deep analysis of a single symbol.
-        Returns a consensus score and recommended action.
+        [v31.0 LIGHTNING SCORE + v29 CONFLUENCE]
+        Calculates a technical-only score for pre-filtering.
+        Includes RSI, MACD, Bollinger, and Momentum Guards.
         """
         try:
-            # 1. Technical Regime Detection
-            regime = self.regime_detector.detect_regime(data)
+            df = data.get('df')
+            if df is None or len(df) < 50:
+                return {'symbol': symbol, 'tech_score': 0.0, 'side': 'buy'}
+
+            # ⚙️ Indicators
+            close = df['close']
+            df['rsi'] = self._calculate_rsi(close)
+            df['macd'], df['signal'], df['hist'] = self._calculate_macd(close)
+            df['bb_up'], df['bb_mid'], df['bb_low'] = self._calculate_bollinger(close)
+            df['ema200'] = close.ewm(span=200, adjust=False).mean()
             
-            # 2. ML Prediction - Enriched with Technical Indicators
-            prediction = None
-            df = data.get('df') if data else None
-            if df is not None and len(df) >= 50:
-                # Calculate required indicators for ML
-                df['rsi'] = self._calculate_rsi(df['close'])
-                df['atr'] = self._calculate_atr(df)
-                df['macd'], _, df['macd_hist'] = self._calculate_macd(df['close'])
-                df['bb_upper'], _, df['bb_lower'] = self._calculate_bollinger(df['close'])
-                df.dropna(inplace=True)
+            # Latest values
+            price = df['close'].iloc[-1]
+            rsi = df['rsi'].iloc[-1]
+            macd_hist = df['hist'].iloc[-1]
+            bb_up = df['bb_up'].iloc[-1]
+            bb_low = df['bb_low'].iloc[-1]
+            ema200 = df['ema200'].iloc[-1]
+            
+            # --- V29 MOMENTUM GUARD ---
+            change_5m = (price - df['close'].iloc[-4]) / df['close'].iloc[-4] # ~5 min check (15m candles, taking last 4 samples of 10s is better but here we have 15m df)
+            # Adjusting for 15m TF: check last candle
+            change_15m = (price - df['close'].iloc[-2]) / df['close'].iloc[-2]
+
+            # 1. Regime Detection
+            regime_type, confidence = self.regime_detector.detect_regime(data)
+            
+            # 2. MTF Trend (Directional)
+            trend_bias = await self._check_mtf_trend(symbol) # 1 for Long, -1 for Short
+            
+            # 3. CONFLUENCE LOGIC (V29)
+            is_rsi_buy = rsi <= self.rsi_buy_level
+            is_bb_buy = price <= (bb_low * 1.01)
+            is_macd_buy = macd_hist > 0
+            
+            is_rsi_sell = rsi >= self.rsi_sell_level
+            is_bb_sell = price >= (bb_up * 0.99)
+            is_macd_sell = macd_hist < 0
+
+            tech_buy = False
+            tech_sell = False
+            
+            if self.technical_confluence_mode == "loose":
+                tech_buy = is_rsi_buy or is_bb_buy
+                tech_sell = is_rsi_sell or is_bb_sell
+            else: # Strict
+                tech_buy = is_rsi_buy and is_bb_buy and is_macd_buy
+                tech_sell = is_rsi_sell and is_bb_sell and is_macd_sell
+
+            # 4. SIZING MODIFIER (Funding/Momentum)
+            size_multiplier = 1.0
+            
+            # --- MOMENTUM GUARD (V29) ---
+            if tech_sell and change_15m > 0.015:
+                logger.info(f"🛡️ [MOMENTUM GUARD] Blocking SHORT on {symbol}: Bullish surge {change_15m:.2%}")
+                tech_sell = False
+
+            # --- FUNDING PENALTY (V29) ---
+            funding_rate = data.get('funding_rate', 0)
+            if tech_buy and funding_rate > 0.0005: # High funding
+                size_multiplier *= 0.5
+                logger.warning(f"⚠️ [FUNDING PENALTY] High funding on {symbol} ({funding_rate:.4%}). Sizing x0.5")
+            elif tech_sell and funding_rate < -0.0005: # Negative funding
+                size_multiplier *= 0.5
+                logger.warning(f"⚠️ [FUNDING PENALTY] Negative funding on {symbol} ({funding_rate:.4%}). Sizing x0.5")
+
+            # 5. FINAL TECH SCORE
+            score = 0.0
+            side = "buy" if tech_buy else ("sell" if tech_sell else "neutral")
+            
+            if tech_buy:
+                score = 0.6 if trend_bias >= 0 else 0.4
+            elif tech_sell:
+                score = 0.6 if trend_bias <= 0 else 0.4
                 
-                if len(df) >= 20:
-                    prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
-            
-            # 2.5 Multi-Timeframe (MTF) Confirmation
-            profile = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            mtf_approved = await self._check_mtf_trend(symbol)
-            mtf_bonus = 0.1 if mtf_approved else -0.1
-            
-            if not mtf_approved and profile != 'blitz':
-                logger.info(f"⏭️ [MTF GUARD] {symbol} rejected: Macro trend mismatch.")
-                return {'symbol': symbol, 'score': 0.0, 'reason': 'MTF_MISMATCH'}
-            elif not mtf_approved and profile == 'blitz':
-                 logger.info(f"⚡ [BLITZ BYPASS] {symbol} macro mismatch, but continuing (Blitz mode).")
+            return {
+                'symbol': symbol,
+                'tech_score': score,
+                'side': side,
+                'regime': regime_type,
+                'trend_bias': trend_bias,
+                'size_multiplier': size_multiplier
+            }
+        except Exception as e:
+            logger.error(f"Error in technical scoring for {symbol}: {e}")
+            return {'symbol': symbol, 'tech_score': 0.0, 'side': 'buy'}
 
-            # 2.6 Sector Guard (v29.x Restore)
-            sector = self.sector_manager.get_sector(symbol)
-            current_positions = getattr(self.bot, 'active_positions', {})
-            sector_count = sum(1 for s, side in current_positions.items() 
-                             if side is not None and self.sector_manager.get_sector(s) == sector)
-            if sector_count >= 5:
-                logger.warning(f"🛡️ [SECTOR GUARD] {symbol} rejected: Max exposure for {sector} reached ({sector_count}).")
-                return {'symbol': symbol, 'score': 0.0, 'reason': 'SECTOR_EXPOSURE'}
-
-            # 2.7 Funding Rate Penalty (v29.x Restore)
-            funding_multiplier = 1.0
-            try:
-                ticker = await self.bot.gateway.exchange.fetch_ticker(symbol)
-                funding = await self.bot.gateway.exchange.fetch_funding_rate(symbol)
-                funding_rate = float(funding.get('fundingRate', 0))
-                if funding_rate > 0.0005: # High funding for longs
-                    funding_multiplier = 0.5
-                    logger.warning(f"⚠️ [FUNDING PENALTY] {symbol} high funding: {funding_rate:.4%}")
-            except: pass
+    async def analyze_opportunity(self, symbol: str, data: Dict[str, Any], tech_snapshot: Dict = None) -> Dict[str, Any]:
+        """
+        Deep analysis of a single symbol, now AI-optimized.
+        """
+        try:
+            # Use pre-calculated data if available
+            snapshot = tech_snapshot or await self.get_technical_score(symbol, data)
+            side = snapshot['side']
+            tech_score = snapshot['tech_score']
             
-            # 3. AI Decision via LLMAnalyst.decide_strategy (correct method name)
+            # --- V11.8 COOLDOWN CHECK ---
+            if self.analyst.is_in_cooldown(symbol):
+                logger.debug(f"⏭️ [COOLDOWN] {symbol} skipped LLM (too frequent)")
+                return {'symbol': symbol, 'score': 0.0, 'reason': 'ai_cooldown'}
+
+            # 3. AI Deep Audit (The Costly Part)
             indicators = data if data else {}
+            # Pass side to AI so it evaluates the CORRECT direction
             result = await self.analyst.decide_strategy(
                 symbol=symbol,
-                side="buy",
-                signal_type="DELIBERATIVE_SCAN",
+                side=side,
+                signal_type="DEEP_RANKED_SCAN",
                 indicators=indicators
             )
-            # Safe unpack: decide_strategy returns (approved, confidence, leverage, tp_mult, sl_mult, tp_price, reason)
+            
+            # Safe unpack
             approved = result[0] if result else False
-            confidence = result[1] if result and len(result) > 1 else 0.0
+            ai_confidence = result[1] if result and len(result) > 1 else 0.0
             leverage = result[2] if result and len(result) > 2 else self.bot.leverage
-            reason = result[6] if result and len(result) > 6 else (result[5] if result and len(result) > 5 else "N/A")
+            reason = result[6] if result and len(result) > 6 else "N/A"
             
-            # 4. Consensus Score (MTF Bonus included)
-            score = self.calculate_consensus_score(regime, prediction, approved, confidence, mtf_bonus)
+            # Update cooldown on success
+            self.analyst.update_cooldown(symbol)
             
-            direction = "LONG 🟢" if score >= 0.8 else "SKIP ⏭️"
+            # 4. Final Consensus Score (Weight: 60% AI, 40% Technical)
+            final_score = (0.6 * ai_confidence) + (0.4 * tech_score) if approved else 0.0
+            
+            direction = f"{side.upper()} {'🟢' if side=='buy' else '🔴'}" if final_score >= 0.7 else "SKIP ⏭️"
             logger.info(
-                f"🧠 [STRATEGY] {symbol} → Regime: {regime} | "
-                f"ML: {'UP' if prediction and prediction.get('direction') == 1 else 'N/A'} | "
-                f"AI: {reason} | Score: {score:.2f} → {direction}"
+                f"🧠 [STRATEGY] {symbol} → Tech: {tech_score:.2f} | "
+                f"AI: {reason} (Conf: {ai_confidence:.2f}) | Final: {final_score:.2f} → {direction}"
             )
             
             return {
                 'symbol': symbol,
-                'score': score,
-                'regime': regime,
+                'score': final_score,
                 'ai_approved': approved,
                 'ai_reason': reason,
-                'confidence': confidence,
+                'confidence': ai_confidence,
                 'leverage': leverage,
-                'side': 'buy' if score >= 0.5 else 'sell' # Explicit side mapping
+                'side': side
             }
             
         except Exception as e:
             logger.error(f"❌ Error during strategy evaluation for {symbol}: {e}")
             return {'symbol': symbol, 'score': 0.0, 'error': str(e)}
 
-    def calculate_consensus_score(self, regime, prediction, ai_approved, ai_confidence, mtf_bonus=0.0):
-        """
-        Calculates a final decision score (0.0 to 1.0) based on modular consensus.
-        """
-        score = 0.0
-        
-        # 1. AI Weight (40%)
-        if ai_approved:
-            score += (0.4 * ai_confidence)
-            
-        # 2. ML Weight (30%)
-        if prediction and isinstance(prediction, dict) and prediction.get('confidence'):
-            score += (0.3 * prediction['confidence'])
-            
-        # 3. Technical Regime Weight (30%)
-        if regime and regime[0] != 'UNKNOWN':
-            if regime[0] in ["TRENDING_UP", "BREAKOUT"]:
-                score += 0.3
-            elif regime[0] == "NEUTRAL":
-                score += 0.1
-        
-        # 4. MTF Bonus/Penalty (for Blitz)
-        score += mtf_bonus
-        
-        # --- BLITZ PROFILE OVERRIDE ---
-        profile = getattr(self.bot, 'profile_type', 'aggressive').lower()
-        if profile == 'blitz' and ai_approved and ai_confidence > 0.75:
-            if score < 0.71:
-                logger.info(f"⚡ [BLITZ SPEED] Forcing score {score:.2f} -> 0.71 to capture entry.")
-                score = 0.71
-
-        return max(0.0, min(1.0, round(score, 4)))
-
-    async def _check_mtf_trend(self, symbol: str) -> bool:
-        """Fetches 4h/1d candles to confirm macro direction."""
+    async def _check_mtf_trend(self, symbol: str) -> int:
+        """Fetches 4h candles and returns trend direction (1 for Long, -1 for Short, 0 for Neutral)."""
         try:
-            ohlcv_4h = await self.bot.gateway.exchange.fetch_ohlcv(symbol, '4h', limit=50)
+            ohlcv_4h = await self.bot.gateway.exchange.fetch_ohlcv(symbol, '4h', limit=100)
             df_4h = pd.DataFrame(ohlcv_4h, columns=['t','o','h','l','c','v'])
             ema200 = df_4h['c'].ewm(span=200, adjust=False).mean().iloc[-1]
-            return df_4h['c'].iloc[-1] > ema200 # Standard Trend-Following
+            last_close = df_4h['c'].iloc[-1]
+            
+            if last_close > (ema200 * 1.002): # Clear Bullish
+                 return 1
+            elif last_close < (ema200 * 0.998): # Clear Bearish
+                 return -1
+            return 0 # Sideways/Neutral
         except Exception as e:
             logger.error(f"MTF Error for {symbol}: {e}")
-            return True # Neutral on error
+            return 0
 
     def _calculate_rsi(self, series, period=14):
         delta = series.diff()

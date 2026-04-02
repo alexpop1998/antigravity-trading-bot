@@ -134,14 +134,89 @@ class ExchangeGateway:
                 await self.place_order(symbol, side, p['contracts'])
                 logger.warning(f"🛡️ [GATEWAY] Emergency closed {symbol}")
 
-    async def set_leverage(self, symbol: str, leverage: int):
-        """Centralized leverage management."""
+    async def set_leverage(self, symbol: str, leverage: int, params: Optional[Dict] = None):
+        """Centralized leverage management with Hedged-mode support (Bitget)."""
         try:
             symbol = self.normalize_symbol(symbol)
-            await self.exchange.set_leverage(leverage, symbol)
+            # v17.16: Force both sides for Bitget Hedged Mode if params are not provided
+            if self.exchange_name == "bitget" and not params:
+                await self.exchange.set_leverage(leverage, symbol, params={'marginCoin': 'USDT', 'holdSide': 'long'})
+                await self.exchange.set_leverage(leverage, symbol, params={'marginCoin': 'USDT', 'holdSide': 'short'})
+            else:
+                await self.exchange.set_leverage(leverage, symbol, params or {})
             logger.info(f"⚙️ [GATEWAY] Leverage set to {leverage}x for {symbol}")
         except Exception as e:
             logger.error(f"⚠️ Failed to set leverage for {symbol}: {e}")
+
+    async def fetch_atomic_position(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        [V19.0 ATOMIC GUARD]
+        Performs a real-time, high-priority exchange check to verify position state.
+        Bypasses local cache for absolute accuracy.
+        """
+        try:
+            symbol = self.normalize_symbol(symbol)
+            if self.exchange_name == "bitget":
+                # Direct V2 endpoint for Bitget truth
+                params = {'productType': 'USDT-FUTURES', 'marginCoin': 'USDT'}
+                res = await self.exchange.private_mix_get_v2_mix_position_all_position(params)
+                pos_list = res.get('data', [])
+                # Use unslashed ID for matching in Bitget V2
+                market_id = next((m['id'] for s, m in self.markets.items() if s == symbol), symbol)
+                matching = next((p for p in pos_list if p.get('symbol') == market_id), None)
+                if matching and abs(float(matching.get('total', 0))) > 0:
+                    return {
+                        'symbol': symbol,
+                        'side': matching.get('holdSide', '').lower(),
+                        'amount': abs(float(matching.get('total', 0))),
+                        'entry_price': float(matching.get('openPriceAvg', 0)),
+                        'leverage': float(matching.get('leverage', 0))
+                    }
+            else:
+                # Standard CCXT path for Binance/Others
+                raw_pos = await self.exchange.fetch_positions([symbol])
+                matching = next((p for p in raw_pos if p.get('symbol') == symbol and float(p.get('contracts', 0)) != 0), None)
+                if matching:
+                    return {
+                        'symbol': symbol,
+                        'side': matching['side'].lower(),
+                        'amount': float(matching['contracts']),
+                        'entry_price': float(matching['entryPrice']),
+                        'leverage': float(matching['leverage'])
+                    }
+            return None
+        except Exception as e:
+            logger.error(f"⚠️ Atomic check failed for {symbol}: {e}")
+            return None
+
+    async def sync_zombie_positions(self) -> List[Dict[str, Any]]:
+        """
+        [V20.1 RECOVERY ENGINE]
+        Scans all open positions and filters for untracked orphans.
+        """
+        try:
+            if self.exchange_name == "bitget":
+                params = {'productType': 'USDT-FUTURES', 'marginCoin': 'USDT'}
+                res = await self.exchange.private_mix_get_v2_mix_position_all_position(params)
+                raw_list = res.get('data', [])
+                zombies = []
+                for p in raw_list:
+                    if abs(float(p.get('total', 0))) > 0:
+                        symbol = self.normalize_symbol(p.get('symbol'))
+                        zombies.append({
+                            'symbol': symbol,
+                            'side': p.get('holdSide', '').lower(),
+                            'amount': abs(float(p.get('total', 0))),
+                            'entry_price': float(p.get('openPriceAvg', 0)),
+                            'leverage': int(p.get('leverage', 10))
+                        })
+                return zombies
+            else:
+                raw_pos = await self.exchange.fetch_positions()
+                return [p for p in raw_pos if float(p.get('contracts', 0)) != 0]
+        except Exception as e:
+            logger.error(f"❌ Zombie sync failed: {e}")
+            return []
 
     async def close(self):
         if self.exchange:
