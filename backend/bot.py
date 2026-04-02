@@ -33,14 +33,19 @@ class CryptoBot:
         
         # 2. Config Loading
         self.config = self._load_config()
-        params = self.config.get("trading_parameters", {})
+        self.profile_type = self.config.get("profile_type", "aggressive")
+        self.consensus_threshold = self.config.get("trading_parameters", {}).get("consensus_threshold", 0.70)
+        self.leverage = self.config.get("trading_parameters", {}).get("leverage", 10)
+        self.percent_per_trade = self.config.get("trading_parameters", {}).get("percent_per_trade", 25.0)
+        self.max_concurrent_positions = self.config.get("trading_parameters", {}).get("max_concurrent_positions", 3)
+        self.stop_loss_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
+        self.take_profit_pct = self.config.get("trading_parameters", {}).get("take_profit_pct", 0.04)
+        self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
         
         # 3. Parameters
+        params = self.config.get("trading_parameters", {})
         self.symbols = params.get("symbols", ["BTC/USDT:USDT"])
         self.timeframe = params.get("timeframe", "15m")
-        self.leverage = params.get("leverage", 10)
-        self.stop_loss_pct = params.get("stop_loss_pct", 0.02)
-        self.take_profit_pct = params.get("take_profit_pct", 0.06)
         # 🟢 ROBUST CONFIG LOADING (v30.50)
         tp = self.config.get('trading_parameters', {})
         t = self.config.get('trading', {})
