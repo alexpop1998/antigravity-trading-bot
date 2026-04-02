@@ -103,6 +103,9 @@ class NewsRadar:
 
     async def process_article(self, title, link):
         try:
+            # 🛡️ Anti-429 Burst Protection
+            await asyncio.sleep(10) 
+            
             # 0. Local Filter (Pre-Gatekeeper)
             # Only use LLM for extremely high-priority subjects to save tokens
             high_priority_kws = ["sec", "fed", "hack", "etf", "lawsuit", "bnb", "binance", "cz", "usdt"]
