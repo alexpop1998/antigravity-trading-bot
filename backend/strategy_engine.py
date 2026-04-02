@@ -48,11 +48,16 @@ class StrategyEngine:
                 if len(df) >= 20:
                     prediction = await asyncio.to_thread(self.predictor.train_and_predict, symbol, df)
             
-            # 2.5 Multi-Timeframe (MTF) Confirmation (v29.x Restore)
+            # 2.5 Multi-Timeframe (MTF) Confirmation
+            profile = getattr(self.bot, 'profile_type', 'aggressive').lower()
             mtf_approved = await self._check_mtf_trend(symbol)
-            if not mtf_approved:
+            mtf_bonus = 0.1 if mtf_approved else -0.1
+            
+            if not mtf_approved and profile != 'blitz':
                 logger.info(f"⏭️ [MTF GUARD] {symbol} rejected: Macro trend mismatch.")
                 return {'symbol': symbol, 'score': 0.0, 'reason': 'MTF_MISMATCH'}
+            elif not mtf_approved and profile == 'blitz':
+                 logger.info(f"⚡ [BLITZ BYPASS] {symbol} macro mismatch, but continuing (Blitz mode).")
 
             # 2.6 Sector Guard (v29.x Restore)
             sector = self.sector_manager.get_sector(symbol)
@@ -88,8 +93,8 @@ class StrategyEngine:
             leverage = result[2] if result and len(result) > 2 else self.bot.leverage
             reason = result[6] if result and len(result) > 6 else (result[5] if result and len(result) > 5 else "N/A")
             
-            # 4. Consensus Score
-            score = self.calculate_consensus_score(regime, prediction, approved, confidence)
+            # 4. Consensus Score (MTF Bonus included)
+            score = self.calculate_consensus_score(regime, prediction, approved, confidence, mtf_bonus)
             
             direction = "LONG 🟢" if score >= 0.8 else "SKIP ⏭️"
             logger.info(
@@ -112,10 +117,9 @@ class StrategyEngine:
             logger.error(f"❌ Error during strategy evaluation for {symbol}: {e}")
             return {'symbol': symbol, 'score': 0.0, 'error': str(e)}
 
-    def calculate_consensus_score(self, regime, prediction, ai_approved, ai_confidence):
+    def calculate_consensus_score(self, regime, prediction, ai_approved, ai_confidence, mtf_bonus=0.0):
         """
         Calculates a final decision score (0.0 to 1.0) based on modular consensus.
-        Threshold for execution is typically 0.80.
         """
         score = 0.0
         
@@ -129,22 +133,21 @@ class StrategyEngine:
             
         # 3. Technical Regime Weight (30%)
         if regime and regime[0] != 'UNKNOWN':
-            # Simple mapping: 0.3 for positive regimes
             if regime[0] in ["TRENDING_UP", "BREAKOUT"]:
                 score += 0.3
             elif regime[0] == "NEUTRAL":
                 score += 0.1
-            
-        # --- BLITZ PROFILE OVERRIDE (v30.28) ---
-        # In Blitz mode, we prioritize speed. If AI is extremely confident, 
-        # we allow the trade even if ML/Regime are still calibrating.
+        
+        # 4. MTF Bonus/Penalty (for Blitz)
+        score += mtf_bonus
+        
+        # --- BLITZ PROFILE OVERRIDE ---
         profile = getattr(self.bot, 'profile_type', 'aggressive').lower()
         if profile == 'blitz' and ai_approved and ai_confidence > 0.85:
             if score < 0.81:
-                logger.info(f"⚡ [BLITZ BOOST] High AI confidence ({ai_confidence:.2f}) boosting score {score:.2f} -> 0.81")
                 score = 0.81
 
-        return round(score, 4)
+        return max(0.0, min(1.0, round(score, 4)))
 
     async def _check_mtf_trend(self, symbol: str) -> bool:
         """Fetches 4h/1d candles to confirm macro direction."""
