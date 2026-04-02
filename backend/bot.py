@@ -29,10 +29,9 @@ class CryptoBot:
         self.profile_type = profile
         self.config_file = f"config_{profile}.json"
         
-        # 1. Database & Notifier
-        self.db = BotDatabase()
-        self.notifier = TelegramNotifier()
-        self.ai_semaphore = asyncio.Semaphore(1) # 🛡️ GLOBAL AI GATEKEEPER
+        # 🛡️ GLOBAL AI CONCURRENCY (v31.12 UNLOCKED)
+        # Increased to 5 for maximum speed after payment fix.
+        self.ai_semaphore = asyncio.Semaphore(5)
         
         # 2. Config Loading
         self.config = self._load_config()
@@ -604,7 +603,7 @@ class CryptoBot:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     self.news_radar.http_client = client
                     await self.news_radar.poll_news()
-                await asyncio.sleep(1200) # Poll every 20 mins (Save AI Quota)
+                await asyncio.sleep(300) # Poll every 5 mins (Maximum Alpha)
             except Exception as e:
                 logger.error(f"❌ News Radar Loop Error: {e}")
                 await asyncio.sleep(60)

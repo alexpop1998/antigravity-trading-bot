@@ -12,9 +12,9 @@ logger.setLevel(logging.INFO)
 class LLMAnalyst:
     def __init__(self, bot_instance):
         self.bot = bot_instance
+        # Gemini 2.5 Flash (v30.28 Stable)
         self.api_key = os.getenv("LLM_API_KEY")
-        
-        model_name = "gemini-1.5-flash"
+        model_name = "gemini-2.5-flash"
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         # Using Centralized AI Gatekeeper (v31.07)
         self.semaphore = self.bot.ai_semaphore
@@ -57,9 +57,9 @@ class LLMAnalyst:
             return True, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING"
 
         try:
-            # 🛡️ Anti-429 Burst Protection (v31.07)
-            # Sequential delay to keep us under the ~5 RPM free limit.
-            await asyncio.sleep(12)
+            # 🚀 FULL SPEED (v31.12)
+            # No delays after payment fix.
+            await asyncio.sleep(0.5) 
             
             # 1. Recupera la memoria statistica (ultime 24 ore)
             stats = self.bot.db.get_ai_performance_stats(hours=24)
