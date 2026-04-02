@@ -102,7 +102,13 @@ class CryptoBot:
             await self.gateway.exchange.load_markets()
             await self.sync_state()
             
-            # Start Loops
+            if self.initial_wallet_balance <= 0:
+                await self.sync_state()
+                self.initial_wallet_balance = self.latest_account_data['equity']
+                self.db.save_state("initial_balance", self.initial_wallet_balance)
+                logger.info(f"💰 [BOOT] Initial Balance synced: ${self.initial_wallet_balance:.2f}")
+
+            # Start Loops (Moved after balance sync)
             asyncio.create_task(self.run_deliberative_analysis_loop())
             asyncio.create_task(self.run_reactive_safety_loop())
             asyncio.create_task(self.run_zombie_sync_loop())
@@ -112,11 +118,15 @@ class CryptoBot:
             asyncio.create_task(self.run_automated_report_loop())
             
             self.initialized = True
-            if self.initial_wallet_balance == 0:
-                self.initial_wallet_balance = self.latest_account_data['equity']
-                self.db.save_state("initial_balance", self.initial_wallet_balance)
+            # 🛡️ Notification Spam Guard (v31.02)
+            last_boot = self.db.load_state("last_boot_time") or 0
+            if (time.time() - float(last_boot)) > 300: # 5 min cooldown
+                await self.notifier.send_message(f"🚀 *SISTEMA ATTIVO*\nProfilo: {self.profile_type.upper()}\nSoglia: {self.consensus_threshold}")
+                self.db.save_state("last_boot_time", time.time())
+            else:
+                logger.info("⏭️ [SILENT BOOT] Suppressing start message (cooldown active).")
 
-            await self.notifier.send_message(f"🚀 *SISTEMA ATTIVO*\nProfilo: {self.profile_type.upper()}\nSoglia: {self.consensus_threshold}")
+            self.initialized = True
         except Exception as e:
             logger.error(f"Initialization Failed: {e}")
 
@@ -589,7 +599,8 @@ class CryptoBot:
                 # Initial wait to not spam on restart
                 await asyncio.sleep(3600) 
                 logger.info("📊 [SCHEDULED] Initiating AI Performance Audit...")
-                history = self.db.load_state("trade_history") or [] # Simplified fetching
+                # Use robust history fetch
+                history = self.db.get_trades(limit=50) 
                 if history:
                     await self.strategy.analyst.perform_self_audit(history)
                 await asyncio.sleep(82800) # Total 24h

@@ -44,7 +44,12 @@ class BotReporter:
         initial_balance, raw_trades, active_positions = self._get_metric_data()
         
         # Calculate Metrics
-        closed_trades = [t for t in raw_trades if t.get('pnl') is not None and abs(float(t['pnl'])) > 0]
+        closed_trades = [t for t in raw_trades if t.get('pnl') is not None and abs(float(t['pnl'])) > 0.0001]
+        
+        if not closed_trades:
+            # Fallback for new accounts
+            return initial_balance, 0.0, 0.0, 0.0, []
+
         total_pnl = sum(float(t['pnl']) for t in closed_trades)
         roi = (total_pnl / initial_balance) * 100 if initial_balance > 0 else 0
         win_rate = (len([t for t in closed_trades if float(t['pnl']) > 0]) / len(closed_trades) * 100) if closed_trades else 0

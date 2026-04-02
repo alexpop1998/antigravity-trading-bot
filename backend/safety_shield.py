@@ -77,7 +77,10 @@ class SafetyShield:
         [V15.2 HOLISTIC PANIC SHIELD]
         Checks if the global drawdown exceeds the panic threshold.
         """
-        if initial_balance <= 0: return False
+        # 🛡️ Level 0: Integrity Check
+        if initial_balance <= 0: 
+            logger.info("🛡️ [PANIC SHIELD] Waiting for initial balance sync...")
+            return False
         
         drawdown = (equity - initial_balance) / initial_balance
         panic_threshold = -float(self.bot.config.get("trading_parameters", {}).get("panic_drawdown_threshold", 0.15))
