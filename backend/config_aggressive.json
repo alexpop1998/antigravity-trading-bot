@@ -19,7 +19,7 @@
         "usdt_per_trade": 0.0,
         "percent_per_trade": 15.0,
         "max_margin_pct": 35.0,
-        "consensus_threshold": 1.5,
+        "consensus_threshold": 0.85,
         "gemini_min_confidence": 0.65,
         "adx_threshold": 20,
         "ema_trend_filter": false,
