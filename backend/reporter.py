@@ -41,28 +41,29 @@ class BotReporter:
             return 100.0, [], []
 
     def generate_html(self):
-        initial_balance, raw_trades, active_positions = self._get_metric_data()
-        
-        # Calculate Metrics
-        closed_trades = [t for t in raw_trades if t.get('pnl') is not None and abs(float(t['pnl'])) > 0.0001]
-        
-        if not closed_trades:
-            # Fallback for new accounts
-            return initial_balance, 0.0, 0.0, 0.0, []
-
-        total_pnl = sum(float(t['pnl']) for t in closed_trades)
-        roi = (total_pnl / initial_balance) * 100 if initial_balance > 0 else 0
-        win_rate = (len([t for t in closed_trades if float(t['pnl']) > 0]) / len(closed_trades) * 100) if closed_trades else 0
-        
-        # Prepare Chart Data
-        cum_pnl = 0
-        chart_points = []
-        for t in closed_trades:
-            cum_pnl += float(t['pnl'])
-            chart_points.append({
-                "x": t['timestamp'].split(' ')[1] if ' ' in t['timestamp'] else t['timestamp'],
-                "y": round(cum_pnl, 2)
-            })
+        try:
+            initial_balance, raw_trades, active_positions = self._get_metric_data()
+            
+            # Calculate Metrics
+            closed_trades = [t for t in raw_trades if t.get('pnl') is not None and abs(float(t['pnl'])) > 0.0001]
+            
+            total_pnl = sum(float(t['pnl']) for t in closed_trades) if closed_trades else 0.0
+            roi = (total_pnl / initial_balance) * 100 if initial_balance > 0 else 0
+            win_rate = (len([t for t in closed_trades if float(t['pnl']) > 0]) / len(closed_trades) * 100) if closed_trades else 0
+            
+            # Prepare Chart Data
+            cum_pnl = 0
+            chart_points = []
+            for t in closed_trades:
+                cum_pnl += float(t['pnl'])
+                chart_points.append({
+                    "x": t['timestamp'].split(' ')[1] if ' ' in t['timestamp'] else t['timestamp'],
+                    "y": round(cum_pnl, 2)
+                })
+            
+            # If no trades, add a 0 point
+            if not chart_points:
+                chart_points.append({"x": "N/A", "y": 0.0})
 
         html_template = f"""
 <!DOCTYPE html>

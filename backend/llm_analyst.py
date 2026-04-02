@@ -117,20 +117,36 @@ class LLMAnalyst:
             # --- DYNAMIC TEMPERATURE (v17.0) ---
             active_temp = float(ai_prompts.get("llm_temperature", 0.5))
             
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": active_temp,
-                    "responseMimeType": "application/json"
-                }
-            }
+            # Check for API key presence
+            if not self.api_key:
+                logger.error("❌ LLM_API_KEY NOT FOUND. Defaulting to Neutral.")
+                return False, 0.0, self.bot.leverage, 0.0, 0.0, None, "API_KEY_MISSING"
 
             async with self.semaphore:
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(self.gemini_url, json=payload)
-                    resp.raise_for_status()
-                    raw = resp.json()
-                    text = raw["candidates"][0]["content"]["parts"][0]["text"]
+                    response = await client.post(
+                        self.gemini_url,
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {
+                                "temperature": active_temp,
+                                "responseMimeType": "application/json"
+                            }
+                        }
+                    )
+                    
+                    if response.status_code == 429:
+                        logger.warning(f"⚠️ [RATE LIMIT] Gemini API 429. Skipping AI review for {symbol}.")
+                        # v29 fallback: Approve if Technicals are very strong (>0.6), otherwise neutral
+                        return False, 0.5, self.bot.leverage, 0.0, 0.0, None, "RATE_LIMIT_429"
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    # Log response for debugging non-standard outputs
+                    # logger.debug(f"AI Response for {symbol}: {data}")
+
+                    text = data['candidates'][0]['content']['parts'][0]['text']
                     response_json = json.loads(text)
             
             # Verdetto basato sulla soglia dinamica della configurazione

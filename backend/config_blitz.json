@@ -81,8 +81,8 @@
         "be_trigger_pct": 0.005
     },
     "strategic_params": {
-        "llm_cooldown_seconds": 0,
-        "llm_cooldown_bypass": true,
+        "llm_cooldown_seconds": 60,
+        "llm_cooldown_bypass": false,
         "startup_shield_seconds": 0,
         "news_shield_seconds": 0,
         "min_notional_usdt": 5.0,
