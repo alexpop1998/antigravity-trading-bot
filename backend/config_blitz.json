@@ -60,7 +60,7 @@
         "rsi_period": 14,
         "leverage": 10,
         "usdt_per_trade": 0.0,
-        "percent_per_trade": 55.0,
+        "percent_per_trade": 25.0,
         "max_margin_pct": 52.0,
         "consensus_threshold": 0.70,
         "gemini_min_confidence": 0.6,
