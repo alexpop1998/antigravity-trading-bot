@@ -48,10 +48,6 @@ async def lifespan(app: FastAPI):
     """[v30.5] Modern Lifecycle Management."""
     global trading_bot, http_client, news_radar, whale_tracker, social_scraper, liquidation_hunter, macro_calendar, rl_tuner, dex_sniper, listing_radar
     
-    try:
-        logger.info("🏁 [LIFESPAN] Initializing Trading Bot Cluster...")
-        http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
-        
     async def initialize_all():
         global trading_bot, news_radar, whale_tracker, social_scraper, liquidation_hunter, macro_calendar, rl_tuner, dex_sniper, listing_radar
         try:
@@ -87,8 +83,11 @@ async def lifespan(app: FastAPI):
             logger.error(f"❌ [BACKGROUND INIT FAILURE] {e}")
             traceback.print_exc()
 
-    asyncio.create_task(initialize_all())
-    yield
+    try:
+        logger.info("🏁 [LIFESPAN] Initializing Trading Bot Cluster...")
+        http_client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        asyncio.create_task(initialize_all())
+        yield
     except Exception as e:
         logger.error(f"❌ [LIFESPAN FAILURE] {e}")
         traceback.print_exc()
