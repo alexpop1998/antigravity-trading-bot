@@ -65,6 +65,10 @@ class BotReporter:
             if not chart_points:
                 chart_points.append({"x": "N/A", "y": 0.0})
 
+        except Exception as e:
+            logger.error(f"Error in metrics calculation: {e}")
+            initial_balance, total_pnl, roi, win_rate, chart_points, active_positions = 100.0, 0.0, 0.0, 0.0, [{"x": "N/A", "y": 0.0}], []
+
         html_template = f"""
 <!DOCTYPE html>
 <html lang="it">
