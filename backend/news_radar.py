@@ -27,7 +27,9 @@ class NewsRadar:
         
         # Gemini 2.5 Flash (v30.28 Stable)
         self.api_key = os.getenv("LLM_API_KEY")
-        model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
+        # FORCED STABLE MODEL (v31.11)
+        model_name = "gemini-1.5-flash"
+        # Build URL dynamically from env so model can be changed without code edits
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         
         # Using Centralized AI Gatekeeper (v31.07)
@@ -37,8 +39,8 @@ class NewsRadar:
         if not self.api_key: return
 
         async with self.semaphore:
-            # 🛡️ Anti-429 Burst Protection (v31.07)
-            await asyncio.sleep(12)
+            # 🛡️ Anti-429 Burst Protection (v31.11 Ultra)
+            await asyncio.sleep(30)
             
             prompt = f"""
             Analyze this crypto news for immediate market impact (ALPHA). 

@@ -13,10 +13,9 @@ class LLMAnalyst:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.api_key = os.getenv("LLM_API_KEY")
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
         
-        model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
-        # Build URL dynamically from env so model can be changed without code edits
+        # FORCED STABLE MODEL (v31.11)
+        model_name = "gemini-1.5-flash"
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         # Using Centralized AI Gatekeeper (v31.07)
         self.semaphore = self.bot.ai_semaphore
