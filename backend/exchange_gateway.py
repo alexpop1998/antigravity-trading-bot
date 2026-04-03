@@ -117,14 +117,23 @@ class ExchangeGateway:
             logger.error(f"❌ Failed to fetch balance: {e}")
             return {'equity': 0.0, 'raw': {}}
 
-    async def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, params: Dict = None):
+    async def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, params: Dict = None, is_close: bool = False):
         """Standardized order placement with error handling."""
         try:
             symbol = self.normalize_symbol(symbol)
+            params = params or {}
+            
+            # 🛡️ BITGET HEDGED-MODE CLOSURE FIX (v31.17)
+            if is_close and self.exchange_name == "bitget":
+                params['reduceOnly'] = True
+                # If we are selling to close, the holdSide must be 'long'
+                params['holdSide'] = 'long' if side.lower() == 'sell' else 'short'
+                logger.info(f"🛡️ [GATEWAY] Applying Close-Only params for {symbol} | Side: {side}")
+
             if price:
-                return await self.exchange.create_order(symbol, 'limit', side, amount, price, params or {})
+                return await self.exchange.create_order(symbol, 'limit', side, amount, price, params)
             else:
-                return await self.exchange.create_order(symbol, 'market', side, amount, None, params or {})
+                return await self.exchange.create_order(symbol, 'market', side, amount, None, params)
         except Exception as e:
             logger.error(f"❌ Order failed for {symbol}: {e}")
             raise e
@@ -135,7 +144,7 @@ class ExchangeGateway:
         for p in positions:
             if p['symbol'] == self.normalize_symbol(symbol):
                 side = 'sell' if p['side'] == 'long' else 'buy'
-                await self.place_order(symbol, side, p['contracts'])
+                await self.place_order(symbol, side, p['contracts'], is_close=True)
                 logger.warning(f"🛡️ [GATEWAY] Emergency closed {symbol}")
 
     async def set_leverage(self, symbol: str, leverage: int, params: Optional[Dict] = None):
