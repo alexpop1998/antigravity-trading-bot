@@ -90,6 +90,7 @@ class CryptoBot:
         # Shared across NewsRadar and LLMAnalyst to avoid 429 collisions.
         self.ai_semaphore = asyncio.Semaphore(1)
         self.semaphore = self.ai_semaphore
+        self.order_lock = asyncio.Lock()
         self.initialized = False
         self.start_time = time.time()
 
@@ -217,7 +218,7 @@ class CryptoBot:
                         
                         if weakest_symbol and (new_score - weakest_score) >= 0.15:
                             logger.critical(f"🔄 [ATOMIC SWAP] Replacing {weakest_symbol} (Score: {weakest_score}) with {symbol} (Score: {new_score})")
-                            await self.close_position(weakest_symbol, self.trade_levels.get(weakest_symbol), "SWAP_PRIORITY")
+                            await self._close_position_internal(weakest_symbol, self.trade_levels.get(weakest_symbol), "SWAP_PRIORITY")
                             await asyncio.sleep(1)
                         else:
                             logger.info(f"⏭️ [LIMIT] Max positions ({len(active_positions)}) and no suitable swap candidate.")
@@ -292,14 +293,18 @@ class CryptoBot:
                 logger.error(f"❌ [EXECUTION FAILED] {e}")
 
     async def close_position(self, symbol: str, trade: Dict[str, Any], reason: str = "EXIT"):
-        """Closes 100% of the position."""
+        """Closes 100% of the position with lock protection."""
+        async with self.order_lock:
+            await self._close_position_internal(symbol, trade, reason)
+
+    async def _close_position_internal(self, symbol: str, trade: Dict[str, Any], reason: str = "EXIT"):
+        """Internal logic for closure (no lock, for re-entrant calls)."""
         try:
             # Atomic Guard for closure
             await self.gateway.close_all_for_symbol(symbol)
             
             # Post-Mortem Learning
             if trade:
-                # Calculate PnL locally for AI review
                 curr_price = self.latest_data.get(symbol, {}).get('price', trade.get('entry_price', 0))
                 pnl = (curr_price - trade['entry_price']) / trade['entry_price'] if trade['side'] == 'long' else (trade['entry_price'] - curr_price) / trade['entry_price']
                 asyncio.create_task(self.strategy.analyst.perform_post_mortem(symbol, trade, pnl))
@@ -314,24 +319,17 @@ class CryptoBot:
         """
         [V29 ATOMIC PIVOT]
         Closes current position and immediately opens in opposite direction.
-        Used on violent trend-flips suggested by AI.
         """
-        try:
-            logger.warning(f"🔄 [PIVOT] Reversing {symbol} to {new_side.upper()}...")
-            # 1. Close current
-            await self.gateway.close_all_for_symbol(symbol)
-            
-            # 2. Reset local tracking but keep in memory for immediate re-entry
-            self.active_positions[symbol] = None
-            self.trade_levels[symbol] = None
-            
-            # 3. Trigger immediate new analysis to fetch entry levels
-            # handle_signal will pick it up on the next deliberative loop or we trigger it now
-            msg = f"🔄 *PIVOT EXECUTED*\n🪙 {symbol} | Direzione invertita a {new_side.upper()}"
-            await self.notifier.send_message(msg)
-            
-        except Exception as e:
-            logger.error(f"❌ [PIVOT FAILED] {e}")
+        async with self.order_lock:
+            try:
+                logger.warning(f"🔄 [PIVOT] Reversing {symbol} to {new_side.upper()}...")
+                # 1. Close current using internal logic (already locked)
+                await self._close_position_internal(symbol, trade, "PIVOT_EXIT")
+                
+                # 2. Trigger immediate new analysis or wait for next loop
+                # The Deliberative loop will pick up the new direction.
+            except Exception as e:
+                logger.error(f"❌ [PIVOT FAILED] {e}")
 
     async def partial_close_position(self, symbol: str, trade: Dict[str, Any], percent: float = 0.5, reason: str = "PARTIAL_EXIT"):
         """Closes a percentage of the position (e.g. 50% for TP1)."""
