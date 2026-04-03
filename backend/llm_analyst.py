@@ -56,6 +56,11 @@ class LLMAnalyst:
             logger.warning("LLM_API_KEY non configurata. Decisione automatica: APPROVE.")
             return True, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING"
 
+        # --- V32.4 COST AUDIT ---
+        if not hasattr(self, 'session_calls'): self.session_calls = 0
+        self.session_calls += 1
+        start_time = time.time()
+
         try:
             # 🚀 FULL SPEED (v31.12)
             # No delays after payment fix.

@@ -146,31 +146,35 @@ class SafetyShield:
 
         pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
 
-        # 🛡️ Level 0.2: Dynamic Trailing Stop & SL Tightening (v32.0)
+        # 🛡️ Level 0.2: Algorithmic Trailing Stop (v32.4 - High Frequency / Zero Cost)
+        # Runs every cycle to trail the price peaks
         trailing_config = self.bot.config.get("trailing_params", {})
         activation_pnl = float(trailing_config.get("activation_pnl_pct", 1.5)) / 100.0
         
         if pnl_pct >= activation_pnl and current_atr > 0:
             atr_multiplier = float(trailing_config.get("base_atr_multiplier", 3.0))
+            # Use the LATEST tightness decided by Gemini
             if trade_info.get('sl_tightness') == 'TIGHTEN':
                 atr_multiplier *= float(trailing_config.get("tighten_ratio", 0.7))
                 
             dist = current_atr * atr_multiplier
             new_trailing_sl = self.peak_prices[symbol] - dist if is_long else self.peak_prices[symbol] + dist
             
+            # Move SL ONLY if it's better than current
             if (is_long and new_trailing_sl > sl) or (not is_long and new_trailing_sl < sl):
                 sl = new_trailing_sl
-                logger.info(f"📈 [TRAILING] {symbol} moved SL to {sl:.4f} (Peak: {self.peak_prices[symbol]:.4f})")
+                logger.info(f"📈 [TRAILING] {symbol} moved SL (Algorithmic) to {sl:.4f}")
                 trade_info['sl'] = sl
 
         # 🛡️ Level 0.3: Adaptive Stop Loss (Tightening)
+        # Runs every cycle based on Gemini's last decision
         if pnl_pct < 0 and trade_info.get('sl_tightness') == 'TIGHTEN':
             original_sl = float(trade_info.get('original_sl', sl))
             dist_to_entry = abs(entry_price - original_sl)
             new_sl = entry_price - (dist_to_entry * 0.6) if is_long else entry_price + (dist_to_entry * 0.6)
             if (is_long and new_sl > sl) or (not is_long and new_sl < sl):
                 sl = new_sl
-                logger.warning(f"🛡️ [ADAPTIVE SL] Proactively tightening {symbol} Stop to {sl:.4f} due to weak momentum.")
+                logger.warning(f"🛡️ [ADAPTIVE SL] Proactively tightening {symbol} Stop to {sl:.4f}")
                 trade_info['sl'] = sl
 
         if (is_long and current_price <= sl) or (not is_long and current_price >= sl):
