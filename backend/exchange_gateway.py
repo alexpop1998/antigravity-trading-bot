@@ -98,10 +98,14 @@ class ExchangeGateway:
                 # Bitget Swap usually returns equity in 'info' as a dict or inside a list
                 info = balance.get('info', {})
                 if isinstance(info, list):
-                    # Sum up equity if it's a list (unlikely for account equity, usually for assets)
-                    equity = sum(float(i.get('equity', 0)) for i in info if isinstance(i, dict))
+                    # Bitget Swap returns a list of dictionaries per margin coin
+                    for item in info:
+                        if isinstance(item, dict):
+                            # Try multiple possible equity fields used by Bitget
+                            val = item.get('accountEquity') or item.get('usdtEquity') or item.get('equity', 0)
+                            equity += float(val)
                 else:
-                    equity = float(info.get('equity', 0) if isinstance(info, dict) else 0)
+                    equity = float(info.get('accountEquity') or info.get('usdtEquity') or info.get('equity', 0))
             else:
                 equity = float(balance.get('total', {}).get('USDT', 0))
                 
