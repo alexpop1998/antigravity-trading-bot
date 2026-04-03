@@ -205,10 +205,11 @@ class SafetyShield:
         tp2 = float(trade_info.get('tp2', 0))
         
         if (trade_info.get('tp1_hit', False) and tp2 > 0) or is_trailing_profile:
+            # High-Frequency AI Monitor (v32.3 - Global 60s check)
             last_ai_check = trade_info.get('last_tp2_check', 0)
-            adaptive_interval = 300 if (pnl_pct > 0.015 or pnl_pct < -0.015) else 900
             
-            if (time.time() - last_ai_check) > adaptive_interval:
+            # Constant 60s interval for maximum safety on active capital
+            if (time.time() - last_ai_check) > 60:
                 trade_info['last_tp2_check'] = time.time()
                 action, conf, reason = await self.bot.strategy.analyst.evaluate_active_position(
                     symbol, side, {'rsi': 0, 'macd_hist': 0}, pnl_pct*100
