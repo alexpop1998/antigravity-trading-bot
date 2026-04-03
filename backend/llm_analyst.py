@@ -63,15 +63,14 @@ class LLMAnalyst:
 
         try:
             # 🚀 FULL SPEED (v31.12)
-            # No delays after payment fix.
-            await asyncio.sleep(0.5) 
+            await asyncio.sleep(0.1) 
             
             # 1. Recupera la memoria statistica (ultime 24 ore)
             stats = self.bot.db.get_ai_performance_stats(hours=24)
             memory_context = "\nPERFORMANCE RECENTE (STATISTICHE AGGREGATE - 24H):\n"
             if stats:
-                for signal, data in stats.items():
-                    memory_context += f"- Segnale {signal}: Accuracy {data['accuracy']:.1f}%, Avg PnL {data['avg_pnl']:.4f} (Sample size: {data['sample_size']})\n"
+                for signal_key, data in stats.items():
+                    memory_context += f"- Segnale {signal_key}: Accuracy {data['accuracy']:.1f}%, Avg PnL {data['avg_pnl']:.4f}\n"
             else:
                 memory_context += "Nessun trade registrato nelle ultime 24 ore.\n"
 
@@ -83,30 +82,19 @@ class LLMAnalyst:
             # --- ANTI-BIAS NOTE (Dynamic) ---
             bias_note = ""
             if profile_type in ["aggressive", "extreme", "blitz"]:
-                bias_note = "❗ NOTA CRITICA (ANTI-BIAS): Ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto. Non farti frenare dalle perdite precedenti; il tuo compito è catturare il prossimo movimento."
+                bias_note = "❗ NOTA CRITICA (ANTI-BIAS): Ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto."
             
             prompt = f"""
-            Sei l'Analista Strategico di un Hedge Fund AI. Devi decidere se approvare un'operazione di trading ad alta frequenza.
-            
+            Sei l'Analista Strategico di un Hedge Fund AI.
             {active_profile_prompt}
-
-            OPERAZIONE PROPOSTA:
-            Asset: {symbol} | Direzione: {side.upper()} | Tipo Segnale: {signal_type}
-            
-            CRITICAL METRICS:
-            RSI: {indicators.get('rsi', 'N/D')}, MACD_Hist: {indicators.get('macd_hist', 'N/D')}, 
-            Vol_Change: {indicators.get('volume_change', 'N/D')}, ATR_Volatility: {indicators.get('atr', 'N/D')},
-            Price_vs_EMA200: {indicators.get('price_vs_ema200', 'N/D')}
-            
-            --- MACRO & MEMORY ---
-            Trend Context: {mtf_context}
-            News: {news_context}
-            Past Performance: {memory_context}
-            Audit Lessons: {self.lessons_learned}
-            
+            Asset: {symbol} | Direzione: {side.upper()} | Tipo: {signal_type}
+            Metrics: {indicators}
+            Macro: {mtf_context} | News: {news_context}
+            Memory: {memory_context}
+            Audit: {self.lessons_learned}
+            ---
             {bias_note}
-            
-            RISPONDI ESATTAMENTE IN QUESTO FORMATO JSON:
+            Rispondi in JSON:
             {{
                 "macro_analysis": "breve sintesi macro",
                 "technical_analysis": "analisi degli indicatori",
