@@ -118,6 +118,14 @@ class SafetyShield:
         sl = float(trade_info.get('sl', 0))
         tp1 = float(trade_info.get('tp1', 0))
         
+        # 🛡️ Legacy Adoption (v32.1)
+        # Ensure older trades from DB have the required keys for v32.0 logic
+        if 'original_sl' not in trade_info:
+            trade_info['original_sl'] = sl
+            logger.info(f"💾 [ADOPTION] Symbol {symbol} adopted with original SL {sl}")
+        if 'sl_tightness' not in trade_info:
+            trade_info['sl_tightness'] = "RUN"
+        
         # 🛡️ Update Price Velocity History
         self._update_price_history(symbol, current_price)
         
