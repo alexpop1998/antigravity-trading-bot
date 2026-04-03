@@ -274,6 +274,10 @@ class CryptoBot:
                 sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
                 tp_pct = self.config.get("trading_parameters", {}).get("take_profit_pct", 0.04)
                 
+                # v32.0: For Blitz and Aggressive, we favor Trailing Stop over Fixed TP
+                use_trailing = self.profile_type in ['blitz', 'aggressive']
+                initial_sl = price * (1 - sl_pct if is_long else 1 + sl_pct)
+                
                 self.trade_levels[symbol] = {
                     "symbol": symbol,
                     "side": 'long' if is_long else 'short',
@@ -281,11 +285,13 @@ class CryptoBot:
                     "entry_score": analysis.get('score', 0),
                     "opened_at": time.time(),
                     "amount": amount,
-                    "sl": price * (1 - sl_pct if is_long else 1 + sl_pct),
-                    "tp1": price * (1 + tp_pct/2 if is_long else 1 - tp_pct/2),
-                    "tp2": price * (1 + tp_pct if is_long else 1 - tp_pct),
+                    "sl": initial_sl,
+                    "original_sl": initial_sl, # Persist for adaptive tightening
+                    "tp1": 0 if use_trailing else price * (1 + tp_pct/2 if is_long else 1 - tp_pct/2),
+                    "tp2": 0 if use_trailing else price * (1 + tp_pct if is_long else 1 - tp_pct),
                     "tp1_hit": False,
-                    "status": "RUNNING"
+                    "status": "RUNNING",
+                    "sl_tightness": "RUN"
                 }
                 self.db.save_state("trade_levels", self.trade_levels)
                 await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}\nLev: {leverage}x | Size: {amount}")

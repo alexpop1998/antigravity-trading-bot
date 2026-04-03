@@ -246,12 +246,13 @@ class LLMAnalyst:
             RSI: {indicators.get('rsi', 'N/D')}, MACD_Hist: {indicators.get('macd_hist', 'N/D')}, Trend: {indicators.get('trend_adx', 'N/D')}
             
             MISSIONE:
-            1. HOLD: Mantieni tutto invariato. Punta al TP2.
-            2. SCALE_OUT: Chiudi il 50% (TP1) se vedi incertezza o esaurimento.
-            3. PIVOT: Chiudi subito tutto e gira la posizione (solo su cambio trend violento).
-            4. CLOSE: Chiudi tutto ora.
+            1. RUN: Momentum forte, lascia correre verso TP2/DTS.
+            2. TIGHTEN: Trend in indebolimento, stringi lo Stop Loss (Proactive SL/Trailing).
+            3. SCALE_OUT: Chiudi il 50% se vedi incertezza o esaurimento. (v31.x)
+            4. PIVOT: Chiudi subito tutto e gira la posizione (solo su cambio trend violento).
+            5. CLOSE: Chiudi tutto ora. Momentum finito.
             
-            RISPONDI JSON: {{ "technical_status": "sintesi", "action": "HOLD/SCALE_OUT/PIVOT/CLOSE", "confidence": 0-1, "reasoning": "max 15 parole" }}
+            RISPONDI JSON: {{ "technical_status": "sintesi", "action": "RUN/TIGHTEN/SCALE_OUT/PIVOT/CLOSE", "confidence": 0-1, "reasoning": "max 15 parole" }}
             """
 
             payload = {
@@ -270,12 +271,12 @@ class LLMAnalyst:
                     text = raw["candidates"][0]["content"]["parts"][0]["text"]
                     result = json.loads(text)
             
-            action = result.get("action", "HOLD").upper()
+            action = result.get("action", "RUN").upper()
             confidence = float(result.get("confidence", 0.0))
             reasoning = result.get("reasoning", "Monitoraggio standard.")
             
             if confidence < 0.65: # Threshold for active monitoring
-                return "HOLD", confidence, "Low confidence"
+                return "RUN", confidence, "Low confidence"
                 
             return action, confidence, reasoning
 
