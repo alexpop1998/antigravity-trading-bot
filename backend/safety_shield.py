@@ -240,17 +240,17 @@ class SafetyShield:
             
             if (time.time() - last_ai_check) > adaptive_interval:
                 trade_info['last_tp2_check'] = time.time()
-                 action, conf, reason = await self.bot.strategy.analyst.evaluate_active_position(
-                     symbol, side, {'rsi': 0, 'macd_hist': 0}, pnl_pct*100
-                 )
-                 if action == "TIGHTEN":
-                     trade_info['sl_tightness'] = 'TIGHTEN'
-                     logger.warning(f"🧠 [AI TIGHTEN] Gemini suggests tightening for {symbol}. Reason: {reason}")
-                 elif action in ["CLOSE", "PIVOT"]:
-                     logger.warning(f"🧠 [AI EXIT] Gemini suggests {action} for {symbol}. Reason: {reason}")
-                     return True, f"AI_{action}"
-                 else:
-                     trade_info['sl_tightness'] = 'RUN'
+                action, conf, reason = await self.bot.strategy.analyst.evaluate_active_position(
+                    symbol, side, {'rsi': 0, 'macd_hist': 0}, pnl_pct*100
+                )
+                if action == "TIGHTEN":
+                    trade_info['sl_tightness'] = 'TIGHTEN'
+                    logger.warning(f"🧠 [AI TIGHTEN] Gemini suggests tightening for {symbol}. Reason: {reason}")
+                elif action in ["CLOSE", "PIVOT"]:
+                    logger.warning(f"🧠 [AI EXIT] Gemini suggests {action} for {symbol}. Reason: {reason}")
+                    return True, f"AI_{action}"
+                else:
+                    trade_info['sl_tightness'] = 'RUN'
 
         # ⏳ Level 4: Stagnation Exit (v30.60)
         # If position is flat for too long (+/- 0.5% PnL after 4 hours)
