@@ -88,7 +88,7 @@ class CryptoBot:
         self.initial_wallet_balance = self.db.load_state("initial_balance") or 0.0
         # 🛡️ GLOBAL AI CONCURRENCY CONTROL (v31.07)
         # Shared across NewsRadar and LLMAnalyst to avoid 429 collisions.
-        self.ai_semaphore = asyncio.Semaphore(1)
+        self.ai_semaphore = asyncio.Semaphore(5)
         self.semaphore = self.ai_semaphore
         self.order_lock = asyncio.Lock()
         self.initialized = False
