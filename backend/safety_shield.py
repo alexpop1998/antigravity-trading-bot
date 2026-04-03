@@ -230,10 +230,16 @@ class SafetyShield:
         is_trailing_profile = self.bot.profile_type in ['blitz', 'aggressive']
         
         if (trade_info.get('tp1_hit', False) and tp2 > 0) or is_trailing_profile:
-            # Check for AI Exit or Tightening
+            # Check for AI Exit or Tightening (Adaptive Interval v32.2)
             last_ai_check = trade_info.get('last_tp2_check', 0)
-            if (time.time() - last_ai_check) > 300: # Every 5 mins
-                 trade_info['last_tp2_check'] = time.time()
+            
+            # Determine interval based on activity
+            # 15 min (900s) for stable, 5 min (300s) for active/danger zones
+            pnl_abs = abs(pnl_pct)
+            adaptive_interval = 300 if (pnl_pct > 0.015 or pnl_pct < -0.015) else 900
+            
+            if (time.time() - last_ai_check) > adaptive_interval:
+                trade_info['last_tp2_check'] = time.time()
                  action, conf, reason = await self.bot.strategy.analyst.evaluate_active_position(
                      symbol, side, {'rsi': 0, 'macd_hist': 0}, pnl_pct*100
                  )

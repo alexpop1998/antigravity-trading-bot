@@ -133,10 +133,11 @@ class StrategyEngine:
             side = snapshot['side']
             tech_score = snapshot['tech_score']
             
-            # --- V11.8 COOLDOWN CHECK ---
-            if self.analyst.is_in_cooldown(symbol):
-                logger.debug(f"⏭️ [COOLDOWN] {symbol} skipped LLM (too frequent)")
-                return {'symbol': symbol, 'score': 0.0, 'reason': 'ai_cooldown'}
+            # 2. Strategy Filter: Technical Pre-Filter (v32.2 Cost Saving)
+            # Only ask Gemini if technicals are somewhat promising (>= 0.5)
+            if tech_score < 0.5:
+                logger.debug(f"⏭️ [PRE-FILTER] {symbol} skipped LLM (Tech Score {tech_score:.2f} < 0.5)")
+                return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
 
             # 3. AI Deep Audit (The Costly Part)
             indicators = data if data else {}
