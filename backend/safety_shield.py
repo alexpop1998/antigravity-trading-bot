@@ -49,6 +49,8 @@ class SafetyShield:
         if len(history) < 15: return None # Need at least 2.5 min
 
         # v43.3.1 [GWEN OVERDRIVE] Accelerated Flash Detection for Blitz
+        ref_price = sum(history) / len(history)
+        change_pct = (current_price - ref_price) / ref_price
         threshold = 0.008 if self.bot.profile_type == 'blitz' else 0.012
         
         if change_pct > threshold:
