@@ -118,7 +118,14 @@ class StrategyEngine:
             side = snapshot['side']
             tech_score = snapshot['tech_score']
             
-            preaudit_threshold = 0.0 if self.bot.profile_type == 'blitz' else 0.45
+            # v43.3.1 [GWEN OVERDRIVE] Blitz Optimization
+            if self.bot.profile_type == 'blitz':
+                preaudit_threshold = 0.0
+                # Force MTF bias to 1 to bypass EMA200 filter in technical scoring
+                snapshot['trend_bias'] = 1 if side == 'buy' else -1
+            else:
+                preaudit_threshold = 0.45
+
             if tech_score < preaudit_threshold:
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
 
@@ -140,7 +147,7 @@ class StrategyEngine:
             
             if result[-1] == "RATE_LIMIT_429" and self.bot.profile_type == 'blitz':
                 if tech_score >= 0.75:
-                    return {'symbol': symbol, 'score': 0.75, 'side': side, 'reason': 'blitz_fallback', 'leverage': 15, 'reference_price': ref_price}
+                    return {'symbol': symbol, 'score': 0.90, 'side': side, 'reason': 'blitz_fallback', 'leverage': 25, 'reference_price': ref_price}
 
             approved = result[0] if result else False
             ai_confidence = result[1] if result and len(result) > 1 else 0.0
@@ -153,7 +160,16 @@ class StrategyEngine:
                 self.analyst.update_cooldown(symbol)
             
             aligned_tech_score = tech_score if side.lower() == final_side.lower() else 0.0
-            final_score = (0.6 * ai_confidence) + (0.4 * aligned_tech_score) if approved else 0.0
+            
+            # v43.3.1 [GWEN OVERDRIVE BOOST]
+            if self.bot.profile_type == 'blitz' and approved:
+                if ai_confidence > 0.85: 
+                    final_score = 0.99
+                    leverage = 50
+                else:
+                    final_score = max(0.81, (0.7 * ai_confidence) + (0.3 * aligned_tech_score))
+            else:
+                final_score = (0.6 * ai_confidence) + (0.4 * aligned_tech_score) if approved else 0.0
             
             res = {
                 'symbol': symbol,
@@ -165,6 +181,7 @@ class StrategyEngine:
                 'side': final_side,
                 'reference_price': ref_price
             }
+            # Boat v125. Boat
             self.ai_cache[symbol] = (res, time.time())
             return res
         except Exception as e:

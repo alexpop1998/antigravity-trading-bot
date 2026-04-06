@@ -34,21 +34,21 @@ class CryptoBot:
         
         self.config = self._load_config()
         self.profile_type = self.config.get("profile_type", "aggressive")
-        self.consensus_threshold = self.config.get("trading_parameters", {}).get("consensus_threshold", 0.55)
-        self.min_ai_confidence = self.config.get("trading_parameters", {}).get("min_ai_confidence", 0.55)
-        self.leverage = self.config.get("trading_parameters", {}).get("leverage", 10)
-        self.percent_per_trade = self.config.get("trading_parameters", {}).get("percent_per_trade", 25.0)
-        self.max_concurrent_positions = self.config.get("trading_parameters", {}).get("max_concurrent_positions", 3)
-        self.stop_loss_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
-        self.take_profit_pct = self.config.get("trading_parameters", {}).get("take_profit_pct", 0.04)
-        self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
-        
-        params = self.config.get("trading_parameters", {})
-        self.symbols = params.get("symbols", ["BTC/USDT:USDT"])
-        self.timeframe = params.get("timeframe", "15m")
         tp = self.config.get('trading_parameters', {})
         self.consensus_threshold = float(tp.get('consensus_threshold', 0.55))
+        self.min_ai_confidence = float(tp.get('min_ai_confidence', 0.55))
+        self.leverage = int(tp.get('leverage', 10))
+        self.percent_per_trade = float(tp.get('percent_per_trade', 25.0))
+        self.max_concurrent_positions = int(tp.get('max_concurrent_positions', 3))
+        self.stop_loss_pct = float(tp.get('stop_loss_pct', 0.02))
+        self.take_profit_pct = float(tp.get('take_profit_pct', 0.04))
+        self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
         
+        # v43.3.1 [GWEN OVERDRIVE] Force Sizing 50% for Blitz
+        if self.profile_type == 'blitz':
+            self.percent_per_trade = max(self.percent_per_trade, 50.0)
+            logger.warning("⚔️ [BLITZ OVERDRIVE] Sizing forced to 50% per trade.")
+
         exchange_name = self.config.get("strategic_params", {}).get("active_exchange", os.getenv("ACTIVE_EXCHANGE", "bitget"))
         self.active_exchange_name = exchange_name
         self.gateway = ExchangeGateway(exchange_name)
@@ -99,7 +99,7 @@ class CryptoBot:
             asyncio.create_task(self.run_automated_report_loop())
             
             self.initialized = True
-            await self.notifier.send_message(f"🚀 *SISTEMA ATTIVO v43.3*\nProfilo: {self.profile_type.upper()}")
+            await self.notifier.send_message(f"🚀 *SNIPER ACTIVATED v43.3.1*\nProfile: {self.profile_type.upper()}")
         except Exception as e:
             logger.error(f"Initialization Failed: {e}")
 
@@ -116,7 +116,6 @@ class CryptoBot:
 
     async def handle_signal(self, symbol, source, side, confidence=1.0, is_black_swan=False, metadata=None):
         try:
-            logger.warning(f"📡 [SIGNAL] Source: {source} | Symbol: {symbol} | Side: {side.upper()}")
             if symbol == "GLOBAL":
                 target_symbols = list(self.latest_data.keys())[:3]
                 for s in target_symbols:
@@ -128,8 +127,7 @@ class CryptoBot:
 
     async def run_targeted_analysis(self, symbol, side_hint=None):
         try:
-            ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '15m', limit=50)
-            if not ohlcv: return
+            ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
             df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
             self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
             tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
@@ -143,24 +141,22 @@ class CryptoBot:
         async with self.order_lock:
             try:
                 blacklist = self.config.get('blacklisted_symbols', [])
-                if symbol in blacklist:
-                    logger.warning(f"🚫 [BLACKLIST] Execution blocked for {symbol}.")
-                    return
+                if symbol in blacklist: return
 
                 new_score = analysis.get('score', 0)
                 ref_price = analysis.get('reference_price', 0)
                 curr_price = self.latest_data.get(symbol, {}).get('price', 0)
                 
-                # v43.3 [GWEN FIX] Slippage Guard (0.5%)
+                # v43.3 [GWEN FIX] Slippage Guard
                 if ref_price > 0 and curr_price > 0:
                     slippage = abs(curr_price - ref_price) / ref_price
                     if slippage > 0.005:
-                        logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled. Price moved {slippage:.2%} from analysis.")
+                        logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled (Slip: {slippage:.2%})")
                         return
 
-                logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Side: {side.upper()} | Score: {new_score}")
+                logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Score: {new_score}")
                 
-                # Atomic Swap logic
+                # Atomic Swap & Limit Check
                 active_positions = await self.gateway.fetch_positions_robustly()
                 if len(active_positions) >= self.max_concurrent_positions:
                     if new_score >= 0.90:
@@ -173,30 +169,28 @@ class CryptoBot:
                                 weakest_score = entry_score
                                 weakest_symbol = s
                         if weakest_symbol and (new_score - weakest_score) >= 0.15:
-                            logger.critical(f"🔄 [SWAP] Replacing {weakest_symbol} with {symbol}")
                             await self._close_position_internal(weakest_symbol, self.trade_levels.get(weakest_symbol), "SWAP_PRIORITY")
                             await asyncio.sleep(1)
-                        else:
-                            return
-                    else:
-                        return
+                        else: return
+                    else: return
 
-                # Reversal/Duplicate logic
+                # Conflict/Flip Logic
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
                 if existing:
                     existing_side = 'buy' if float(existing['positionAmt']) > 0 else 'sell'
                     if existing_side != side.lower() and analysis.get('confidence', 0) > 0.85:
                         await self.gateway.close_all_for_symbol(symbol)
                         await asyncio.sleep(1)
-                    else:
-                        return
+                    else: return
 
-                price = curr_price if curr_price > 0 else self.latest_data.get(symbol, {}).get('price', 0)
+                price = curr_price or self.latest_data.get(symbol, {}).get('price', 0)
                 amount = self._calculate_order_amount(symbol, price)
                 leverage = int(analysis.get('leverage', self.leverage))
                 
-                if self.profile_type in ['blitz', 'extreme']:
-                    leverage = max(leverage, 15)
+                # v43.3.1 [GWEN OVERDRIVE] Target 50x for Blitz
+                if self.profile_type == 'blitz':
+                    leverage = max(leverage, 25)
+                    if analysis.get('confidence', 0) > 0.85: leverage = 50
                 
                 await self.gateway.set_leverage(symbol, leverage)
                 await self.gateway.place_order(symbol, side.lower(), amount)
@@ -206,21 +200,14 @@ class CryptoBot:
                 initial_sl = price * (1 - sl_pct if is_long else 1 + sl_pct)
                 
                 self.trade_levels[symbol] = {
-                    "symbol": symbol,
-                    "side": 'long' if is_long else 'short',
-                    "entry_price": price,
-                    "entry_score": new_score,
-                    "opened_at": time.time(),
-                    "amount": amount,
-                    "sl": initial_sl,
-                    "original_sl": initial_sl,
-                    "tp1": 0,
-                    "tp1_hit": False,
-                    "status": "RUNNING",
-                    "sl_tightness": "RUN"
+                    "symbol": symbol, "side": 'long' if is_long else 'short',
+                    "entry_price": price, "entry_score": new_score,
+                    "leverage": leverage, "opened_at": time.time(), "amount": amount,
+                    "sl": initial_sl, "original_sl": initial_sl,
+                    "tp1": 0, "tp1_hit": False, "status": "RUNNING", "sl_tightness": "RUN"
                 }
                 self.db.save_state("trade_levels", self.trade_levels)
-                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}\nScore: {new_score:.2f}")
+                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}\nLeva: {leverage}x | Sizing: {self.percent_per_trade}%")
             except Exception as e:
                 logger.error(f"❌ [EXECUTION FAILED] {e}")
 
@@ -231,8 +218,7 @@ class CryptoBot:
     async def _close_position_internal(self, symbol: str, trade: Dict[str, Any], reason: str = "EXIT"):
         try:
             await self.gateway.close_all_for_symbol(symbol)
-            if symbol in self.trade_levels:
-                del self.trade_levels[symbol]
+            if symbol in self.trade_levels: del self.trade_levels[symbol]
             self.db.save_state("trade_levels", self.trade_levels)
             await self.notifier.send_message(f"🏁 *POSIZIONE CHIUSA*\n🪙 {symbol} | 🎯 {reason}")
         except Exception as e:
@@ -254,8 +240,7 @@ class CryptoBot:
             side = 'sell' if pos['side'] == 'long' else 'buy'
             await self.gateway.place_order(symbol, side, contracts_to_close)
             if trade:
-                trade['amount'] = float(pos['amount']) - contracts_to_close
-                if "TP1" in reason: trade['tp1_hit'] = True
+                trade['tp1_hit'] = True
                 self.trade_levels[symbol] = trade
                 self.db.save_state("trade_levels", self.trade_levels)
             await self.notifier.send_message(f"✂️ *CHIUSURA PARZIALE*\n🪙 {symbol} | 🎯 {reason}")
@@ -266,8 +251,7 @@ class CryptoBot:
         try:
             equity = self.latest_account_data.get('equity', 0)
             if equity < 5.1: return 0
-            risk_pct = self.config.get('trading_parameters', {}).get('percent_per_trade', 25.0) / 100.0
-            margin_usdt = max(5.1, equity * risk_pct)
+            margin_usdt = max(5.1, equity * (self.percent_per_trade / 100.0))
             notional = margin_usdt * self.leverage
             amount = notional / price
             return float(self.gateway.exchange.amount_to_precision(symbol, amount))
@@ -279,11 +263,9 @@ class CryptoBot:
                 if not self.initialized: await asyncio.sleep(10); continue
                 await self.sync_state()
                 
-                # v43.3 [GWEN FIX] Circuit Breaker check
                 if await self.shield.check_daily_circuit_breaker():
-                    logger.warning("🚨 [HALT] Analysis cycle skipped due to Daily Loss Limit.")
-                    await asyncio.sleep(600)
-                    continue
+                    logger.warning("🚨 [HALT] Daily Loss Limit reached.")
+                    await asyncio.sleep(600); continue
 
                 current_time = time.time()
                 if not self.dynamic_symbols or (current_time - self.last_pair_update) > self.pair_update_interval:
@@ -299,24 +281,24 @@ class CryptoBot:
                 for asset in assets:
                     symbol = asset['symbol']
                     try:
-                        ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '15m', limit=50)
-                        if not ohlcv: continue
+                        ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.15:
+                        if tech_snapshot['tech_score'] >= 0.10: # Gwen: lowered prefilter for Blitz
                             candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
                 
                 candidates.sort(key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)
-                # v43.3 [GWEN EXPANSION] Audit Top 3 candidates
                 for cand in candidates[:3]:
                     symbol = cand['symbol']
                     analysis = await self.strategy.analyze_opportunity(symbol, {'df': cand['df']}, cand['tech_snapshot'])
                     if analysis.get('score', 0) >= self.consensus_threshold:
                         await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                 
-                await asyncio.sleep(600)
+                # v43.3.1 [GWEN OVERDRIVE] Fast analysis for Blitz (5 min instead of 10 min)
+                wait_time = 300 if self.profile_type == 'blitz' else 600
+                await asyncio.sleep(wait_time)
             except Exception as e:
                 logger.error(f"Analysis Loop Error: {e}")
                 await asyncio.sleep(60)
@@ -331,15 +313,11 @@ class CryptoBot:
                 for symbol in active_symbols:
                     trade = self.trade_levels.get(symbol)
                     if not trade: continue
-                    ticker = tickers.get(symbol, {})
-                    curr_price = float(ticker.get('last', 0))
+                    curr_price = float(tickers.get(symbol, {}).get('last', 0))
                     if curr_price <= 0: continue
                     atr = self.latest_data.get(symbol, {}).get('atr', 0)
                     exit_triggered, reason = await self.shield.check_position(symbol, trade, curr_price, current_atr=atr)
-                    if exit_triggered:
-                        if reason == "TAKE_PROFIT_1": await self.partial_close_position(symbol, trade, 0.5, reason)
-                        elif "PIVOT" in reason: await self.execute_pivot(symbol, trade, 'short' if trade['side'] == 'long' else 'long')
-                        else: await self.close_position(symbol, trade, reason)
+                    if exit_triggered: await self.close_position(symbol, trade, reason)
                 await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Safety Loop Error: {e}")

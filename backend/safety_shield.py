@@ -48,12 +48,12 @@ class SafetyShield:
         history = self.price_history_5m.get(symbol, [])
         if len(history) < 15: return None # Need at least 2.5 min
 
-        ref_price = sum(history) / len(history)
-        change_pct = (current_price - ref_price) / ref_price
+        # v43.3.1 [GWEN OVERDRIVE] Accelerated Flash Detection for Blitz
+        threshold = 0.008 if self.bot.profile_type == 'blitz' else 0.012
         
-        if change_pct > 0.012:
+        if change_pct > threshold:
             return "PUMP"
-        elif change_pct < -0.012:
+        elif change_pct < -threshold:
             return "DUMP"
         return None
 
@@ -66,8 +66,10 @@ class SafetyShield:
         is_long = side == 'long'
         
         # Velocity Threshold: 1.5x ATR expressed as % (or 1.2% hard floor)
-        atr_pct = (atr / current_price) if current_price > 0 else 0.012
-        sos_threshold = max(0.012, atr_pct * 1.5)
+        # v43.3.1 [GWEN OVERDRIVE] Tighter floor for Blitz (0.7%)
+        hard_floor = 0.007 if self.bot.profile_type == 'blitz' else 0.012
+        atr_pct = (atr / current_price) if current_price > 0 else hard_floor
+        sos_threshold = max(hard_floor, atr_pct * 1.5)
         
         if (is_long and change_pct < -sos_threshold) or (not is_long and change_pct > sos_threshold):
             logger.critical(f"🆘 [VELOCITY EXIT] {symbol} Panic Spike ({change_pct:.2%}) against {side.upper()}.")
