@@ -28,6 +28,10 @@ class StrategyEngine:
         self.rsi_buy_level = tp.get('rsi_buy_level', 30)
         self.rsi_sell_level = tp.get('rsi_sell_level', 70)
         self.technical_confluence_mode = tp.get('technical_confluence_mode', 'strict')
+        
+        # v38.1 Gemini Cost Optimization
+        self.ai_cache = {} # symbol -> {result, timestamp}
+        self.ai_cache_ttl = 1800 # 30 minutes
     
     async def get_technical_score(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -141,6 +145,14 @@ class StrategyEngine:
                 logger.debug(f"⏭️ [PRE-FILTER] {symbol} skipped LLM (Tech Score {tech_score:.2f} < {preaudit_threshold})")
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
 
+            # --- 2.1 AI CACHE CHECK (v38.1) ---
+            now = time.time()
+            if symbol in self.ai_cache:
+                cached_data, timestamp = self.ai_cache[symbol]
+                if (now - timestamp) < self.ai_cache_ttl:
+                    logger.info(f"🧠 [AI CACHE] Reusing verdict for {symbol} (Age: {int(now-timestamp)}s)")
+                    return cached_data
+
             # 3. AI Deep Audit (The Costly Part)
             indicators = data if data else {}
             # Pass side to AI so it evaluates the CORRECT direction
@@ -196,7 +208,7 @@ class StrategyEngine:
                 f"AI: {reason} (Conf: {ai_confidence:.2f}) | Final: {final_score:.2f} → {direction_str}"
             )
             
-            return {
+            res = {
                 'symbol': symbol,
                 'score': final_score,
                 'ai_approved': approved,
@@ -205,6 +217,11 @@ class StrategyEngine:
                 'leverage': leverage,
                 'side': final_side
             }
+            
+            # Store in Cache (v38.1)
+            self.ai_cache[symbol] = (res, time.time())
+            
+            return res
             
         except Exception as e:
             logger.error(f"❌ Error during strategy evaluation for {symbol}: {e}")

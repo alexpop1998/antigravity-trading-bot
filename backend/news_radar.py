@@ -32,6 +32,11 @@ class NewsRadar:
         
         # Using Centralized AI Gatekeeper (v31.07)
         self.semaphore = self.bot.ai_semaphore
+        
+        # v38.1 Gemini Cost Capping
+        self.hourly_ai_limit = 10
+        self.hourly_calls = 0
+        self.last_reset_time = 0
 
     async def analyze_article(self, article: Dict[str, str]):
         if not self.api_key: return
@@ -138,6 +143,19 @@ class NewsRadar:
             if not self.api_key:
                 logger.warning("Nessuna LLM_API_KEY. Salto Gatekeeper.")
                 return
+
+            # --- v38.1 Hourly Capping Logic ---
+            import time
+            now = time.time()
+            if now - self.last_reset_time > 3600:
+                self.hourly_calls = 0
+                self.last_reset_time = now
+            
+            if self.hourly_calls >= self.hourly_ai_limit:
+                logger.warning(f"⚠️ [NEWS CAP] Hourly Gemini limit ({self.hourly_ai_limit}) reached. Skipping AI audit for: {title}")
+                return
+            
+            self.hourly_calls += 1
 
             async with self.semaphore:
                 logger.info(f"🛡️ Gatekeeper evaluating: {title}")

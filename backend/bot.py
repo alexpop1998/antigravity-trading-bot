@@ -603,8 +603,8 @@ class CryptoBot:
                 
                 # 4. RANK BY TECHNICAL STRENGTH
                 candidates.sort(key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)
-                # v33.4 ULTRA SAVER: Audit only top 3 promising setups
-                top_candidates = candidates[:3]
+                # v33.4 ULTRA SAVER: Audit only top 1 promising setup
+                top_candidates = candidates[:1]
                 
                 if top_candidates:
                     logger.info(f"🏆 [TOP CANDIDATS] Best {len(top_candidates)} tech setups found. Sending to Deep AI Audit...")
@@ -635,8 +635,8 @@ class CryptoBot:
                         logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient.")
                 
                 # Sweep interval
-                # v33.4 COST SAVER: Wait 5 minutes between sweeps
-                wait_time = 300 
+                # v38.1 COST SAVER: Wait 10 minutes between sweeps to balance costs.
+                wait_time = 600 
                 logger.info(f"💤 [SLEEP] Cycle complete. Waiting {wait_time}s.")
                 await asyncio.sleep(wait_time)
                 
