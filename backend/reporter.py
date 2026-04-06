@@ -43,6 +43,7 @@ class BotReporter:
     def generate_html(self):
         try:
             initial_balance, raw_trades, active_positions = self._get_metric_data()
+            if raw_trades is None: raw_trades = []
             
             # Calculate Metrics
             closed_trades = [t for t in raw_trades if t.get('pnl') is not None and abs(float(t['pnl'])) > 0.0001]
