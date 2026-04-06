@@ -114,8 +114,12 @@ class ExchangeGateway:
             else:
                 equity = float(balance.get('total', {}).get('USDT', 0))
                 
+            # v43.3.12 [SURVIVOR FIX] Capture real available margin for Bitget
+            avail = float(balance.get('free', {}).get('USDT', 0))
+            
             return {
                 'equity': equity,
+                'available': avail,
                 'raw': balance
             }
         except Exception as e:

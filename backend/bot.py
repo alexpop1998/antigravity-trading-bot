@@ -158,7 +158,9 @@ class CryptoBot:
                 
                 # Atomic Swap & Limit Check
                 active_positions = await self.gateway.fetch_positions_robustly()
-                if len(active_positions) >= self.max_concurrent_positions:
+                # v43.3.12 [SURVIVOR FIX] Force Swap if margin is low or max positions reached
+                avail_margin = self.latest_account_data.get('available', 0)
+                if len(active_positions) >= self.max_concurrent_positions or avail_margin < 2.0:
                     if new_score >= 0.90:
                         weakest_symbol = None
                         weakest_score = 2.0
@@ -168,11 +170,17 @@ class CryptoBot:
                             if entry_score < weakest_score:
                                 weakest_score = entry_score
                                 weakest_symbol = s
-                        if weakest_symbol and (new_score - weakest_score) >= 0.15:
-                            await self._close_position_internal(weakest_symbol, self.trade_levels.get(weakest_symbol), "SWAP_PRIORITY")
+                        
+                        if weakest_symbol and (new_score - weakest_score) >= 0.10:
+                            logger.warning(f"📉 [MARGIN SWAP] Clearing weakest position {weakest_symbol} to prioritize {symbol}")
+                            await self._close_position_internal(weakest_symbol, self.trade_levels.get(weakest_symbol), "MARGIN_PRIORITY")
                             await asyncio.sleep(1)
-                        else: return
-                    else: return
+                            # Refresh active positions after clear
+                            active_positions = await self.gateway.fetch_positions_robustly()
+                        else:
+                            if avail_margin < 2.0: return # Still no room
+                    else:
+                        if avail_margin < 2.0: return # No room for mid-score signals
 
                 # Conflict/Flip Logic
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
@@ -258,9 +266,23 @@ class CryptoBot:
             # v43.3.11 [GWEN FIX] Use dynamic leverage for precise sizing
             target_leverage = leverage or self.leverage
             equity = self.latest_account_data.get('equity', 0)
+            avail = self.latest_account_data.get('available', 0)
+            
             if equity < 5.1: return 0
-            margin_usdt = max(5.1, equity * (self.percent_per_trade / 100.0))
-            notional = margin_usdt * target_leverage
+            
+            # v43.3.12 [SURVIVOR FIX] Adapt to available margin
+            target_margin = equity * (self.percent_per_trade / 100.0)
+            # Use 95% of available if we can't reach target, but ensure it's at least $1 for Bitget limits
+            margin_to_use = min(max(5.1, target_margin), avail * 0.95)
+            
+            if margin_to_use < 1.0: 
+                logger.warning(f"⚠️ [SURVIVOR] Insufficient margin for {symbol} ($ {margin_to_use:.2f})")
+                return 0
+                
+            if margin_to_use < target_margin:
+                logger.info(f"🦾 [SURVIVOR SIZING] Reduced margin for {symbol} ($ {margin_to_use:.2f})")
+                
+            notional = margin_to_use * target_leverage
             amount = notional / price
             return float(self.gateway.exchange.amount_to_precision(symbol, amount))
         except: return 0
