@@ -177,7 +177,7 @@ class CryptoBot:
                 # Conflict/Flip Logic
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
                 if existing:
-                    existing_side = 'buy' if float(existing['positionAmt']) > 0 else 'sell'
+                    existing_side = existing['side'].lower()
                     if existing_side != side.lower() and analysis.get('confidence', 0) > 0.85:
                         await self.gateway.close_all_for_symbol(symbol)
                         await asyncio.sleep(1)

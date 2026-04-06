@@ -25,8 +25,8 @@ async def cleanup():
         
         active_list = []
         for p in positions:
-            # Check for active position in either contracts, amount or info.total
-            amt = abs(float(p.get('contracts', 0) or p.get('positionAmt', 0) or p.get('info', {}).get('total', 0) or 0))
+            # v43.3.10 [BITGET FIX] Use 'contracts' as primary, fallback to 'amount' or 'info.total'
+            amt = abs(float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('total', 0) or 0))
             if amt > 0:
                 active_list.append(p)
         

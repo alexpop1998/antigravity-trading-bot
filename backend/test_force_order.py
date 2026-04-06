@@ -83,7 +83,7 @@ async def test_opening():
         # Check real exchange positions via latest_account_data
         exchange_pos = [p for p in bot.latest_account_data.get('positions', []) 
                        if (p.get('symbol') == symbol or p.get('instId') == bot.exchange.market(symbol)['id'])
-                       and float(p.get('positionAmt', p.get('total', 0))) != 0]
+                       and float(p.get('contracts', p.get('amount', p.get('total', 0)))) != 0]
         
         if is_active or exchange_pos:
             logger.info(f"✅ Position detected! Bot State: {bot.active_positions.get(symbol)}, Exchange Scan: {len(exchange_pos)} positions.")
@@ -95,7 +95,7 @@ async def test_opening():
             logger.info(f"🆘 [CLOSURE] Closing position for {symbol}...")
             # If trade is missing, we create a dummy one for the closer
             if not trade:
-                trade = {'side': 'buy', 'amount': abs(float(exchange_pos[0].get('positionAmt', 1.0))) if exchange_pos else 1.0}
+                trade = {'side': 'buy', 'amount': abs(float(exchange_pos[0].get('contracts', exchange_pos[0].get('amount', 1.0)))) if exchange_pos else 1.0}
             
             await bot.close_position(symbol, trade, reason="MANUAL_TEST_COMPLETED")
             logger.info("✅ Position closed successfully.")
