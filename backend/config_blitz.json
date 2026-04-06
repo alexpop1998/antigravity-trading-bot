@@ -1,6 +1,10 @@
 {
     "profile_name": "BLITZ - Hybrid Aggressive/Extreme",
     "profile_type": "blitz",
+    "blacklisted_symbols": [
+        "ZK/USDT:USDT",
+        "PAXG/USDT:USDT"
+    ],
     "trading_parameters": {
         "symbols": [
             "BTC/USDT:USDT",
@@ -62,8 +66,9 @@
         "usdt_per_trade": 0.0,
         "percent_per_trade": 25.0,
         "max_margin_pct": 52.0,
-        "consensus_threshold": 0.70,
-        "gemini_min_confidence": 0.6,
+        "consensus_threshold": 0.35,
+        "min_ai_confidence": 0.40,
+        "gemini_min_confidence": 0.4,
         "adx_threshold": 15,
         "ema_trend_filter": false,
         "min_volume_24h": 1000000.0,

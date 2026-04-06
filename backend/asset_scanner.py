@@ -19,11 +19,11 @@ class AssetScanner:
         self.allowed_symbols = symbols
         logger.info(f"🛡️ [AssetScanner] Filter updated: {len(symbols)} Mainnet symbols allowed.")
 
-    async def scan(self, active_symbols: List[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def scan(self, active_symbols: List[str] = None, limit: int = 150) -> List[Dict[str, Any]]:
         """Alias for get_top_performing_assets (v30.0 Compatibility)."""
         return await self.get_top_performing_assets(active_symbols, limit)
 
-    async def get_top_performing_assets(self, active_symbols: List[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_top_performing_assets(self, active_symbols: List[str] = None, limit: int = 150) -> List[Dict[str, Any]]:
         """
         Scansiona tutti i mercati Futures USDT-M e restituisce i top N per (Volume * Volatilità).
         """
@@ -46,8 +46,8 @@ class AssetScanner:
                 volume = float(data.get('quoteVolume') or 0) # 24h Volume in USDT
                 change_pct = abs(float(data.get('percentage') or 0)) # 24h Absolute change
                 
-                # Rule: Minimum Liquidity (20M USDT) to avoid pump & dumps without exit liquidity
-                if volume < 20_000_000:
+                # Rule: Minimum Liquidity (2M USDT) to avoid pump & dumps without exit liquidity
+                if volume < 2_000_000:
                     continue
                 
                 # Momentum Score: A mix of high volume and high volatility

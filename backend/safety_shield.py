@@ -105,133 +105,93 @@ class SafetyShield:
             return pos['side'].upper() # LONG or SHORT
         return None
 
-    async def check_position(self, symbol: str, trade_info: Dict[str, Any], current_price: float, current_atr: float = 0):
+    async def check_position(self, symbol: str, trade: Dict[str, Any], current_price: float, current_atr: float = 0) -> (bool, str):
         """
-        Main logic for SL/TP check on a single position.
+        [v37.1 HARDENED SAFETY]
+        Multi-stage safety check: Hard SL -> Trailing/Adaptive -> TP -> AI Monitor.
         """
-        if not trade_info or not symbol:
-            return False, ""
+        try:
+            if not trade or not symbol: return False, ""
+            
+            side = trade['side']
+            is_long = side == 'long'
+            entry_price = trade['entry_price']
+            sl = trade.get('sl', 0)
+            tp1 = trade.get('tp1', 0)
+            pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+            
+            # --- 0. PRE-FLIGHT (History & Velocity) ---
+            self._update_price_history(symbol, current_price)
+            if self._check_velocity_exit(symbol, current_price, side, current_atr):
+                return True, "VELOCITY_EXIT"
 
-        side = str(trade_info.get('side', 'long')).lower()
-        is_long = side == 'long'
-        entry_price = float(trade_info.get('entry_price', current_price))
-        sl = float(trade_info.get('sl', 0))
-        tp1 = float(trade_info.get('tp1', 0))
-        
-        # 🛡️ Legacy Adoption (v32.1)
-        if 'original_sl' not in trade_info:
-            trade_info['original_sl'] = sl
-            logger.info(f"💾 [ADOPTION] Symbol {symbol} adopted with original SL {sl}")
-        if 'sl_tightness' not in trade_info:
-            trade_info['sl_tightness'] = "RUN"
-        
-        self._update_price_history(symbol, current_price)
-        
-        if self._check_velocity_exit(symbol, current_price, side, current_atr):
-            return True, "VELOCITY_EXIT"
+            flash_event = self._check_flash_detection(symbol, current_price)
+            if flash_event:
+                if (is_long and flash_event == "DUMP") or (not is_long and flash_event == "PUMP"):
+                    logger.critical(f"🆘 [FLASH EXIT] {symbol} due to {flash_event}.")
+                    return True, f"FLASH_{flash_event}_EXIT"
 
-        flash_event = self._check_flash_detection(symbol, current_price)
-        if flash_event:
-            logger.warning(f"⚡ [FLASH] {flash_event} detected on {symbol}!")
-            if (is_long and flash_event == "DUMP") or (not is_long and flash_event == "PUMP"):
-                logger.critical(f"🆘 [FLASH EXIT] Immediate exit for {symbol} due to counter {flash_event}.")
-                return True, f"FLASH_{flash_event}_EXIT"
-        
-        # 🛡️ Update Peak Price Tracking (v32.0)
-        old_peak = self.peak_prices.get(symbol, current_price)
-        if is_long:
-            self.peak_prices[symbol] = max(old_peak, current_price)
-        else:
-            self.peak_prices[symbol] = min(old_peak, current_price)
+            # --- 1. PEAK TRACKING (For Trailing) ---
+            old_peak = self.peak_prices.get(symbol, current_price)
+            if is_long:
+                self.peak_prices[symbol] = max(old_peak, current_price)
+            else:
+                self.peak_prices[symbol] = min(old_peak, current_price)
 
-        pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+            # --- 2. HARD STOP LOSS (V37.1 Priority) ---
+            if (is_long and current_price <= sl) or (not is_long and current_price >= sl):
+                if sl > 0:
+                    logger.warning(f"🚨 [HARD SL] {symbol} hit level {sl}. PnL: {pnl_pct:.2%}")
+                    return True, "HARD_STOP_LOSS"
 
-        # 🛡️ Level 0.2: Algorithmic Trailing Stop (v32.4 - High Frequency / Zero Cost)
-        # Runs every cycle locally to trail the price peaks
-        trailing_config = self.bot.config.get("trailing_params", {})
-        activation_pnl = float(trailing_config.get("activation_pnl_pct", 1.5)) / 100.0
-        
-        if pnl_pct >= activation_pnl and current_atr > 0:
-            atr_multiplier = float(trailing_config.get("base_atr_multiplier", 3.0))
-            # Use the LATEST tightness decided by Gemini Supervisor
-            if trade_info.get('sl_tightness') == 'TIGHTEN':
-                atr_multiplier *= float(trailing_config.get("tighten_ratio", 0.7))
+            # --- 3. TRAILING & ADAPTIVE SL (v37.1 Conflict Fix) ---
+            trailing_config = self.bot.config.get("trailing_params", {})
+            activation_pnl = float(trailing_config.get("activation_pnl_pct", 1.5)) / 100.0
+            
+            # 3.1 Algorithmic Trailing
+            if pnl_pct >= activation_pnl and current_atr > 0:
+                atr_mult = float(trailing_config.get("base_atr_multiplier", 3.0))
+                if trade.get('sl_tightness') == 'TIGHTEN':
+                    atr_mult *= float(trailing_config.get("tighten_ratio", 0.7))
                 
-            dist = current_atr * atr_multiplier
-            new_trailing_sl = self.peak_prices[symbol] - dist if is_long else self.peak_prices[symbol] + dist
-            
-            # Move SL ONLY if it's better than current
-            if (is_long and new_trailing_sl > sl) or (not is_long and new_trailing_sl < sl):
-                sl = new_trailing_sl
-                logger.debug(f"📈 [TRAILING] {symbol} moved SL (Algorithmic) to {sl:.4f}")
-                trade_info['sl'] = sl
+                dist = current_atr * atr_mult
+                new_tsl = self.peak_prices[symbol] - dist if is_long else self.peak_prices[symbol] + dist
+                
+                # Move SL ONLY if it's better (tighter)
+                if (is_long and new_tsl > sl) or (not is_long and new_tsl < sl):
+                    sl = new_tsl
+                    trade['sl'] = sl
+                    logger.debug(f"📈 [TRAILING] {symbol} moved SL to {sl:.4f}")
 
-        # 🛡️ Level 0.3: Adaptive Stop Loss (Tightening)
-        # Based on Gemini's last supervision decision
-        if pnl_pct < 0 and trade_info.get('sl_tightness') == 'TIGHTEN':
-            original_sl = float(trade_info.get('original_sl', sl))
-            dist_to_entry = abs(entry_price - original_sl)
-            new_sl = entry_price - (dist_to_entry * 0.6) if is_long else entry_price + (dist_to_entry * 0.6)
-            if (is_long and new_sl > sl) or (not is_long and new_sl < sl):
-                sl = new_sl
-                logger.warning(f"🛡️ [ADAPTIVE SL] {symbol} tightening Stop to {sl:.4f}")
-                trade_info['sl'] = sl
+            # 3.2 Adaptive Tightening (v37.1 - Never widen)
+            if pnl_pct < 0 and trade.get('sl_tightness') == 'TIGHTEN':
+                original_sl = float(trade.get('original_sl', sl))
+                dist_to_entry = abs(entry_price - original_sl)
+                new_asl = entry_price - (dist_to_entry * 0.6) if is_long else entry_price + (dist_to_entry * 0.6)
+                if (is_long and new_asl > sl) or (not is_long and new_asl < sl):
+                    sl = new_asl
+                    trade['sl'] = sl
+                    logger.warning(f"🛡️ [ADAPTIVE SL] {symbol} tightened to {sl:.4f}")
 
-        if (is_long and current_price <= sl) or (not is_long and current_price >= sl):
-            if sl > 0:
-                logger.warning(f"🚨 [HARD SL] {symbol} hit stop level {sl}. PnL: {pnl_pct:.2%}")
-                return True, "HARD_STOP_LOSS"
+            # --- 4. BREAK-EVEN GUARD (V30.5) ---
+            if trade.get('tp1_hit', False):
+                be_price = entry_price * (1.003 if is_long else 0.997)
+                if (is_long and be_price > sl) or (not is_long and be_price < sl):
+                    sl = be_price
+                    trade['sl'] = sl
+                    logger.info(f"🛡️ [BREAK-EVEN] TP1 Hit! Locked {symbol} at {sl:.4f}")
 
-        startup_shield = self.is_startup_shield_active()
-        trade_shield = self.is_trade_shield_active(float(trade_info.get('opened_at', 0)))
-        
-        if trade_info.get('tp1_hit', False):
-            be_price = entry_price * (1.003 if is_long else 0.997)
-            if (is_long and be_price > sl) or (not is_long and be_price < sl):
-                sl = be_price
-                logger.info(f"🛡️ [BREAK-EVEN] TP1 Hit! Locked in {symbol} at {sl:.4f}")
+            # --- 5. TAKE PROFIT & STAGNATION ---
+            if tp1 > 0 and not trade.get('tp1_hit', False):
+                if (is_long and current_price >= tp1) or (not is_long and current_price <= tp1):
+                    return True, "TAKE_PROFIT_1"
 
-        if not startup_shield and not trade_shield and current_atr > 0:
-            tech_multiplier = 5.0 if trade_info.get('tp1_hit', False) else 3.5
-            sl_distance = current_atr * tech_multiplier
-            dynamic_sl = entry_price - sl_distance if is_long else entry_price + sl_distance
-            if (is_long and current_price <= dynamic_sl) or (not is_long and current_price >= dynamic_sl):
-                logger.warning(f"🔔 [TECHNICAL STOP] {symbol} hit trailing ATR level {dynamic_sl:.4f}. PnL: {pnl_pct:.2%}")
-                return True, "TECHNICAL_STOP_LOSS"
-        
-        if tp1 > 0 and not trade_info.get('tp1_hit', False):
-            if (is_long and current_price >= tp1) or (not is_long and current_price <= tp1):
-                logger.info(f"🎯 [TAKE PROFIT 1] {symbol} hit TP1 level {tp1}. Profit: {pnl_pct:.2%}")
-                return True, "TAKE_PROFIT_1"
+            opened_at = float(trade.get('opened_at', 0))
+            if opened_at > 0:
+                if (time.time() - opened_at) > 14400 and abs(pnl_pct) < 0.005: 
+                    return True, "STAGNATION_EXIT"
 
-        # 🎯 Level 3.1: Dynamic AI Monitor (v32.0/v32.2)
-        is_trailing_profile = self.bot.profile_type in ['blitz', 'aggressive']
-        tp2 = float(trade_info.get('tp2', 0))
-        
-        if (trade_info.get('tp1_hit', False) and tp2 > 0) or is_trailing_profile:
-            # High-Frequency AI Monitor (v32.3 - Global 60s check)
-            last_ai_check = trade_info.get('last_tp2_check', 0)
-            
-            # Constant 60s interval for maximum safety on active capital
-            if (time.time() - last_ai_check) > 60:
-                trade_info['last_tp2_check'] = time.time()
-                action, conf, reason = await self.bot.strategy.analyst.evaluate_active_position(
-                    symbol, side, {'rsi': 0, 'macd_hist': 0}, pnl_pct*100
-                )
-                if action == "TIGHTEN":
-                    trade_info['sl_tightness'] = 'TIGHTEN'
-                    logger.warning(f"🧠 [AI TIGHTEN] Gemini suggests tightening for {symbol}. Reason: {reason}")
-                elif action in ["CLOSE", "PIVOT"]:
-                    logger.warning(f"🧠 [AI EXIT] Gemini suggests {action} for {symbol}. Reason: {reason}")
-                    return True, f"AI_{action}"
-                else:
-                    trade_info['sl_tightness'] = 'RUN'
-
-        opened_at = float(trade_info.get('opened_at', 0))
-        if opened_at > 0:
-            hold_time = time.time() - opened_at
-            if hold_time > 14400 and abs(pnl_pct) < 0.005: 
-                logger.info(f"⏳ [STAGNATION] {symbol} flat for 4h ({pnl_pct:.2%}). Closing to free equity.")
-                return True, "STAGNATION_EXIT"
-
-        return False, ""
+            return False, ""
+        except Exception as e:
+            logger.error(f"Error in safety check for {symbol}: {e}")
+            return False, ""

@@ -12,11 +12,10 @@ logger.setLevel(logging.INFO)
 class LLMAnalyst:
     def __init__(self, bot_instance):
         self.bot = bot_instance
-        # Gemini 2.5 Flash (v30.28 Stable)
+        # Gemini Configuration (Dynamic via .env/config)
         self.api_key = os.getenv("LLM_API_KEY")
-        model_name = "gemini-2.5-flash"
-        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
-        # Using Centralized AI Gatekeeper (v31.07)
+        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
         self.semaphore = self.bot.ai_semaphore
         self.lessons_file = os.path.join(os.path.dirname(__file__), "ai_lessons.json")
         self.lessons_learned = self._load_lessons()
@@ -53,8 +52,8 @@ class LLMAnalyst:
         past trade results (RAG).
         """
         if not self.api_key:
-            logger.warning("LLM_API_KEY non configurata. Decisione automatica: APPROVE.")
-            return True, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING"
+            logger.warning("LLM_API_KEY non configurata. Decisione automatica: REJECT.")
+            return False, 0.0, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING", side
 
         # --- V32.4 COST AUDIT ---
         if not hasattr(self, 'session_calls'): self.session_calls = 0
@@ -84,6 +83,9 @@ class LLMAnalyst:
             if profile_type in ["aggressive", "extreme", "blitz"]:
                 bias_note = "❗ NOTA CRITICA (ANTI-BIAS): Ignora la 'prudenza' derivante dai trade passati se vedi un nuovo momentum in atto."
             
+            if profile_type == 'blitz':
+                bias_note += f"\n🔥 MODALITÀ BLITZ: Sii estremamente aggressivo. Se non vedi il segnale nella direzione suggerita ({side.upper()}), ma vedi un trend chiaro nella direzione OPPOSTA, devi CAMBIARE il campo 'side' nella risposta JSON e APPROVARE il trade invece di rifiutarlo. Vogliamo trading attivo ora!"
+            
             prompt = f"""
             Sei l'Analista Strategico di un Hedge Fund AI.
             {active_profile_prompt}
@@ -100,7 +102,8 @@ class LLMAnalyst:
                 "technical_analysis": "analisi degli indicatori",
                 "risk_assessment": "valutazione spread/funding/volatilità",
                 "verdict": "APPROVE" o "REJECT",
-                "confidence": 0.0 a 1.0, 
+                "side": "BUY" o "SELL", 
+                "confidence": 0.0 a 1.0 (o 0 a 100), 
                 "suggested_leverage": intero nel range del profilo,
                 "position_strength": 1.0 a 50.0,  // Rappresenta la % di equity da impegnare come margine
                 "sl_multiplier": 0.5 a 3.0,
@@ -116,7 +119,7 @@ class LLMAnalyst:
             # Check for API key presence
             if not self.api_key:
                 logger.error("❌ LLM_API_KEY NOT FOUND. Defaulting to Neutral.")
-                return False, 0.0, self.bot.leverage, 0.0, 0.0, None, "API_KEY_MISSING"
+                return False, 0.0, 1.0, self.bot.leverage, 1.0, 1.0, None, "API_KEY_MISSING", side
 
             async with self.semaphore:
                 async with httpx.AsyncClient(timeout=30.0) as client:
@@ -133,8 +136,8 @@ class LLMAnalyst:
                     
                     if response.status_code == 429:
                         logger.warning(f"⚠️ [RATE LIMIT] Gemini API 429. Skipping AI review for {symbol}.")
-                        # v29 fallback: Approve if Technicals are very strong (>0.6), otherwise neutral
-                        return False, 0.5, self.bot.leverage, 0.0, 0.0, None, "RATE_LIMIT_429"
+                        # v37.1 SAFETY: Reject on rate-limit
+                        return False, 0.0, 1.0, self.bot.leverage, 1.0, 1.0, None, "RATE_LIMIT_429", side
                     
                     response.raise_for_status()
                     data = response.json()
@@ -147,9 +150,16 @@ class LLMAnalyst:
             
             # Verdetto basato sulla soglia dinamica della configurazione
             verdict = response_json.get("verdict", "REJECT")
+            # --- ROBUST SCALING (v33.5) ---
             confidence = response_json.get("confidence", 0.0)
+            if float(confidence) > 1.0:
+                confidence = float(confidence) / 100.0
             
-            min_confidence = self.bot.config.get('trading_parameters', {}).get('min_ai_confidence', 0.55)
+            ai_side = response_json.get("side", side).lower()
+            if ai_side not in ['buy', 'sell']:
+                ai_side = side.lower()
+
+            min_confidence = self.bot.config.get('trading_parameters', {}).get('min_ai_confidence', 0.40)
             if verdict == "APPROVE" and confidence < min_confidence:
                 logger.warning(f"🛡️ [LLM GUARD] AI approved with {confidence:.2f}, below threshold {min_confidence}. REJECTING.")
                 verdict = "REJECT"
@@ -163,13 +173,15 @@ class LLMAnalyst:
             tp_mult = float(response_json.get("tp_multiplier", 1.0))
             tp_price = response_json.get("tp_price")
 
-            logger.info(f"🧠 [LLM ANALYST] {symbol} {side.upper()} -> {verdict} (Lev: {leverage}x, Strength: {strength:.2f}, SL_m: {sl_mult:.2f}, TP_m: {tp_mult:.2f}, TP_p: {tp_price}) | Reason: {reasoning}")
+            logger.info(f"🧠 [LLM ANALYST] {symbol} {ai_side.upper()} -> {verdict} (Conf: {confidence:.2f}, Lev: {leverage}x) | Reason: {reasoning}")
             
-            return (verdict == "APPROVE"), strength, leverage, sl_mult, tp_mult, tp_price, reasoning
+            # v34.0 Standardized Return: (verdict, confidence, strength, leverage, sl_mult, tp_mult, tp_p, reason, side)
+            return (verdict == "APPROVE"), confidence, strength, leverage, sl_mult, tp_mult, tp_price, reasoning, ai_side
 
         except Exception as e:
             logger.error(f"Errore durante la decisione LLM per {symbol}: {e}")
-            return True, 1.0, self.bot.leverage, 1.0, 1.0, None, f"ERROR: {str(e)}"
+            # v37.1 Robust Return: (approved, confidence, strength, leverage, sl_mult, tp_mult, tp_p, reason, side)
+            return False, 0.0, 1.0, self.bot.leverage, 1.0, 1.0, None, f"ERROR: {str(e)}", side
 
     async def decide_listing_strategy(self, symbol, current_price, spread_pct):
         """
@@ -393,209 +405,69 @@ class LLMAnalyst:
         except Exception as e:
             logger.error(f"Error in post-mortem: {e}")
 
-    async def refine_market_selection(self, candidates: List[Dict[str, Any]], limit: int = 50) -> List[str]:
+    async def refine_market_selection(self, candidates: List[Dict[str, Any]], limit: int = 60) -> List[str]:
         """
+        [V33.0 DYNAMIC SCANNER]
         Asks Gemini to pick the best trading candidates from a list of high-volume assets.
+        Analyzes 150 candidates to select the top 60.
         """
-        if not self.ai_client:
+        if not self.api_key:
             return [c['symbol'] for c in candidates[:limit]]
 
         try:
-            # Format candidate data for Gemini (Top 100)
-            data_string = "\n".join([f"{c['symbol']}: Vol: {c['volume']/1e6:.1f}M, Change: {c['change']:.1f}%" for c in candidates[:100]])
+            # Format candidate data for Gemini (Top 150)
+            data_string = "\n".join([f"{c['symbol']}: Vol: {c['volume']/1e6:.1f}M, Change: {c['change']:.1f}%" for c in candidates[:150]])
             
             prompt = f"""
-            Sei lo Strategista di un Hedge Fund Quantitativo. Seleziona i 50 asset più promettenti tra questi 100 candidati ad alto volume.
-            Prediligi asset con alta volatilità (percentuali alte) ma volume consistente (>30M).
+            Sei lo Strategista di un Hedge Fund Quantitativo. Seleziona i {limit} asset più promettenti tra questi 150 candidati ad alto volume.
+            Prediligi asset con:
+            1. Alta volatilità recente (percentuali di cambiamento alte).
+            2. Volume consistente (>2M USDT).
+            3. Evita stablecoin se presenti.
             
             CANDIDATI:
             {data_string}
             
-            RISPONDI ESATTAMENTE CON UNA LISTA DI STRINGHE JSON (SOLO I SIMBOLI), esempio: ["BTC/USDT:USDT", "SOL/USDT:USDT", ...]
-            Massimo {limit} simboli.
+            RISPONDI ESATTAMENTE CON UN OGGETTO JSON: {{"symbols": ["BTC/USDT:USDT", "SOL/USDT:USDT", ...]}}
+            Massimo {limit} simboli. Sii preciso nei nomi dei simboli.
             """
 
-            async with self.semaphore:
-                response = await self.ai_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={ "type": "json_object" if "flash" in self.model_name else "text" }, # Some models might not support json_object for arrays
-                    temperature=0.2
-                )
-                
-                content = response.choices[0].message.content
-                # If the model doesn't support json_object for bare arrays, it might wrap it or we just parse it
-                try:
-                    result = json.loads(content)
-
-                    if isinstance(result, dict) and "symbols" in result:
-                        final_list = result["symbols"]
-                    elif isinstance(result, list):
-                        final_list = result
-                    else:
-                        final_list = [c['symbol'] for c in candidates[:limit]]
-                except:
-                    # Fallback to volume-based if JSON fails
-                    final_list = [c['symbol'] for c in candidates[:limit]]
-                
-                logger.info(f"🧠 [AI SCANNER] Gemini refined selection. Selected {len(final_list)} symbols.")
-                return final_list
-
-        except Exception as e:
-            logger.error(f"Errore durante raffinamento mercati AI: {e}")
-            return [c['symbol'] for c in candidates[:limit]]
-
-    async def perform_self_audit(self, trades_history: List[Dict[str, Any]]):
-        """
-        Analizza i trade passati per estrarre lezioni e migliorare la strategia.
-        """
-        if not self.ai_client or not trades_history:
-            return
-
-        try:
-            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            # Filter history to roughly align with current profile if possible, 
-            # for now we take the last 20 but evaluate them via the profile philosophy.
-            history_str = json.dumps([{
-                'symbol': t['symbol'], 'side': t['side'], 'pnl': t.get('pnl', 0), 
-                'outcome': 'WIN' if t.get('pnl', 0) > 0 else 'LOSS',
-                'reason': t.get('reason', 'N/A')
-            } for t in trades_history[-20:]], indent=2)
-
-            prompt = f"""
-            Sei il Chief Risk Officer di un Hedge Fund. Profilo Attivo: {profile_type.upper()}.
-            Analizza questi ultimi 20 trade e identifica 3 REGOLE d'oro coerenti con la strategia {profile_type.upper()}.
-            
-            STORICO TRADE:
-            {history_str}
-            
-            RISPONDI ESATTAMENTE IN JSON:
-            {{
-                "lessons": "Una stringa concisa con le 3 regole identificate."
-            }}
-            """
-
-            async with self.semaphore:
-                response = await self.ai_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={ "type": "json_object" },
-                    temperature=0.3
-                )
-                
-                content = response.choices[0].message.content
-                result = json.loads(content)
-                new_lessons = result.get("lessons", self.lessons_learned)
-                
-                # --- PROFILE-PARTITIONED SAVE ---
-                all_data = {"profiles": {}}
-                if os.path.exists(self.lessons_file):
-                    try:
-                        with open(self.lessons_file, 'r') as f:
-                            all_data = json.load(f)
-                    except: pass
-                
-                p_data = all_data.get("profiles", {}).get(profile_type, {"history": [], "lessons": ""})
-                p_data["lessons"] = new_lessons
-                all_data.setdefault("profiles", {})[profile_type] = p_data
-                self.lessons_learned = new_lessons
-
-                with open(self.lessons_file, 'w') as f:
-                    json.dump(all_data, f)
-                
-                logger.warning(f"🧠 [AI AUDIT - {profile_type.upper()}] Nuove lezioni apprese: {self.lessons_learned}")
-
-        except Exception as e:
-            logger.error(f"Errore durante self-audit AI: {e}")
-
-    async def perform_post_mortem(self, symbol: str, trade: Dict, close_price: float, pnl: float):
-        """Analizza l'esito di un trade per estrarre lezioni strategiche e gestisce lo sliding window."""
-        if not self.ai_client:
-            return
-
-        try:
-            # Skip minor noise trades to save tokens (Threshold: |0.3%|)
-            if abs(pnl) < 0.003:
-                return
-                
-            outcome = "WIN" if pnl > 0.005 else ("LOSS" if pnl < -0.005 else "NEUTRAL/PARTIAL")
-            
-            # --- Capture indicators context from bot ---
-            indicators = self.bot.latest_data.get(symbol, {})
-            
-            # --- PROFILE-AWARE MENTOR (v14.6) ---
-            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            
-            prompt = f"""
-            Sei un Senior Trading Mentor specializzato in strategie {profile_type.upper()}. 
-            Analizza questo trade appena chiuso e ricava una lezione.
-            
-            DATI TRADE:
-            - Simbolo: {symbol} | Esito: {outcome} | PnL: {pnl:.2%}
-            - Reasoning Entrata: {trade.get('reasoning', 'N/D')}
-            
-            MISSIONE:
-            1. Valuta il trade secondo la filosofia {profile_type.upper()}.
-            2. Identifica se l'errore è stato strategico (rischio troppo alto/basso per il profilo) o tecnico.
-            3. Definisci una 'Golden Rule' (max 12 parole).
-            
-            RISPONDI SOLO IN JSON: {{ "analysis": "analisi", "lesson": "lezione", "golden_rule": "regola" }}
-            """
-
-            async with self.semaphore:
-                response = await self.ai_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={ "type": "json_object" },
-                    temperature=0.3
-                )
-            
-            content = json.loads(response.choices[0].message.content)
-            new_rule = content.get("golden_rule", "Be careful.")
-            
-            # --- PROFILE-PARTITIONED SLIDING WINDOW (v15.0) ---
-            profile_type = getattr(self.bot, 'profile_type', 'aggressive').lower()
-            all_data = {"profiles": {}}
-            if os.path.exists(self.lessons_file):
-                try:
-                    with open(self.lessons_file, 'r') as f:
-                        all_data = json.load(f)
-                        if "profiles" not in all_data:
-                            # Migrate legacy or handle empty
-                            all_data = {"profiles": {"aggressive": {"history": all_data.get("history", []), "lessons": all_data.get("lessons", "")}}}
-                except: pass
-            
-            p_data = all_data.get("profiles", {}).get(profile_type, {"history": [], "lessons": ""})
-            lessons_db = p_data.get("history", [])
-
-            # Aggiungiamo la nuova lezione in testa
-            lessons_db.insert(0, {
-                "timestamp": time.time(),
-                "symbol": symbol,
-                "outcome": outcome,
-                "rule": new_rule,
-                "pnl": pnl
-            })
-
-            # Cleanup: Teniamo solo le ultime 2500 lezioni per questo profilo
-            cutoff = time.time() - (14 * 86400)
-            lessons_db = [l for l in lessons_db if l['timestamp'] > cutoff][:2500]
-
-            # Generiamo il prompt context specifico per questo profilo
-            rules_summary = " | ".join([l['rule'] for l in lessons_db[:15]])
-            self.lessons_learned = rules_summary
-            
-            # Update all_data
-            all_data.setdefault("profiles", {})[profile_type] = {
-                "history": lessons_db,
-                "lessons": self.lessons_learned
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json"
+                }
             }
 
-            # Save per persistence
-            with open(self.lessons_file, 'w') as f:
-                json.dump(all_data, f)
-                
-            logger.warning(f"🎓 [AI MENTOR] New lesson learned for {symbol}: {new_rule}")
+            async with self.semaphore:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(self.gemini_url, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    
+                    # --- ROBUST JSON CLEANING (v33.2) ---
+                    if "```json" in text:
+                        text = text.split("```json")[1].split("```")[0]
+                    elif "```" in text:
+                        text = text.split("```")[1].split("```")[0]
+                    text = text.strip()
+                    
+                    result = json.loads(text)
+                    final_list = result.get("symbols", [])
+                    
+                    if not final_list:
+                        logger.warning("⚠️ [AI SCANNER] Gemini returned empty list or invalid JSON. Falling back to volume-based.")
+                        final_list = [c['symbol'] for c in candidates[:limit]]
+                    
+                    logger.info(f"🧠 [AI SCANNER] Gemini refined selection. Selected {len(final_list)} symbols from {len(candidates)} candidates.")
+                    return final_list
 
         except Exception as e:
-            logger.error(f"Error in post-mortem: {e}")
+            logger.error(f"❌ Errore critico raffinamento mercati AI: {str(e)}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return [c['symbol'] for c in candidates[:limit]]
+

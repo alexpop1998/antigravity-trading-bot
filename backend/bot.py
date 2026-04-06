@@ -40,7 +40,8 @@ class CryptoBot:
         # 2. Config Loading
         self.config = self._load_config()
         self.profile_type = self.config.get("profile_type", "aggressive")
-        self.consensus_threshold = self.config.get("trading_parameters", {}).get("consensus_threshold", 0.70)
+        self.consensus_threshold = self.config.get("trading_parameters", {}).get("consensus_threshold", 0.55)
+        self.min_ai_confidence = self.config.get("trading_parameters", {}).get("min_ai_confidence", 0.55)
         self.leverage = self.config.get("trading_parameters", {}).get("leverage", 10)
         self.percent_per_trade = self.config.get("trading_parameters", {}).get("percent_per_trade", 25.0)
         self.max_concurrent_positions = self.config.get("trading_parameters", {}).get("max_concurrent_positions", 3)
@@ -54,15 +55,10 @@ class CryptoBot:
         self.timeframe = params.get("timeframe", "15m")
         # 🟢 ROBUST CONFIG LOADING (v30.50)
         tp = self.config.get('trading_parameters', {})
-        t = self.config.get('trading', {})
         
-        # Priority: trading_parameters -> trading -> fallback
-        self.consensus_threshold = float(tp.get('consensus_threshold', t.get('consensus_threshold', 0.81)))
+        # Priority: trading_parameters -> fallback
+        self.consensus_threshold = float(tp.get('consensus_threshold', 0.55))
         
-        # --- BLITZ HARD OVERRIDE ---
-        if os.getenv('ACTIVE_PROFILE', 'aggressive').lower() == 'blitz':
-            self.consensus_threshold = 0.70
-            logger.info(f"⚡ [BLITZ BOOT] Forced consensus threshold to {self.consensus_threshold}")
         self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
         
         # 4. Modules
@@ -75,11 +71,6 @@ class CryptoBot:
         self.news_radar = NewsRadar(self)
         self.reporter = BotReporter()
         
-        # ⚡ [BLITZ TOTAL OVERRIDE] (v31.06 PRO)
-        if self.profile_type == 'blitz':
-            self.consensus_threshold = 0.70
-            logger.info(f"🚀 [INIT] Blitz Profile Active - Global Consensus Locked at {self.consensus_threshold}")
-        
         # 5. Shared State
         self.trade_levels = self.db.load_state("trade_levels") or {}
         self.active_positions = {}
@@ -91,8 +82,17 @@ class CryptoBot:
         self.ai_semaphore = asyncio.Semaphore(5)
         self.semaphore = self.ai_semaphore
         self.order_lock = asyncio.Lock()
+        
+        # v33.8 Cost Safe Headers
         self.initialized = False
         self.start_time = time.time()
+        self.last_pair_update = 0
+        self.pair_update_interval = 3600
+        self.dynamic_symbols = []
+        # Gemini 1.5 Flash (v33.8 Cost Safe)
+        self.api_key = os.getenv("LLM_API_KEY")
+        model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
+        self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
 
     def _load_config(self):
         try:
@@ -125,8 +125,9 @@ class CryptoBot:
             asyncio.create_task(self.run_reactive_safety_loop())
             asyncio.create_task(self.run_zombie_sync_loop())
             asyncio.create_task(self.run_margin_cleanup_loop())
-            asyncio.create_task(self.run_news_radar_loop())
-            asyncio.create_task(self.run_daily_audit_loop())
+            # v33.8: News and Audit loops disabled for cost management
+            # asyncio.create_task(self.run_news_radar_loop())
+            # asyncio.create_task(self.run_daily_audit_loop())
             # Start Report Loops (v31.02)
             asyncio.create_task(self.run_automated_report_loop())
             try:
@@ -147,6 +148,13 @@ class CryptoBot:
             self.initialized = True
         except Exception as e:
             logger.error(f"Initialization Failed: {e}")
+
+    def add_alert(self, source, title, message):
+        """[v33.5] Alert proxy for compatibility with news/social modules."""
+        logger.warning(f"🔔 [ALERT] {source} | {title}: {message}")
+        try:
+            asyncio.create_task(self.notifier.send_message(f"🔔 *{source} ALERT*\n📌 {title}\n📝 {message}"))
+        except: pass
 
     async def sync_state(self):
         """Syncs balance and positions with exchange."""
@@ -178,16 +186,11 @@ class CryptoBot:
                     await self.handle_signal(s, f"{source}_PROC", side, confidence, is_black_swan)
                 return
 
-            # Prepare analysis object for execute_order
-            analysis = {
-                'score': confidence,
-                'confidence': confidence,
-                'leverage': self.leverage,
-                'reason': f"Signal from {source}"
-            }
-            if metadata: analysis.update(metadata)
-            
-            await self.execute_order(symbol, side, analysis)
+            # 🛡️ [SECURITY FIX v37.1]
+            # Signals must pass through StrategyEngine to ensure AI Consensus
+            logger.info(f"🧠 [ROUTING] Routing signal for {symbol} to StrategyEngine...")
+            # We bypass tech scoring for signal sources if needed, but Gemini must approve
+            await self.run_targeted_analysis(symbol, side_hint=side)
             
         except Exception as e:
             logger.error(f"Error handling signal: {e}")
@@ -196,6 +199,12 @@ class CryptoBot:
         """Executes a market order with dynamic sizing and leverage."""
         async with self.order_lock:
             try:
+                # 🛡️ [BLACKLIST GUARD v37.1] (Moved to TOP)
+                blacklist = self.config.get('blacklisted_symbols', [])
+                if symbol in blacklist:
+                    logger.warning(f"🚫 [BLACKLIST] Execution blocked for {symbol} as requested.")
+                    return
+
                 new_score = analysis.get('score', 0)
                 logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Side: {side.upper()} | Score: {new_score}")
                 
@@ -227,7 +236,7 @@ class CryptoBot:
                         logger.info(f"⏭️ [LIMIT] Max positions reached ({len(active_positions)}).")
                         return
                 
-                # 🛡️ Conflict Resolver (Flip Logic)
+                # 🛡️ Conflict Resolver (Flip Logic & Duplicate Guard)
                 positions = await self.gateway.fetch_positions_robustly()
                 existing = next((p for p in positions if p['symbol'] == symbol), None)
                 if existing:
@@ -241,6 +250,10 @@ class CryptoBot:
                         else:
                             logger.info(f"⏭️ [CONFLICT] Mismatched side for {symbol}, but signal not strong enough to flip.")
                             return
+                    else:
+                        # v34.1: Duplicate Protection
+                        logger.info(f"⏭️ [EXISTS] Position already open for {symbol} ({existing_side.upper()}). Skipping duplicate entry.")
+                        return
 
                 price = self.latest_data.get(symbol, {}).get('price', 0)
                 if price <= 0: 
@@ -274,6 +287,7 @@ class CryptoBot:
                 sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
                 tp_pct = self.config.get("trading_parameters", {}).get("take_profit_pct", 0.04)
                 
+                # 1. FETCH CANDLES (v31.40 - High Reliability)
                 # v32.0: For Blitz and Aggressive, we favor Trailing Stop over Fixed TP
                 use_trailing = self.profile_type in ['blitz', 'aggressive']
                 initial_sl = price * (1 - sl_pct if is_long else 1 + sl_pct)
@@ -313,9 +327,12 @@ class CryptoBot:
             if trade:
                 curr_price = self.latest_data.get(symbol, {}).get('price', trade.get('entry_price', 0))
                 pnl = (curr_price - trade['entry_price']) / trade['entry_price'] if trade['side'] == 'long' else (trade['entry_price'] - curr_price) / trade['entry_price']
-                asyncio.create_task(self.strategy.analyst.perform_post_mortem(symbol, trade, pnl))
+                # v35.0: AI Audit disabled for cost/loop management
+                # asyncio.create_task(self.strategy.analyst.perform_post_mortem(symbol, trade, pnl))
 
-            self.trade_levels[symbol] = None
+            if symbol in self.trade_levels:
+                del self.trade_levels[symbol]
+                
             self.db.save_state("trade_levels", self.trade_levels)
             await self.notifier.send_message(f"🏁 *POSIZIONE CHIUSA*\n🪙 {symbol} | 🎯 {reason}")
         except Exception as e:
@@ -332,8 +349,9 @@ class CryptoBot:
                 # 1. Close current using internal logic (already locked)
                 await self._close_position_internal(symbol, trade, "PIVOT_EXIT")
                 
-                # 2. Trigger immediate new analysis or wait for next loop
-                # The Deliberative loop will pick up the new direction.
+                # 2. Trigger immediate new analysis (v37.1 Atomic Logic)
+                logger.info(f"⚡ [PIVOT] Launching immediate {new_side.upper()} re-entry...")
+                await self.run_targeted_analysis(symbol, side_hint=new_side)
             except Exception as e:
                 logger.error(f"❌ [PIVOT FAILED] {e}")
 
@@ -523,23 +541,35 @@ class CryptoBot:
 
     async def run_deliberative_analysis_loop(self):
         """
-        [v31.0 BRAIN]
-        Ranked Opportunity Scanner. 
-        Instead of First-Come-First-Served, it ranks the entire market and picks the BEST.
+        [v33.0 BRAIN - DYNAMIC 60]
+        Ranked Opportunity Scanner with Dynamic AI Selection (30-min window).
         """
         while True:
             try:
                 if not self.initialized: await asyncio.sleep(10); continue
                 await self.sync_state()
                 
-                # 1. Scan Market for high-volume assets
+                # 1. 🔄 DYNAMIC SYMBOL SELECTION (Every 30 Minutes)
+                current_time = time.time()
+                if not self.dynamic_symbols or (current_time - self.last_pair_update) > self.pair_update_interval:
+                    logger.info("🧠 [AI SCANNER] Selecting 60 best candidates for the next 30 minutes...")
+                    raw_assets = await self.scanner.scan(limit=150)
+                    self.dynamic_symbols = await self.strategy.analyst.refine_market_selection(raw_assets, limit=60)
+                    self.last_pair_update = current_time
+                    logger.info(f"✅ [AI SCANNER] Dynamic window updated. Monitoring: {self.dynamic_symbols[:5]}... (+{len(self.dynamic_symbols)-5})")
+
+                # 2. Scan and Filter based on Dynamic Set
                 active_symbols = list(self.active_positions.keys())
-                assets = await self.scanner.scan(active_symbols=active_symbols)
+                all_raw = await self.scanner.scan(active_symbols=active_symbols, limit=150)
+                
+                # Only keep assets that are in our dynamic 60 list
+                assets = [a for a in all_raw if a['symbol'] in self.dynamic_symbols]
                 candidates = []
                 
-                logger.info(f"🔍 [SCANNER] Analyzing {len(assets)} potential assets for technical setups...")
+                logger.info(f"🔍 [SCANNER] Analyzing {len(assets)} dynamic assets for technical setups...")
                 
-                # 2. FAST TECHNICAL FILTERING (No LLM yet)
+                # 3. FAST TECHNICAL FILTERING
+                # We process them in chunks or all at once? Let's stay async.
                 for asset in assets:
                     symbol = asset['symbol']
                     try:
@@ -549,10 +579,20 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         
-                        # Get Technical-only score (Cheap, no AI)
+                        # Get Technical-only score
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
+                        tech_score = tech_snapshot['tech_score']
                         
-                        if tech_snapshot['tech_score'] >= 0.4: # Low bar for candidate list
+                        # 5. DATA SANITY GUARD (v35.0)
+                        # If indicators are effectively zero/null, skip to avoid AI hallucination loops
+                        if tech_score <= 0.0 or abs(tech_score) < 0.001:
+                            logger.warning(f"⏭️ [SANITY] {symbol} has zero technical momentum. Skipping.")
+                            continue
+                        
+                        # Minimum bar to be considered for Deep AI Audit
+                        # v33.3 COST SAVER: Relaxed from 0.35 to 0.15 (0.0 was too expensive)
+                        threshold = 0.15
+                        if tech_score >= threshold: 
                             candidates.append({
                                 'symbol': symbol,
                                 'tech_snapshot': tech_snapshot,
@@ -561,41 +601,43 @@ class CryptoBot:
                     except Exception as e:
                         logger.warning(f"⚠️ Error filtering {symbol}: {e}")
                 
-                # 3. RANK BY TECHNICAL STRENGTH
+                # 4. RANK BY TECHNICAL STRENGTH
                 candidates.sort(key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)
-                top_candidates = candidates[:5] # Audit only the best to save $$$
+                # v33.4 ULTRA SAVER: Audit only top 3 promising setups
+                top_candidates = candidates[:3]
                 
-                if not top_candidates:
-                    logger.info("⏭️ [SCAN] No viable technical setups found in this sweep.")
+                if top_candidates:
+                    logger.info(f"🏆 [TOP CANDIDATS] Best {len(top_candidates)} tech setups found. Sending to Deep AI Audit...")
                 else:
-                    logger.info(f"🏆 [TOP 5] Best tech setups: {[c['symbol'] for c in top_candidates]}")
+                    logger.info("⏭️ [SCAN] No viable technical setups found in this sweep.")
+                    top_candidates = []
                 
-                # 4. DEEP AI AUDIT (Only for the elite)
+                # 5. DEEP AI AUDIT (Gemini 2.5 Flash)
                 for cand in top_candidates:
                     symbol = cand['symbol']
                     tech_snapshot = cand['tech_snapshot']
                     
                     # Call Deep Analysis (Includes LLM)
-                    # Pass Funding Rate if available
                     cand['data'] = {'df': cand['df'], 'funding_rate': self.latest_data.get(symbol, {}).get('funding_rate', 0)}
                     analysis = await self.strategy.analyze_opportunity(symbol, cand['data'], tech_snapshot)
                     score = analysis.get('score', 0)
                     
-                    # 5. EXECUTION TRIGGER
-                    # Use a slightly dynamic threshold based on profile
+                    # 6. EXECUTION TRIGGER
                     threshold = self.consensus_threshold
                     if score >= threshold:
-                        logger.info(f"🎯 [TRIGGER] {symbol} (Ranked Top) score {score:.2f} meets threshold {threshold}!")
-                        await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
-                        # Optional: break if we hit max positions to avoid over-trading
+                        logger.info(f"🎯 [TRIGGER] {symbol} score {score:.2f} meets threshold {threshold}!")
+                        # v33.5: Use final side decided by consensus (AI + Tech)
+                        final_side = analysis.get('side', 'buy')
+                        await self.execute_order(symbol, final_side, analysis)
                         if len(self.active_positions) >= self.max_concurrent_positions:
                             break
                     else:
-                        logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient (Threshold: {threshold})")
+                        logger.info(f"⏭️ [SCAN] {symbol} score {score:.2f} insufficient.")
                 
-                # Wait for next sweep
-                wait_time = 120 if len(self.active_positions) >= self.max_concurrent_positions else 60
-                logger.info(f"💤 [SLEEP] Sweep complete. Waiting {wait_time}s for next cycle.")
+                # Sweep interval
+                # v33.4 COST SAVER: Wait 5 minutes between sweeps
+                wait_time = 300 
+                logger.info(f"💤 [SLEEP] Cycle complete. Waiting {wait_time}s.")
                 await asyncio.sleep(wait_time)
                 
             except Exception as e:
@@ -638,7 +680,8 @@ class CryptoBot:
             try:
                 logger.info("📊 [REPORT] Regenerating Investor Dashboard...")
                 self.reporter.generate_html()
-                await asyncio.sleep(3600)
+                # v33.4 COST SAVER: Wait 5 minutes between sweeps
+                await asyncio.sleep(300)
             except Exception as e:
                 logger.error(f"❌ Reporter Loop Error: {e}")
                 await asyncio.sleep(600)

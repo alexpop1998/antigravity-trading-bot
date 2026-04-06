@@ -25,10 +25,9 @@ class NewsRadar:
                          "partnership", "mainnet", "upgrade", "acquired", "inflation", "rates"]
         self.seen_guids = set()
         
-        # Gemini 2.5 Flash (v30.28 Stable)
+        # Gemini 1.5 Flash (v33.8 Cost Safe)
         self.api_key = os.getenv("LLM_API_KEY")
-        # FORCED FAST MODEL (v31.12)
-        model_name = "gemini-2.5-flash"
+        model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key}"
         
         # Using Centralized AI Gatekeeper (v31.07)

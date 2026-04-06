@@ -74,9 +74,9 @@ async def lifespan(app: FastAPI):
                         logger.error(f"❌ FATAL ERROR in background task '{task_name}': {e}")
                 return asyncio.create_task(wrapper())
 
-            safe_run(news_radar.poll_news(), "NewsRadar")
+            # safe_run(news_radar.poll_news(), "NewsRadar")
             safe_run(whale_tracker.monitor_whales(), "WhaleTracker")
-            safe_run(social_scraper.monitor_socials(), "SocialScraper")
+            # safe_run(social_scraper.monitor_socials(), "SocialScraper")
             
             logger.info("✅ [LIFESPAN] All systems background-initialized.")
         except Exception as e:

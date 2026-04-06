@@ -17,9 +17,9 @@ class SocialScraper:
         self.api_key = os.getenv("CRYPTOPANIC_API_KEY")
         self.last_news_id = None
         
-        # LLM Config (Gemini REST v30.28)
+        # LLM Config (Gemini REST v33.8 Cost Safe)
         self.api_key_llm = os.getenv("LLM_API_KEY")
-        model_name = os.getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
+        model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
         self.gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.api_key_llm}"
 
     async def fetch_cryptopanic_news(self):

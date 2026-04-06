@@ -127,6 +127,7 @@ class StrategyEngine:
         """
         Deep analysis of a single symbol, now AI-optimized.
         """
+        side = "neutral" # Default to avoid UnboundLocalError
         try:
             # Use pre-calculated data if available
             snapshot = tech_snapshot or await self.get_technical_score(symbol, data)
@@ -134,9 +135,10 @@ class StrategyEngine:
             tech_score = snapshot['tech_score']
             
             # 2. Strategy Filter: Technical Pre-Filter (v32.2 Cost Saving)
-            # Only ask Gemini if technicals are somewhat promising (>= 0.5)
-            if tech_score < 0.5:
-                logger.debug(f"⏭️ [PRE-FILTER] {symbol} skipped LLM (Tech Score {tech_score:.2f} < 0.5)")
+            # v33.0 BLITZ: Bypass pre-filter (threshold 0.0)
+            preaudit_threshold = 0.0 if self.bot.profile_type == 'blitz' else 0.45
+            if tech_score < preaudit_threshold:
+                logger.debug(f"⏭️ [PRE-FILTER] {symbol} skipped LLM (Tech Score {tech_score:.2f} < {preaudit_threshold})")
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
 
             # 3. AI Deep Audit (The Costly Part)
@@ -162,22 +164,36 @@ class StrategyEngine:
                         'leverage': 15
                     }
 
-            # Safe unpack
+            # Safe unpack (v37.1 Standardized Signature)
             approved = result[0] if result else False
             ai_confidence = result[1] if result and len(result) > 1 else 0.0
-            leverage = result[2] if result and len(result) > 2 else self.bot.leverage
-            reason = result[6] if result and len(result) > 6 else "N/A"
+            strength = result[2] if result and len(result) > 2 else 1.0
+            leverage = result[3] if result and len(result) > 3 else self.bot.leverage
+            reason = result[7] if result and len(result) > 7 else "N/A"
+            ai_side = result[8] if result and len(result) > 8 else side
+           
+            # --- AI DIRECTIONAL SOVEREIGNTY (v35.2) ---
+            # AI always decides the final side if it approves the trade
+            final_side = ai_side if approved else side
             
-            # Update cooldown on success
-            self.analyst.update_cooldown(symbol)
+            # Update cooldown on success (only for approved trades v37.1)
+            if approved:
+                self.analyst.update_cooldown(symbol)
             
-            # 4. Final Consensus Score (Weight: 60% AI, 40% Technical)
-            final_score = (0.6 * ai_confidence) + (0.4 * tech_score) if approved else 0.0
+            # 4. Final Consensus Score (Weight: 60% AI, 40% Technical v37.1)
+            # --- DIRECTIONAL ALIGNMENT (v37.1) ---
+            # If Tech direction is opposite to AI direction, Tech Score contributes 0.
+            aligned_tech_score = tech_score if side.lower() == final_side.lower() else 0.0
             
-            direction = f"{side.upper()} {'🟢' if side=='buy' else '🔴'}" if final_score >= 0.7 else "SKIP ⏭️"
+            final_score = (0.6 * ai_confidence) + (0.4 * aligned_tech_score) if approved else 0.0
+            
+            # Formatting for log
+            direction_emoji = '🟢' if final_side == 'buy' else ('🔴' if final_side == 'sell' else '⚪')
+            direction_str = f"{final_side.upper()} {direction_emoji}" if approved else "SKIP ⏭️"
+            
             logger.info(
-                f"🧠 [STRATEGY] {symbol} → Tech: {tech_score:.2f} | "
-                f"AI: {reason} (Conf: {ai_confidence:.2f}) | Final: {final_score:.2f} → {direction}"
+                f"🧠 [STRATEGY] {symbol} → Tech: {tech_score:.2f} ({side.upper()}) | "
+                f"AI: {reason} (Conf: {ai_confidence:.2f}) | Final: {final_score:.2f} → {direction_str}"
             )
             
             return {
@@ -187,12 +203,14 @@ class StrategyEngine:
                 'ai_reason': reason,
                 'confidence': ai_confidence,
                 'leverage': leverage,
-                'side': side
+                'side': final_side
             }
             
         except Exception as e:
             logger.error(f"❌ Error during strategy evaluation for {symbol}: {e}")
-            return {'symbol': symbol, 'score': 0.0, 'error': str(e)}
+            import traceback
+            logger.debug(traceback.format_exc())
+            return {'symbol': symbol, 'score': 0.0, 'error': str(e), 'side': side}
 
     async def _check_mtf_trend(self, symbol: str) -> int:
         """Fetches 4h candles and returns trend direction (1 for Long, -1 for Short, 0 for Neutral)."""

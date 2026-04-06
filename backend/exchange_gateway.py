@@ -17,6 +17,7 @@ class ExchangeGateway:
         self.exchange = self._initialize_exchange()
         self.markets = {}
         self.symbol_map = {} # Unslashed -> Canonical
+        self.symbol_cache = {} # v37.1 Cache for speed
 
     def _initialize_exchange(self):
         exchange_id = self.exchange_name
@@ -48,16 +49,20 @@ class ExchangeGateway:
     def normalize_symbol(self, symbol: str) -> str:
         """
         Converts any symbol (NOMUSDT, NOM/USDT:USDT) to its canonical format.
+        [v37.1] Cached for maximum speed.
         """
-        if symbol in self.markets:
-            return symbol
-        
-        # Try unslashed mapping
-        clean_symbol = symbol.replace('/', '').replace(':', '')
-        if clean_symbol in self.symbol_map:
-            return self.symbol_map[clean_symbol]
+        if symbol in self.symbol_cache:
+            return self.symbol_cache[symbol]
             
-        return symbol # Fallback to input
+        if symbol in self.markets:
+            res = symbol
+        else:
+            # Try unslashed mapping
+            clean_symbol = symbol.replace('/', '').replace(':', '')
+            res = self.symbol_map.get(clean_symbol, symbol)
+            
+        self.symbol_cache[symbol] = res
+        return res
 
     async def fetch_positions_robustly(self) -> List[Dict[str, Any]]:
         """
@@ -131,21 +136,37 @@ class ExchangeGateway:
                 logger.info(f"🛡️ [GATEWAY] Applying Close-Only params for {symbol} | Side: {side}")
 
             if price:
-                return await self.exchange.create_order(symbol, 'limit', side, amount, price, params)
+                return await self._execute_with_backoff(self.exchange.create_order, symbol, 'limit', side, amount, price, params)
             else:
-                return await self.exchange.create_order(symbol, 'market', side, amount, None, params)
+                return await self._execute_with_backoff(self.exchange.create_order, symbol, 'market', side, amount, None, params)
         except Exception as e:
             logger.error(f"❌ Order failed for {symbol}: {e}")
             raise e
 
     async def close_all_for_symbol(self, symbol: str):
-        """Panic close for a specific symbol."""
-        positions = await self.fetch_positions_robustly()
-        for p in positions:
-            if p['symbol'] == self.normalize_symbol(symbol):
-                side = 'sell' if p['side'] == 'long' else 'buy'
-                await self.place_order(symbol, side, p['contracts'], is_close=True)
-                logger.warning(f"🛡️ [GATEWAY] Emergency closed {symbol}")
+        """
+        Panic close for a specific symbol.
+        [v37.1] Optimized to only fetch relevant position.
+        """
+        p = await self.fetch_atomic_position(symbol)
+        if p and p['amount'] > 0:
+            side = 'sell' if p['side'] == 'long' else 'buy'
+            await self.place_order(symbol, side, p['amount'], is_close=True)
+            logger.warning(f"🛡️ [GATEWAY] Emergency closed {symbol}")
+
+    async def _execute_with_backoff(self, func, *args, **kwargs):
+        """
+        [v37.1] Retries an async function with exponential backoff.
+        """
+        max_retries = 3
+        for i in range(max_retries):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                if i == max_retries - 1: raise e
+                wait = (2 ** i) + 0.1
+                logger.warning(f"⚠️ [BACKOFF] Retrying {func.__name__} in {wait:.1f}s... ({e})")
+                await asyncio.sleep(wait)
 
     async def set_leverage(self, symbol: str, leverage: int, params: Optional[Dict] = None):
         """Centralized leverage management with Hedged-mode support (Bitget)."""
@@ -153,10 +174,10 @@ class ExchangeGateway:
             symbol = self.normalize_symbol(symbol)
             # v17.16: Force both sides for Bitget Hedged Mode if params are not provided
             if self.exchange_name == "bitget" and not params:
-                await self.exchange.set_leverage(leverage, symbol, params={'marginCoin': 'USDT', 'holdSide': 'long'})
-                await self.exchange.set_leverage(leverage, symbol, params={'marginCoin': 'USDT', 'holdSide': 'short'})
+                await self._execute_with_backoff(self.exchange.set_leverage, leverage, symbol, params={'marginCoin': 'USDT', 'holdSide': 'long'})
+                await self._execute_with_backoff(self.exchange.set_leverage, leverage, symbol, params={'marginCoin': 'USDT', 'holdSide': 'short'})
             else:
-                await self.exchange.set_leverage(leverage, symbol, params or {})
+                await self._execute_with_backoff(self.exchange.set_leverage, leverage, symbol, params or {})
             logger.info(f"⚙️ [GATEWAY] Leverage set to {leverage}x for {symbol}")
         except Exception as e:
             logger.error(f"⚠️ Failed to set leverage for {symbol}: {e}")
