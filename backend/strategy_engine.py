@@ -229,6 +229,37 @@ class StrategyEngine:
             logger.debug(traceback.format_exc())
             return {'symbol': symbol, 'score': 0.0, 'error': str(e), 'side': side}
 
+    async def perform_macro_audit(self, market_snapshot: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        [v39.2 STRATEGIC REGIME]
+        Aggregates global market data and asks Gemini for the "Market Vibe".
+        Determines bot-wide risk posture.
+        """
+        try:
+            # 1. Prepare data for AI
+            summary = []
+            for asset in market_snapshot:
+                summary.append({
+                    'symbol': asset['symbol'],
+                    'volume': f"{asset.get('volume', 0)/1e6:.1f}M",
+                    'change': f"{asset.get('change', 0):.2f}%",
+                    'price': asset.get('price', 0)
+                })
+            
+            # 2. Call Gemini for the Audit
+            result = await self.analyst.perform_macro_audit(summary)
+            
+            # 3. Dynamic Cache Invalidation (v39.2)
+            # If AI detects EXTREME volatility, clear local AI cache to force fresh analysis
+            if result.get('market_vibe') == 'EXTREME':
+                logger.warning("💥 [MACRO] Extreme volatility detected. Clearing AI strategy cache.")
+                self.ai_cache = {}
+                
+            return result
+        except Exception as e:
+            logger.error(f"Error in macro audit: {e}")
+            return {'market_vibe': 'SAFE', 'emergency_close': False, 'reasoning': f"Error: {str(e)}"}
+
     async def _check_mtf_trend(self, symbol: str) -> int:
         """Fetches 4h candles and returns trend direction (1 for Long, -1 for Short, 0 for Neutral)."""
         try:

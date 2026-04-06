@@ -125,9 +125,12 @@ class CryptoBot:
             asyncio.create_task(self.run_reactive_safety_loop())
             asyncio.create_task(self.run_zombie_sync_loop())
             asyncio.create_task(self.run_margin_cleanup_loop())
-            # v33.8: News and Audit loops disabled for cost management
-            # asyncio.create_task(self.run_news_radar_loop())
-            # asyncio.create_task(self.run_daily_audit_loop())
+            # v39.2: ADAPTIVE AI REGIME (Hedge Fund Mode)
+            asyncio.create_task(self.run_macro_regime_loop())
+            
+            # v38.1: Re-enabled optimized news and audit loops
+            asyncio.create_task(self.run_news_radar_loop())
+            asyncio.create_task(self.run_daily_audit_loop())
             # Start Report Loops (v31.02)
             asyncio.create_task(self.run_automated_report_loop())
             try:
@@ -549,14 +552,16 @@ class CryptoBot:
                 if not self.initialized: await asyncio.sleep(10); continue
                 await self.sync_state()
                 
-                # 1. 🔄 DYNAMIC SYMBOL SELECTION (Every 30 Minutes)
+                # 1. 🔄 LOCAL SYMBOL SELECTION (v39.2 - No AI Cost)
                 current_time = time.time()
                 if not self.dynamic_symbols or (current_time - self.last_pair_update) > self.pair_update_interval:
-                    logger.info("🧠 [AI SCANNER] Selecting 60 best candidates for the next 30 minutes...")
+                    logger.info("📡 [LOCAL SCANNER] Selecting 60 best volume candidates...")
                     raw_assets = await self.scanner.scan(limit=150)
-                    self.dynamic_symbols = await self.strategy.analyst.refine_market_selection(raw_assets, limit=60)
+                    # v39.2: Sort by volume locally instead of calling Gemini
+                    sorted_assets = sorted(raw_assets, key=lambda x: x.get('volume', 0), reverse=True)
+                    self.dynamic_symbols = [a['symbol'] for a in sorted_assets[:60]]
                     self.last_pair_update = current_time
-                    logger.info(f"✅ [AI SCANNER] Dynamic window updated. Monitoring: {self.dynamic_symbols[:5]}... (+{len(self.dynamic_symbols)-5})")
+                    logger.info(f"✅ [LOCAL SCANNER] Dynamic window updated. Monitoring: {self.dynamic_symbols[:5]}...")
 
                 # 2. Scan and Filter based on Dynamic Set
                 active_symbols = list(self.active_positions.keys())
@@ -643,6 +648,46 @@ class CryptoBot:
             except Exception as e:
                 logger.error(f"Analysis Loop Error: {e}")
                 await asyncio.sleep(60)
+
+    async def run_macro_regime_loop(self):
+        """
+        [v39.2 HEDGE FUND MODE]
+        Hourly strategic audit using Gemini to set global risk profile.
+        Can trigger emergency closures if a systemic crash is detected.
+        """
+        while True:
+            try:
+                if not self.initialized: await asyncio.sleep(60); continue
+                
+                logger.info("🧠 [MACRO REGIME] Starting hourly strategic audit...")
+                
+                # Fetch Top 5 market snapshots for AI context
+                raw_market = await self.scanner.scan(limit=5)
+                
+                # Perform Deep Macro Audit
+                vibe = await self.strategy.perform_macro_audit(raw_market)
+                
+                # Report Reasoning
+                reasoning = vibe.get('reasoning', 'No reason provided.')
+                posture = vibe.get('market_vibe', 'SAFE').upper()
+                logger.warning(f"🏦 [MACRO REPORT] Posture: {posture} | Reasoning: {reasoning}")
+                
+                # EXECUTE SYSTEMIC ACTIONS
+                if vibe.get('emergency_close', False):
+                    logger.critical("🆘 [SYSTEMIC RISK] Gemini triggered EMERGENCY CLOSE for all positions!")
+                    for symbol in list(self.active_positions.keys()):
+                        await self.gateway.close_all_for_symbol(symbol)
+                
+                # Dynamic Parameters Adjustments
+                self.max_concurrent_positions = int(vibe.get('max_positions', 3))
+                self.leverage = int(vibe.get('suggested_leverage', 15))
+                
+                # Wait 60 minutes
+                await asyncio.sleep(3600)
+                
+            except Exception as e:
+                logger.error(f"Macro Regime Loop Error: {e}")
+                await asyncio.sleep(300)
 
     async def run_news_radar_loop(self):
         """[V29] Periodically polls news and handles high-impact signals."""
