@@ -1,12 +1,11 @@
 import logging
 import asyncio
+import time
 from typing import Dict, Any, List, Optional
+import pandas as pd
 from ml_predictor import MLPredictor
 from llm_analyst import LLMAnalyst
 from regime_detector import RegimeDetector
-from signal_manager import SignalManager
-from sector_manager import SectorManager
-import pandas as pd
 
 logger = logging.getLogger("StrategyEngine")
 
@@ -22,20 +21,17 @@ class StrategyEngine:
         self.regime_detector = RegimeDetector()
         
         # v29 logic config
-        # Dynamic parameters from Bot Config
         tp = getattr(bot_instance, 'config', {}).get('trading_parameters', {})
-        self.adx_threshold = tp.get('adx_threshold', 25)
         self.rsi_buy_level = tp.get('rsi_buy_level', 30)
         self.rsi_sell_level = tp.get('rsi_sell_level', 70)
         self.technical_confluence_mode = tp.get('technical_confluence_mode', 'strict')
         
         # v38.1 Gemini Cost Optimization
-        self.ai_cache = {} # symbol -> {result, timestamp}
-        self.ai_cache_ttl = 1800 # 30 minutes
-    
+        self.ai_cache = {} 
+        self.ai_cache_ttl = 1800 
+
     async def get_technical_score(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        [v31.0 LIGHTNING SCORE + v29 CONFLUENCE]
         Calculates a technical-only score for pre-filtering.
         Includes RSI, MACD, Bollinger, and Momentum Guards.
         """
@@ -44,33 +40,29 @@ class StrategyEngine:
             if df is None or len(df) < 50:
                 return {'symbol': symbol, 'tech_score': 0.0, 'side': 'buy'}
 
-            # ⚙️ Indicators
+            # Indicators
             close = df['close']
             df['rsi'] = self._calculate_rsi(close)
             df['macd'], df['signal'], df['hist'] = self._calculate_macd(close)
             df['bb_up'], df['bb_mid'], df['bb_low'] = self._calculate_bollinger(close)
             df['ema200'] = close.ewm(span=200, adjust=False).mean()
             
-            # Latest values
+            # Latest
             price = df['close'].iloc[-1]
             rsi = df['rsi'].iloc[-1]
             macd_hist = df['hist'].iloc[-1]
             bb_up = df['bb_up'].iloc[-1]
             bb_low = df['bb_low'].iloc[-1]
-            ema200 = df['ema200'].iloc[-1]
             
-            # --- V29 MOMENTUM GUARD ---
-            change_5m = (price - df['close'].iloc[-4]) / df['close'].iloc[-4] # ~5 min check (15m candles, taking last 4 samples of 10s is better but here we have 15m df)
-            # Adjusting for 15m TF: check last candle
             change_15m = (price - df['close'].iloc[-2]) / df['close'].iloc[-2]
 
             # 1. Regime Detection
-            regime_type, confidence = self.regime_detector.detect_regime(data)
+            regime_type, confidence = self.regime_detector.detect_regime(df)
             
             # 2. MTF Trend (Directional)
-            trend_bias = await self._check_mtf_trend(symbol) # 1 for Long, -1 for Short
+            trend_bias = await self._check_mtf_trend(symbol)
             
-            # 3. CONFLUENCE LOGIC (V29)
+            # 3. CONFLUENCE (v43.3 [GWEN FIX])
             is_rsi_buy = rsi <= self.rsi_buy_level
             is_bb_buy = price <= (bb_low * 1.01)
             is_macd_buy = macd_hist > 0
@@ -79,32 +71,23 @@ class StrategyEngine:
             is_bb_sell = price >= (bb_up * 0.99)
             is_macd_sell = macd_hist < 0
 
-            tech_buy = False
-            tech_sell = False
-            
             if self.technical_confluence_mode == "loose":
-                tech_buy = is_rsi_buy or is_bb_buy
-                tech_sell = is_rsi_sell or is_bb_sell
-            else: # Strict
+                tech_buy = is_rsi_buy or is_bb_buy or is_macd_buy
+                tech_sell = is_rsi_sell or is_bb_sell or is_macd_sell
+            else: 
                 tech_buy = is_rsi_buy and is_bb_buy and is_macd_buy
                 tech_sell = is_rsi_sell and is_bb_sell and is_macd_sell
 
-            # 4. SIZING MODIFIER (Funding/Momentum)
+            # 4. SIZING MODIFIER
             size_multiplier = 1.0
-            
-            # --- MOMENTUM GUARD (V29) ---
             if tech_sell and change_15m > 0.015:
-                logger.info(f"🛡️ [MOMENTUM GUARD] Blocking SHORT on {symbol}: Bullish surge {change_15m:.2%}")
                 tech_sell = False
 
-            # --- FUNDING PENALTY (V29) ---
             funding_rate = data.get('funding_rate', 0)
-            if tech_buy and funding_rate > 0.0005: # High funding
+            if tech_buy and funding_rate > 0.0005: 
                 size_multiplier *= 0.5
-                logger.warning(f"⚠️ [FUNDING PENALTY] High funding on {symbol} ({funding_rate:.4%}). Sizing x0.5")
-            elif tech_sell and funding_rate < -0.0005: # Negative funding
+            elif tech_sell and funding_rate < -0.0005: 
                 size_multiplier *= 0.5
-                logger.warning(f"⚠️ [FUNDING PENALTY] Negative funding on {symbol} ({funding_rate:.4%}). Sizing x0.5")
 
             # 5. FINAL TECH SCORE
             score = 0.0
@@ -128,85 +111,49 @@ class StrategyEngine:
             return {'symbol': symbol, 'tech_score': 0.0, 'side': 'buy'}
 
     async def analyze_opportunity(self, symbol: str, data: Dict[str, Any], tech_snapshot: Dict = None) -> Dict[str, Any]:
-        """
-        Deep analysis of a single symbol, now AI-optimized.
-        """
-        side = "neutral" # Default to avoid UnboundLocalError
+        """Deep analysis of a single symbol, AI-optimized."""
+        side = "neutral"
         try:
-            # Use pre-calculated data if available
             snapshot = tech_snapshot or await self.get_technical_score(symbol, data)
             side = snapshot['side']
             tech_score = snapshot['tech_score']
             
-            # 2. Strategy Filter: Technical Pre-Filter (v32.2 Cost Saving)
-            # v33.0 BLITZ: Bypass pre-filter (threshold 0.0)
             preaudit_threshold = 0.0 if self.bot.profile_type == 'blitz' else 0.45
             if tech_score < preaudit_threshold:
-                logger.debug(f"⏭️ [PRE-FILTER] {symbol} skipped LLM (Tech Score {tech_score:.2f} < {preaudit_threshold})")
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
 
-            # --- 2.1 AI CACHE CHECK (v38.1) ---
             now = time.time()
             if symbol in self.ai_cache:
                 cached_data, timestamp = self.ai_cache[symbol]
                 if (now - timestamp) < self.ai_cache_ttl:
-                    logger.info(f"🧠 [AI CACHE] Reusing verdict for {symbol} (Age: {int(now-timestamp)}s)")
                     return cached_data
 
-            # 3. AI Deep Audit (The Costly Part)
-            indicators = data if data else {}
-            # Pass side to AI so it evaluates the CORRECT direction
+            # v43.3 [GWEN FIX] Persist the price at analysis time for Slippage Guard
+            ref_price = snapshot.get('price', 0)
+            
             result = await self.analyst.decide_strategy(
                 symbol=symbol,
                 side=side,
                 signal_type="DEEP_RANKED_SCAN",
-                indicators=indicators
+                indicators=data
             )
             
-            # 🛡️ BLITZ TECHNICAL FALLBACK (v31.11)
-            # If AI is rate-limited but technicals are strong, allow entry.
             if result[-1] == "RATE_LIMIT_429" and self.bot.profile_type == 'blitz':
                 if tech_score >= 0.75:
-                    logger.warning(f"🚀 [BLITZ FALLBACK] Gemini 429 but Tech Score {tech_score:.2f} is strong. Approving scout position.")
-                    return {
-                        'symbol': symbol,
-                        'score': 0.75, # Synthetic score for threshold bypass
-                        'side': side,
-                        'reason': 'blitz_technical_fallback',
-                        'leverage': 15
-                    }
+                    return {'symbol': symbol, 'score': 0.75, 'side': side, 'reason': 'blitz_fallback', 'leverage': 15, 'reference_price': ref_price}
 
-            # Safe unpack (v37.1 Standardized Signature)
             approved = result[0] if result else False
             ai_confidence = result[1] if result and len(result) > 1 else 0.0
-            strength = result[2] if result and len(result) > 2 else 1.0
             leverage = result[3] if result and len(result) > 3 else self.bot.leverage
             reason = result[7] if result and len(result) > 7 else "N/A"
             ai_side = result[8] if result and len(result) > 8 else side
            
-            # --- AI DIRECTIONAL SOVEREIGNTY (v35.2) ---
-            # AI always decides the final side if it approves the trade
             final_side = ai_side if approved else side
-            
-            # Update cooldown on success (only for approved trades v37.1)
             if approved:
                 self.analyst.update_cooldown(symbol)
             
-            # 4. Final Consensus Score (Weight: 60% AI, 40% Technical v37.1)
-            # --- DIRECTIONAL ALIGNMENT (v37.1) ---
-            # If Tech direction is opposite to AI direction, Tech Score contributes 0.
             aligned_tech_score = tech_score if side.lower() == final_side.lower() else 0.0
-            
             final_score = (0.6 * ai_confidence) + (0.4 * aligned_tech_score) if approved else 0.0
-            
-            # Formatting for log
-            direction_emoji = '🟢' if final_side == 'buy' else ('🔴' if final_side == 'sell' else '⚪')
-            direction_str = f"{final_side.upper()} {direction_emoji}" if approved else "SKIP ⏭️"
-            
-            logger.info(
-                f"🧠 [STRATEGY] {symbol} → Tech: {tech_score:.2f} ({side.upper()}) | "
-                f"AI: {reason} (Conf: {ai_confidence:.2f}) | Final: {final_score:.2f} → {direction_str}"
-            )
             
             res = {
                 'symbol': symbol,
@@ -215,64 +162,24 @@ class StrategyEngine:
                 'ai_reason': reason,
                 'confidence': ai_confidence,
                 'leverage': leverage,
-                'side': final_side
+                'side': final_side,
+                'reference_price': ref_price
             }
-            
-            # Store in Cache (v38.1)
             self.ai_cache[symbol] = (res, time.time())
-            
             return res
-            
         except Exception as e:
             logger.error(f"❌ Error during strategy evaluation for {symbol}: {e}")
-            import traceback
-            logger.debug(traceback.format_exc())
             return {'symbol': symbol, 'score': 0.0, 'error': str(e), 'side': side}
 
-    async def perform_macro_audit(self, market_snapshot: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        [v39.2 STRATEGIC REGIME]
-        Aggregates global market data and asks Gemini for the "Market Vibe".
-        Determines bot-wide risk posture.
-        """
-        try:
-            # 1. Prepare data for AI
-            summary = []
-            for asset in market_snapshot:
-                summary.append({
-                    'symbol': asset['symbol'],
-                    'volume': f"{asset.get('volume', 0)/1e6:.1f}M",
-                    'change': f"{asset.get('change', 0):.2f}%",
-                    'price': asset.get('price', 0)
-                })
-            
-            # 2. Call Gemini for the Audit
-            result = await self.analyst.perform_macro_audit(summary)
-            
-            # 3. Dynamic Cache Invalidation (v39.2)
-            # If AI detects EXTREME volatility, clear local AI cache to force fresh analysis
-            if result.get('market_vibe') == 'EXTREME':
-                logger.warning("💥 [MACRO] Extreme volatility detected. Clearing AI strategy cache.")
-                self.ai_cache = {}
-                
-            return result
-        except Exception as e:
-            logger.error(f"Error in macro audit: {e}")
-            return {'market_vibe': 'SAFE', 'emergency_close': False, 'reasoning': f"Error: {str(e)}"}
-
     async def _check_mtf_trend(self, symbol: str) -> int:
-        """Fetches 4h candles and returns trend direction (1 for Long, -1 for Short, 0 for Neutral)."""
         try:
             ohlcv_4h = await self.bot.gateway.exchange.fetch_ohlcv(symbol, '4h', limit=100)
             df_4h = pd.DataFrame(ohlcv_4h, columns=['t','o','h','l','c','v'])
             ema200 = df_4h['c'].ewm(span=200, adjust=False).mean().iloc[-1]
             last_close = df_4h['c'].iloc[-1]
-            
-            if last_close > (ema200 * 1.002): # Clear Bullish
-                 return 1
-            elif last_close < (ema200 * 0.998): # Clear Bearish
-                 return -1
-            return 0 # Sideways/Neutral
+            if last_close > (ema200 * 1.002): return 1
+            elif last_close < (ema200 * 0.998): return -1
+            return 0
         except Exception as e:
             logger.error(f"MTF Error for {symbol}: {e}")
             return 0
@@ -281,16 +188,8 @@ class StrategyEngine:
         delta = series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
+        rs = gain / (loss + 1e-10)
         return 100 - (100 / (1 + rs))
-
-    def _calculate_atr(self, df, period=14):
-        high_low = df['high'] - df['low']
-        high_close = (df['high'] - df['close'].shift()).abs()
-        low_close = (df['low'] - df['close'].shift()).abs()
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = ranges.max(axis=1)
-        return true_range.rolling(window=period).mean()
 
     def _calculate_macd(self, series, fast=12, slow=26, signal=9):
         exp1 = series.ewm(span=fast, adjust=False).mean()

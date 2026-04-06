@@ -281,6 +281,21 @@ class BotDatabase:
         except Exception as e:
             logger.error(f"Errore durante sync_binance_trades: {e}")
 
+    def get_daily_pnl(self):
+        """Calculates total realized PnL in the last 24 hours."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT SUM(pnl) as total_pnl 
+                FROM trade_history 
+                WHERE timestamp >= datetime('now', '-24 hours')
+            ''')
+            row = cursor.fetchone()
+            return float(row['total_pnl'] or 0.0)
+        except Exception as e:
+            logger.error(f"Error calculating daily PnL: {e}")
+            return 0.0
+
     def get_trades(self, start_date=None, end_date=None, limit=None):
         try:
             cursor = self.conn.cursor()

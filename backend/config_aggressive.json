@@ -33,7 +33,13 @@
         "daily_loss_limit": 15.0,
         "panic_drawdown_threshold": 0.25,
         "breakeven_pct": 0.005,
-        "be_trigger_pct": 0.005
+        "be_trigger_pct": 0.005,
+        "technical_confluence_mode": "loose"
+    },
+    "trailing_params": {
+        "activation_pnl_pct": 2.0,
+        "base_atr_multiplier": 2.5,
+        "tighten_ratio": 0.8
     },
     "strategic_params": {
         "llm_cooldown_seconds": 300,

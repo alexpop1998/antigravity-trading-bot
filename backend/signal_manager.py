@@ -35,9 +35,16 @@ class SignalManager:
     async def add_signal(self, symbol, type, side, weight_modifier=1.0, current_price=None, ema200=None, ai_confidence=0.0):
         now = time.time()
         
+        # v43.3 [GWEN FIX] HFT signals now stored for audit and dedup before execution
         if type in ["LIQUIDATION", "DEX_ARBITRAGE", "NEW_LISTING"]:
-            logger.warning(f"⚡ [HFT PATH] Immediate execution triggered for {symbol} via {type} ({side})")
-            return True, 5.0 # HFT signals bypass consensus map
+            if symbol in self.signals and type in self.signals[symbol]:
+                # Simple dedup: same HFT signal within its TTL = SKIP
+                return False, 0
+                
+            if symbol not in self.signals: self.signals[symbol] = {}
+            self.signals[symbol][type] = {'side': side.lower(), 'weight': 5.0, 'timestamp': now}
+            logger.warning(f"⚡ [HFT PATH] Execution triggered for {symbol} via {type} ({side})")
+            return True, 5.0
 
         # 2. Strategic Consensus Path (Path B)
         weight = self.weights.get(type, 0.5) * weight_modifier
@@ -94,9 +101,10 @@ class SignalManager:
         current_threshold = getattr(self.bot, 'consensus_threshold', 0.70)
         effective_threshold = current_threshold
         
+        # v43.3 [GWEN FIX] Real threshold reduction for high confidence AI
         if type == "AI" and ai_confidence > 0.90:
-            effective_threshold = min(effective_threshold, 1.5)
-            logger.warning(f"🚀 [AI SPECULATION] High Confidence AI Signal ({ai_confidence:.2f}) - Lowering threshold to {effective_threshold}")
+            effective_threshold *= 0.5 # Half the threshold for AI certainty
+            logger.warning(f"🚀 [AI BOOST] High Confidence AI ({ai_confidence:.2f}) - Lowering threshold to {effective_threshold:.2f}")
 
         if abs(total_score) >= effective_threshold:
             logger.warning(f"🔥 STRATEGIC CONSENSUS REACHED for {symbol} (Score: {total_score:.2f} >= {effective_threshold})")

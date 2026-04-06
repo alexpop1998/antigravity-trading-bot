@@ -32,20 +32,24 @@ class RegimeDetector:
         df['minus_dm'] = np.where((df['low'].shift(1) - df['low']) > (df['high'] - df['high'].shift(1)), 
                                    np.maximum(df['low'].shift(1) - df['low'], 0), 0)
         
-        # 3. Smooth TR and DMs (Wilder's Smoothing)
-        # Using simple moving average as an approximation or Wilder's specifically
+        # 3. Smooth TR and DMs (Wilder's Smoothing - v43.3 Gwen Fix)
+        # RMA is preferred for ADX responsiveness (Recursive Moving Average)
         period = 14
-        df['tr_smooth'] = df['tr'].rolling(window=period).mean() # In practice, Wilder's is preferred but SMA is common approximation
-        df['plus_dm_smooth'] = df['plus_dm'].rolling(window=period).mean()
-        df['minus_dm_smooth'] = df['minus_dm'].rolling(window=period).mean()
+        alpha = 1 / period
+        df['tr_smooth'] = df['tr'].ewm(alpha=alpha, adjust=False).mean()
+        df['plus_dm_smooth'] = df['plus_dm'].ewm(alpha=alpha, adjust=False).mean()
+        df['minus_dm_smooth'] = df['minus_dm'].ewm(alpha=alpha, adjust=False).mean()
         
-        # 4. Calculate DI+, DI-
-        df['plus_di'] = 100 * (df['plus_dm_smooth'] / df['tr_smooth'])
-        df['minus_di'] = 100 * (df['minus_dm_smooth'] / df['tr_smooth'])
+        # 4. Calculate DI+, DI- (v43.3 Zero Div Protection)
+        # Avoid division by zero in flat markets using epsilon
+        eps = 1e-10
+        df['plus_di'] = 100 * (df['plus_dm_smooth'] / (df['tr_smooth'] + eps))
+        df['minus_di'] = 100 * (df['minus_dm_smooth'] / (df['tr_smooth'] + eps))
         
-        # 5. Calculate DX and ADX
-        df['dx'] = 100 * (abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di']))
-        df['adx'] = df['dx'].rolling(window=period).mean()
+        # 5. Calculate DX and ADX (v43.3 Zero Div Protection)
+        di_sum = df['plus_di'] + df['minus_di']
+        df['dx'] = 100 * (abs(df['plus_di'] - df['minus_di']) / (di_sum.replace(0, eps)))
+        df['adx'] = df['dx'].ewm(alpha=alpha, adjust=False).mean()
         
         return df
 

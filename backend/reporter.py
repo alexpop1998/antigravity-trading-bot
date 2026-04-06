@@ -32,8 +32,8 @@ class BotReporter:
                 # Fetch Active Positions from state
                 cursor.execute("SELECT value FROM bot_state WHERE key='latest_account_data'")
                 row = cursor.fetchone()
-                account_data = json.loads(row[0]) if row else {}
-                active_positions = account_data.get('positions', [])
+                account_data = json.loads(row[0]) if (row and row[0]) else {}
+                active_positions = account_data.get('positions', []) if account_data else []
                 
                 return initial_balance, trades, active_positions
         except Exception as e:
@@ -64,7 +64,7 @@ class BotReporter:
             
             # If no trades, add a 0 point
             if not chart_points:
-                chart_points.append({"x": "N/A", "y": 0.0})
+                chart_points = [{"x": "N/A", "y": 0.0}]
 
         except Exception as e:
             logger.error(f"Error in metrics calculation: {e}")

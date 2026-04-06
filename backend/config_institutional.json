@@ -32,6 +32,11 @@
         "breakeven_pct": 0.010,
         "be_trigger_pct": 0.010
     },
+    "trailing_params": {
+        "activation_pnl_pct": 1.0,
+        "base_atr_multiplier": 1.5,
+        "tighten_ratio": 0.9
+    },
     "strategic_params": {
         "llm_cooldown_seconds": 1800,
         "llm_cooldown_bypass": false,

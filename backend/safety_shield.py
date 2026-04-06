@@ -43,11 +43,12 @@ class SafetyShield:
         """
         [V19.0 FLASH DETECTION]
         Detects pump/dump (> 1.2% in 5m).
+        v43.3 [GWEN FIX] reference: uses median of history instead of oldest sample
         """
         history = self.price_history_5m.get(symbol, [])
         if len(history) < 15: return None # Need at least 2.5 min
 
-        ref_price = history[0]
+        ref_price = sum(history) / len(history)
         change_pct = (current_price - ref_price) / ref_price
         
         if change_pct > 0.012:
@@ -78,7 +79,6 @@ class SafetyShield:
         [V15.2 HOLISTIC PANIC SHIELD]
         Checks if the global drawdown exceeds the panic threshold.
         """
-        # 🛡️ Level 0: Integrity Check
         if initial_balance <= 0: 
             logger.info("🛡️ [PANIC SHIELD] Waiting for initial balance sync...")
             return False
@@ -95,6 +95,19 @@ class SafetyShield:
             self.panic_drawdown_notified = False
         return False
 
+    async def check_daily_circuit_breaker(self) -> bool:
+        """
+        [v43.3 CIRCUIT BREAKER]
+        Halt trading if total realized daily loss exceeds profile limit.
+        """
+        daily_pnl = self.bot.db.get_daily_pnl()
+        loss_limit = -float(self.bot.config.get("trading_parameters", {}).get("daily_loss_limit", 15.0))
+        
+        if daily_pnl <= loss_limit:
+            logger.critical(f"⚡ [CIRCUIT BREAKER] Daily Loss reached ${daily_pnl:.2f}. Limit: ${loss_limit:.2f}. HALTING.")
+            return True
+        return False
+
     async def get_atomic_guard_status(self, symbol: str) -> Optional[str]:
         """
         [V19.0 ATOMIC GUARD]
@@ -107,7 +120,7 @@ class SafetyShield:
 
     async def check_position(self, symbol: str, trade: Dict[str, Any], current_price: float, current_atr: float = 0) -> (bool, str):
         """
-        [v37.1 HARDENED SAFETY]
+        [v43.3 HARDENED SAFETY]
         Multi-stage safety check: Hard SL -> Trailing/Adaptive -> TP -> AI Monitor.
         """
         try:
@@ -118,7 +131,11 @@ class SafetyShield:
             entry_price = trade['entry_price']
             sl = trade.get('sl', 0)
             tp1 = trade.get('tp1', 0)
-            pnl_pct = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+            
+            # v43.3 [GWEN FIX] Leverage-aware PnL
+            leverage = float(trade.get('leverage', 1))
+            raw_pnl = (current_price - entry_price) / entry_price if is_long else (entry_price - current_price) / entry_price
+            pnl_pct = raw_pnl * leverage
             
             # --- 0. PRE-FLIGHT (History & Velocity) ---
             self._update_price_history(symbol, current_price)
@@ -138,13 +155,13 @@ class SafetyShield:
             else:
                 self.peak_prices[symbol] = min(old_peak, current_price)
 
-            # --- 2. HARD STOP LOSS (V37.1 Priority) ---
+            # --- 2. HARD STOP LOSS ---
             if (is_long and current_price <= sl) or (not is_long and current_price >= sl):
                 if sl > 0:
                     logger.warning(f"🚨 [HARD SL] {symbol} hit level {sl}. PnL: {pnl_pct:.2%}")
                     return True, "HARD_STOP_LOSS"
 
-            # --- 3. TRAILING & ADAPTIVE SL (v37.1 Conflict Fix) ---
+            # --- 3. TRAILING & ADAPTIVE SL ---
             trailing_config = self.bot.config.get("trailing_params", {})
             activation_pnl = float(trailing_config.get("activation_pnl_pct", 1.5)) / 100.0
             
@@ -157,23 +174,29 @@ class SafetyShield:
                 dist = current_atr * atr_mult
                 new_tsl = self.peak_prices[symbol] - dist if is_long else self.peak_prices[symbol] + dist
                 
-                # Move SL ONLY if it's better (tighter)
                 if (is_long and new_tsl > sl) or (not is_long and new_tsl < sl):
                     sl = new_tsl
                     trade['sl'] = sl
                     logger.debug(f"📈 [TRAILING] {symbol} moved SL to {sl:.4f}")
 
-            # 3.2 Adaptive Tightening (v37.1 - Never widen)
+            # 3.2 Adaptive Tightening (v43.3 [GWEN FIX] - Never widen)
             if pnl_pct < 0 and trade.get('sl_tightness') == 'TIGHTEN':
                 original_sl = float(trade.get('original_sl', sl))
                 dist_to_entry = abs(entry_price - original_sl)
                 new_asl = entry_price - (dist_to_entry * 0.6) if is_long else entry_price + (dist_to_entry * 0.6)
-                if (is_long and new_asl > sl) or (not is_long and new_asl < sl):
-                    sl = new_asl
-                    trade['sl'] = sl
-                    logger.warning(f"🛡️ [ADAPTIVE SL] {symbol} tightened to {sl:.4f}")
+                
+                if is_long:
+                    if new_asl > sl:
+                        sl = new_asl
+                        trade['sl'] = sl
+                        logger.warning(f"🛡️ [ADAPTIVE SL] {symbol} tightened to {sl:.4f}")
+                else:
+                    if new_asl < sl:
+                        sl = new_asl
+                        trade['sl'] = sl
+                        logger.warning(f"🛡️ [ADAPTIVE SL] {symbol} tightened to {sl:.4f}")
 
-            # --- 4. BREAK-EVEN GUARD (V30.5) ---
+            # --- 4. BREAK-EVEN GUARD ---
             if trade.get('tp1_hit', False):
                 be_price = entry_price * (1.003 if is_long else 0.997)
                 if (is_long and be_price > sl) or (not is_long and be_price < sl):
