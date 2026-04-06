@@ -178,19 +178,25 @@ class CryptoBot:
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
                 if existing:
                     existing_side = existing['side'].lower()
-                    if existing_side != side.lower() and analysis.get('confidence', 0) > 0.85:
-                        await self.gateway.close_all_for_symbol(symbol)
-                        await asyncio.sleep(1)
+                    if existing_side != side.lower():
+                        # v43.3.11 [GWEN FIX] Force Flip for Blitz always to free margin (Ignore 0.85 conf)
+                        if self.profile_type == 'blitz' or analysis.get('confidence', 0) > 0.85:
+                            logger.info(f"🔄 [FORCED FLIP] Closing opposite side for {symbol} to free margin.")
+                            await self.gateway.close_all_for_symbol(symbol)
+                            await asyncio.sleep(1)
+                        else: return
                     else: return
 
                 price = curr_price or self.latest_data.get(symbol, {}).get('price', 0)
-                amount = self._calculate_order_amount(symbol, price)
                 leverage = int(analysis.get('leverage', self.leverage))
                 
                 # v43.3.1 [GWEN OVERDRIVE] Target 50x for Blitz
                 if self.profile_type == 'blitz':
                     leverage = max(leverage, 25)
                     if analysis.get('confidence', 0) > 0.85: leverage = 50
+                
+                # v43.3.11 [GWEN FIX] Pass leverage to sizing to ensure margin coherence
+                amount = self._calculate_order_amount(symbol, price, leverage=leverage)
                 
                 await self.gateway.set_leverage(symbol, leverage)
                 await self.gateway.place_order(symbol, side.lower(), amount)
@@ -247,12 +253,14 @@ class CryptoBot:
         except Exception as e:
             logger.error(f"❌ [PARTIAL FAILED] {e}")
 
-    def _calculate_order_amount(self, symbol, price):
+    def _calculate_order_amount(self, symbol, price, leverage=None):
         try:
+            # v43.3.11 [GWEN FIX] Use dynamic leverage for precise sizing
+            target_leverage = leverage or self.leverage
             equity = self.latest_account_data.get('equity', 0)
             if equity < 5.1: return 0
             margin_usdt = max(5.1, equity * (self.percent_per_trade / 100.0))
-            notional = margin_usdt * self.leverage
+            notional = margin_usdt * target_leverage
             amount = notional / price
             return float(self.gateway.exchange.amount_to_precision(symbol, amount))
         except: return 0
