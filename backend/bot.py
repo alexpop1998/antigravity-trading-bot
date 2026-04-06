@@ -337,10 +337,27 @@ class CryptoBot:
     async def run_zombie_sync_loop(self):
         while True:
             try:
-                if not self.initialized: await asyncio.sleep(30); continue
-                await self.gateway.sync_zombie_positions()
-                await asyncio.sleep(300)
-            except: await asyncio.sleep(60)
+                if not self.initialized: await asyncio.sleep(10); continue
+                zombies = await self.gateway.sync_zombie_positions()
+                for z in zombies:
+                    symbol = z['symbol']
+                    if symbol not in self.trade_levels:
+                        logger.warning(f"🧟 [ZOMBIE ADOPTION] Found orphan position for {symbol}. Adopting now.")
+                        # v43.3.3 [GWEN FIX] Default SL at 1.5% from current entry if unknown
+                        sl_price = z['entry_price'] * (0.985 if z['side'] == 'long' else 1.015)
+                        self.trade_levels[symbol] = {
+                            'symbol': symbol,
+                            'side': z['side'],
+                            'entry_price': z['entry_price'],
+                            'sl': sl_price,
+                            'opened_at': int(time.time()),
+                            'leverage': z['leverage'],
+                            'tp1_hit': False
+                        }
+                await asyncio.sleep(60) # Increased frequency for emergency recovery
+            except Exception as e: 
+                logger.error(f"❌ Zombie loop error: {e}")
+                await asyncio.sleep(30)
 
     async def run_margin_cleanup_loop(self):
         while True:
