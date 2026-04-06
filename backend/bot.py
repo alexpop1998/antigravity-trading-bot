@@ -340,7 +340,8 @@ class CryptoBot:
                 if not self.initialized: await asyncio.sleep(10); continue
                 zombies = await self.gateway.sync_zombie_positions()
                 for z in zombies:
-                    symbol = z['symbol']
+                    # v43.3.4 [GWEN FIX] ALWAYS Normalize symbol before adoption
+                    symbol = self.gateway.normalize_symbol(z['symbol'])
                     if symbol not in self.trade_levels:
                         logger.warning(f"🧟 [ZOMBIE ADOPTION] Found orphan position for {symbol}. Adopting now.")
                         # v43.3.3 [GWEN FIX] Default SL at 1.5% from current entry if unknown
