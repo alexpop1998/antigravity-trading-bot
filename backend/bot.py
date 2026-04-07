@@ -276,9 +276,13 @@ class CryptoBot:
             # v43.3.11 [GWEN FIX] Use dynamic leverage for precise sizing
             target_leverage = leverage or self.leverage
             equity = self.latest_account_data.get('equity', 0)
-            avail = self.latest_account_data.get('available', 0)
+            avail = float(balance.get('available', 0) or 0)
             
-            if equity < 5.1: return 0
+            # v43.5.0 [DEBUG LOG] Force transparency on margin
+            logger.info(f"💰 [MARGIN CHECK] {symbol} | Available: ${avail:.2f} | Equity: ${equity:.2f}")
+            
+            if avail < 1.0:
+                return 0
             
             # v43.3.12 [SURVIVOR FIX] Adapt to available margin
             target_margin = equity * (self.percent_per_trade / 100.0)
@@ -325,11 +329,15 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.20: # v43.4.2 [OPTIMIZATION] Lowered to 0.20 for current market
+                        if tech_snapshot['tech_score'] >= 0.50: # v43.5.0 [COST CAPPING] Ultra-strict threshold
                             candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
                 
-                candidates.sort(key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)
+                # v43.5.0 [COST Capping] Only analyze top 3 best signals per cycle
+                candidates = sorted(candidates, key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)[:3]
+                
+                if not candidates:
+                    pass
                 for cand in candidates[:3]:
                     symbol = cand['symbol']
                     analysis = await self.strategy.analyze_opportunity(symbol, {'df': cand['df']}, cand['tech_snapshot'])

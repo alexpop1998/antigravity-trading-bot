@@ -94,24 +94,23 @@ class ExchangeGateway:
     async def fetch_balance_safe(self) -> Dict[str, Any]:
         """
         Fetches account equity and balance safely, handling exchange-specific structures.
+        v43.5.0 [TIMEOUT PROTECTION] Added explicit 10s wait_for.
         """
         try:
-            balance = await self.exchange.fetch_balance()
+            # v43.5.0 [ROBUSTNESS] Force 10s timeout to prevent hanging
+            balance = await asyncio.wait_for(self.exchange.fetch_balance(), timeout=10.0)
             equity = 0.0
             
             if self.exchange_name == "bitget":
-                # Bitget Swap usually returns equity in 'info' as a dict or inside a list
                 info = balance.get('info', {})
                 if isinstance(info, list):
-                    # Bitget Swap returns a list of dictionaries per margin coin
                     for item in info:
                         if isinstance(item, dict):
-                            # Try multiple possible equity fields used by Bitget
                             val = item.get('accountEquity') or item.get('usdtEquity') or item.get('equity', 0)
                             equity += float(val)
                 else:
                     equity = float(info.get('accountEquity') or info.get('usdtEquity') or info.get('equity', 0))
-            # v43.3.12 [SURVIVOR FIX] Capture real available margin for Bitget
+            
             avail = float(balance.get('free', {}).get('USDT', 0))
             
             # v43.4.1 [GWEN ROBUSTNESS] Fallback to raw info for Bitget V2 availability
@@ -119,18 +118,18 @@ class ExchangeGateway:
                 info = balance.get('info', {})
                 if isinstance(info, list):
                     for item in info:
-                        if (item.get('marginCoin') == 'USDT') or (item.get('coin') == 'USDT'):
-                            avail = float(item.get('available') or item.get('availableMargin') or 0)
+                        # v43.5.0 Improved check for Bitget V2 mapping
+                        if item.get('marginCoin') == 'USDT' or item.get('coin') == 'USDT':
+                            avail = float(item.get('available') or item.get('availableMargin') or item.get('availableAmount') or 0)
                             break
             
-            return {
-                'equity': equity,
-                'available': avail,
-                'raw': balance
-            }
+            return {'equity': equity, 'available': avail, 'raw': balance}
+        except asyncio.TimeoutError:
+            logger.error("🛑 [GATEWAY] Balance fetch TIMEOUT after 10s.")
+            return {'equity': 0.0, 'available': 0.0, 'raw': {}}
         except Exception as e:
             logger.error(f"❌ Failed to fetch balance: {e}")
-            return {'equity': 0.0, 'raw': {}}
+            return {'equity': 0.0, 'available': 0.0, 'raw': {}}
 
     async def place_order(self, symbol: str, side: str, amount: float, price: Optional[float] = None, params: Dict = None, is_close: bool = False):
         """Standardized order placement with error handling."""
