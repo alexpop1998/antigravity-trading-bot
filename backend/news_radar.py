@@ -4,6 +4,7 @@ import logging
 import httpx
 import os
 import json
+import time
 from typing import Dict, List, Any
 from bs4 import BeautifulSoup
 
@@ -23,19 +24,27 @@ class NewsRadar:
                          "partnership", "mainnet", "upgrade", "acquired", "inflation", "rates"]
         self.seen_guids = set()
         
-        # --- v45.0.0 DEEPSEEK UPGRADE ---
-        self.api_key = os.getenv("LLM_API_KEY")
-        self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
-        self.model_name = os.getenv("LLM_MODEL_NAME", "deepseek-chat")
-        self.api_endpoint = f"{self.base_url}/v1/chat/completions"
+        # --- v51.3.1 [DYNAMIC REFRESH] ---
+        self._refresh_api_config()
         
         self.semaphore = self.bot.ai_semaphore
         self.hourly_ai_limit = 20 # Increased for DeepSeek efficiency
         self.hourly_calls = 0
         self.last_reset_time = 0
 
+    def _refresh_api_config(self):
+        """[V51.6.1] [GWEN PURGA] Detect and kill Google domain remnants."""
+        self.api_key = os.getenv("LLM_API_KEY")
+        self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").rstrip('/')
+        if "google" in self.base_url.lower():
+            self.base_url = "https://api.deepseek.com"
+            logger.warning("☣️ [NEWS] Detected Google Poison in Environment. Overriding to absolute DeepSeek.")
+        
+        self.api_endpoint = f"{self.base_url}/v1/chat/completions"
+
     async def _ask_deepseek(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> str:
-        """Centralized DeepSeek API Caller for News"""
+        """Centralized DeepSeek API Caller for News (v51.3.1 Instrumented)"""
+        self._refresh_api_config()
         if not self.api_key: return "NO"
         
         headers = {
@@ -53,6 +62,7 @@ class NewsRadar:
 
         async with self.semaphore:
             async with httpx.AsyncClient(timeout=30.0) as client:
+                logger.info(f"📍 [NEWS AI] Calling DeepSeek at {self.api_endpoint}...")
                 resp = await client.post(self.api_endpoint, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -78,8 +88,6 @@ class NewsRadar:
     async def process_article(self, title, link):
         try:
             await asyncio.sleep(5) 
-            
-            # High-priority keywords
             high_priority_kws = ["sec", "fed", "hack", "etf", "lawsuit", "bnb", "binance", "cz", "usdt"]
             relevant_symbols = [s.split('/')[0].lower() for s in self.bot.dynamic_symbols[:20]]
             active_symbols = [s.split('/')[0].lower() for s in self.bot.active_positions.keys()]
@@ -97,7 +105,6 @@ class NewsRadar:
             
             if len(article_content) < 100: article_content = title
 
-            # Hourly capping
             now = time.time()
             if now - self.last_reset_time > 3600:
                 self.hourly_calls = 0
@@ -109,15 +116,12 @@ class NewsRadar:
             sys_p = "Sei un Hedge Fund Manager. Rispondi ESATTAMENTE solo 'YES' o 'NO'."
             user_p = f"Articolo: {title}\nTesto: {article_content}\n\nDOMANDA: Questo articolo causerà panico/euforia irrazionale nelle prossime 24 ore?"
             
-            # Refresh Key
             self.api_key = os.getenv("LLM_API_KEY")
             verdict = await self._ask_deepseek(sys_p, user_p)
             
             if "YES" in verdict:
                 logger.info(f"🟢 Gatekeeper APPROVED: {title}")
                 self.bot.add_alert("GATEKEEPER", f"Approved: {title[:30]}...", "High Impact")
-                
-                # Sentiment check
                 sentiment_score = 50
                 if any(kw in title.lower() for kw in ["hack", "bankrupt", "sec", "crash"]): sentiment_score = 20
                 elif any(kw in title.lower() for kw in ["etf", "partnership", "upgrade"]): sentiment_score = 80
@@ -132,8 +136,5 @@ class NewsRadar:
                         asyncio.create_task(self.bot.handle_signal(symbol, "GATEKEEPER", "buy", is_black_swan=True))
             else:
                 logger.info(f"🔴 Gatekeeper REJECTED: {title}")
-
         except Exception as e:
             logger.error(f"Failed to process {link}: {e}")
-
-import time # For hourly capping

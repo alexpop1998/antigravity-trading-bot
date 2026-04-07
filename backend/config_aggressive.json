@@ -41,6 +41,7 @@
         "base_atr_multiplier": 2.5,
         "tighten_ratio": 0.8
     },
+    "ai_system_prompt": "Sei un TREND HUNTER aggressivo. Cerchi breakout di volatilità e trend di medie dimensioni. Approva se vedi una chiara direzione supportata da volume e breakout di livelli tecnici. Accetti drawdown temporanei per catturare movimenti esplosivi. La tua priorità è non perdere il trend principale.",
     "strategic_params": {
         "llm_cooldown_seconds": 300,
         "news_shield_seconds": 600,

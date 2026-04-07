@@ -52,13 +52,13 @@ class AssetScanner:
                 volume = float(data.get('quoteVolume') or 0) # 24h Volume in USDT
                 change_pct = abs(float(data.get('percentage') or 0)) # 24h Absolute change
                 
-                # v43.3 [GWEN FIX] Hardened Liquidity & Volatility Audit
-                # Rule 1: Minimum Liquidity (1M USDT) for Blitz
-                if volume < 1_000_000:
+                # v43.3 [GWEN FIX] Hardened Liquidity & Volatility Audit (v49.0.0 Refined)
+                # Rule 1: Minimum Liquidity (300k USDT) for high-frequency Blitz
+                if volume < 300_000:
                     continue
                 
-                # Rule 2: Minimum Volatility (0.5%) to avoid stagnant 'capital traps'
-                if change_pct < 0.5:
+                # Rule 2: Minimum Volatility (0.1%) to include early-stage breakouts
+                if change_pct < 0.1:
                     continue
                 
                 # Momentum Score: A mix of high volume and high volatility

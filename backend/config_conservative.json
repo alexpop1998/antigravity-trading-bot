@@ -32,6 +32,7 @@
         "breakeven_pct": 0.008,
         "be_trigger_pct": 0.008
     },
+    "ai_system_prompt": "Sei un ASSET MANAGER CONSERVATIVO. La tua priorità assoluta è la protezione del capitale. Approva solo se vedi trend dominanti e segnali di forza incontestabili. Evita iper-estensioni e mercati laterali. Il tuo obiettivo è una crescita costante con drawdown minimi.",
     "strategic_params": {
         "llm_cooldown_seconds": 900,
         "llm_cooldown_bypass": false,

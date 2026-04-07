@@ -162,12 +162,18 @@ class ExchangeGateway:
             symbol = self.normalize_symbol(symbol)
             params = params or {}
             
-            # 🛡️ BITGET HEDGED-MODE CLOSURE FIX (v31.17)
-            if is_close and self.exchange_name == "bitget":
-                params['reduceOnly'] = True
-                # If we are selling to close, the holdSide must be 'long'
-                params['holdSide'] = 'long' if side.lower() == 'sell' else 'short'
-                logger.info(f"🛡️ [GATEWAY] Applying Close-Only params for {symbol} | Side: {side}")
+            # --- v51.0.0 [BITGET HEDGED-MODE MASTER FIX] ---
+            if self.exchange_name == "bitget":
+                # For Bitget, 'holdSide' is mandatory in Hedged Mode
+                # If we are BUYING, we want a 'long' position. If SELLING, a 'short' position.
+                side_lower = side.lower()
+                if is_close:
+                    params['reduceOnly'] = True
+                    params['holdSide'] = 'long' if side_lower == 'sell' else 'short'
+                else:
+                    params['holdSide'] = 'long' if side_lower == 'buy' else 'short'
+                
+                logger.info(f"⚙️ [GATEWAY] Forcing Bitget holdSide: {params['holdSide']} for {symbol}")
 
             if price:
                 return await self._execute_with_backoff(self.exchange.create_order, symbol, 'limit', side, amount, price, params)

@@ -37,6 +37,7 @@
         "base_atr_multiplier": 1.5,
         "tighten_ratio": 0.9
     },
+    "ai_system_prompt": "Sei un ASSET MANAGER istituzionale. La tua priorità è la conservazione del capitale e la precisione chirurgica. Approva solo se esiste una convergenza perfetta tra trend, volume e indicatori di momentum. Evita situazioni di incertezza e noise di mercato. Il tuo obiettivo è un Win-Rate elevato su operazioni a bassa frequenza.",
     "strategic_params": {
         "llm_cooldown_seconds": 1800,
         "llm_cooldown_bypass": false,

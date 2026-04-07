@@ -74,8 +74,16 @@ class LLMAnalyst:
     async def decide_strategy(self, symbol, side, signal_type, indicators, mtf_context="N/A", news_context="N/A"):
         """Performs a strategic AI review via DeepSeek V3."""
         try:
-            # Refresh AI config
+            # [v51.6.1] [GWEN PURGA] Detect and kill Google domain remnants
+            self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com").rstrip('/')
+            if "google" in self.base_url.lower():
+                self.base_url = "https://api.deepseek.com"
+                logger.warning("☣️ [CORTEX] Detected Google Poison in Environment. Overriding to absolute DeepSeek.")
+            
+            self.api_endpoint = f"{self.base_url}/v1/chat/completions"
             self.api_key = os.getenv("LLM_API_KEY")
+            
+            logger.info(f"📍 [CORTEX] Analyzing {symbol} via {self.api_endpoint}...")
             
             stats = self.bot.db.get_ai_performance_stats(hours=24)
             memory_context = "\nPERFORMANCE RECENTE (24H):\n"
@@ -89,11 +97,13 @@ class LLMAnalyst:
             ai_prompts = self.bot.config.get('ai_prompts', {})
             philosophy = ai_prompts.get("llm_philosophy", "Focus alignment.")
             
-            bias_note = ""
-            if profile_type == 'blitz':
-                bias_note = "\n🔥 MODALITÀ BLITZ: Sii estremamente aggressivo. Dai priorità alla VELOCITÀ di entrata. Se vedi momentum, APPROVA ora."
+            # [v49.0.0] Personality Decoupling
+            system_prompt = self.bot.config.get("ai_system_prompt")
+            if not system_prompt:
+                # Fallback for other profiles
+                system_prompt = "Sei un Analista Strategico di un Hedge Fund AI specializzato in HFT e Crypto Blitz trading."
             
-            system_prompt = "Sei un Analista Strategico di un Hedge Fund AI specializzato in HFT e Crypto Blitz trading."
+            bias_note = "" # No longer needed separately as it's in the dynamic prompt
             user_prompt = f"""
             {philosophy}
             Asset: {symbol} | Direzione: {side.upper()} | Tipo: {signal_type}

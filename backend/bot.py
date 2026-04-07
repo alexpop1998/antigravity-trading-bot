@@ -188,7 +188,7 @@ class CryptoBot:
                 if ref_price > 0 and curr_price > 0:
                     slippage = abs(curr_price - ref_price) / ref_price
                     if slippage > 0.005:
-                        logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled (Slip: {slippage:.2%})")
+                        logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled (Slip: {slippage:.2%}, Ref: {ref_price}, Curr: {curr_price})")
                         return
 
                 logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Score: {new_score}")
@@ -217,7 +217,9 @@ class CryptoBot:
                         else:
                             if avail_margin < 2.0: return # Still no room
                     else:
-                        if avail_margin < 2.0: return # No room for mid-score signals
+                        if avail_margin < 2.0: 
+                            logger.warning(f"🛡️ [MARGIN GUARD] {symbol} skipped. Insufficient margin ({avail_margin:.2f} USDT).")
+                            return # No room for mid-score signals
 
                 # Conflict/Flip Logic
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
@@ -404,7 +406,7 @@ class CryptoBot:
                             if analysis: break
                         except: await asyncio.sleep(2)
                     
-                    if analysis and analysis.get('decision') == 'APPROVE':
+                    if analysis and analysis.get('verdict') == 'APPROVE':
                           await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                 
                 # 6. STAGNATION AUDIT (v44.1.0 [GWEN NORMALIZATION])

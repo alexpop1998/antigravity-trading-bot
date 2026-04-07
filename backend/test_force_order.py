@@ -26,6 +26,7 @@ async def test_opening():
     
     try:
         logger.info("📡 Connecting to exchange...")
+        await bot.initialize()
         await bot.gateway.exchange.load_markets()
         
         # --- [FIX] Mock Strategy Engine / Analyst ---
