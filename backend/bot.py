@@ -89,10 +89,8 @@ class CryptoBot:
                 self.initial_wallet_balance = self.latest_account_data['equity']
                 self.db.save_state("initial_balance", self.initial_wallet_balance)
 
-            asyncio.create_task(self.run_deliberative_analysis_loop())
+            asyncio.create_task(self.run_main_atomic_loop())
             asyncio.create_task(self.run_reactive_safety_loop())
-            asyncio.create_task(self.run_zombie_sync_loop())
-            asyncio.create_task(self.run_margin_cleanup_loop())
             asyncio.create_task(self.run_macro_regime_loop())
             asyncio.create_task(self.run_news_radar_loop())
             asyncio.create_task(self.run_daily_audit_loop())
@@ -104,15 +102,54 @@ class CryptoBot:
             logger.error(f"Initialization Failed: {e}")
 
     async def sync_state(self):
+        """🧬 [ATOMIC PULSE] Unified state synchronization."""
         try:
+            # v44.0.0 [GWEN FIX] Synchronous sequential fetch to ensure consistency
             balance_data = await self.gateway.fetch_balance_safe()
-            self.latest_account_data['equity'] = balance_data['equity']
+            self.latest_account_data['balance'] = float(balance_data.get('balance', 0))
+            self.latest_account_data['equity'] = float(balance_data.get('equity', 0))
+            self.latest_account_data['available'] = float(balance_data.get('available', 0))
+            
             raw = balance_data['raw']
             self.latest_account_data['margin_ratio'] = float(raw.get('info', {}).get('marginRatio', 0)) if isinstance(raw.get('info'), dict) else 0.0
+            
+            # v44.0.0 [SYNC] Immediate position adoption (Zombie & Ghost protection)
             positions = await self.gateway.fetch_positions_robustly()
+            current_symbols = [p['symbol'] for p in positions]
+            
+            # v44.0.0 [SIDE RECONCILE] Ensure local side matches exchange truth
+            for p in positions:
+                sym = p['symbol']
+                exchange_side = p['side'].lower()
+                
+                if sym not in self.trade_levels:
+                    logger.warning(f"🧟 [ADOPTION] Adopting orphan {sym} into internal levels.")
+                    sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
+                    self.trade_levels[sym] = {
+                        'symbol': sym, 'side': exchange_side, 'entry_price': p['entry_price'],
+                        'amount': p['amount'], 'leverage': p['leverage'], 'opened_at': time.time(),
+                        'sl': p['entry_price'] * (1 - sl_pct if exchange_side == 'long' else 1 + sl_pct),
+                        'tp1_hit': False, 'entry_score': 0.8 # Manual assumption
+                    }
+                else:
+                    local_side = self.trade_levels[sym].get('side', '').lower()
+                    if local_side != exchange_side:
+                        logger.warning(f"🔄 [SIDE RECONCILE] {sym} mismatch: Local {local_side} vs Exch {exchange_side}. Correcting.")
+                        self.trade_levels[sym]['side'] = exchange_side
+                        # Force SL recalculation on side flip
+                        sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
+                        self.trade_levels[sym]['sl'] = p['entry_price'] * (1 - sl_pct if exchange_side == 'long' else 1 + sl_pct)
+            
+            # prune stale positions
+            for sym in list(self.trade_levels.keys()):
+                if sym not in current_symbols:
+                    logger.warning(f"🧹 [PRUNE] Removing stale {sym} (Manual close detected).")
+                    del self.trade_levels[sym]
+            
             self.active_positions = {p['symbol']: ('LONG' if p['side'] == 'long' else 'SHORT') for p in positions}
+            self.db.save_state("trade_levels", self.trade_levels)
         except Exception as e:
-            logger.error(f"Sync State Failed: {e}")
+            logger.error(f"❌ [ATOMIC SYNC FAILED] {e}")
 
     async def handle_signal(self, symbol, source, side, confidence=1.0, is_black_swan=False, metadata=None):
         try:
@@ -271,110 +308,135 @@ class CryptoBot:
             logger.error(f"❌ [PARTIAL FAILED] {e}")
 
     async def _calculate_order_amount(self, symbol, price, leverage=None):
+        """🧬 [LEGACY SIZING] Robust margin calculation with safety buffer."""
         try:
-            # v43.4.5 [BLINDATURA] Zero Price Protection
+            # v44.0.0 [ZERO PRICE GUARD]
             if not price or float(price) <= 0:
                 logger.error(f"❌ [SIZING] Invalid price for {symbol}: {price}. Skipping.")
                 return 0
             
-            # v43.3.11 [GWEN FIX] Use dynamic leverage for precise sizing
-            # v43.5.1 [ASYNC FIX] Added await to gateway call
-            balance = await self.gateway.fetch_balance_safe()
+            # Use current atomic state (updated in main loop)
+            equity = float(self.latest_account_data.get('equity', 0))
+            avail = float(self.latest_account_data.get('available', 0))
             target_leverage = leverage or self.leverage
-            equity = float(balance.get('equity', 0) or self.latest_account_data.get('equity', 10.0))
-            avail = float(balance.get('available', 0) or self.latest_account_data.get('available', 5.0))
             
-            # v43.5.2 [FALLBACK] Ensure we have some default values if gateway fails
-            if equity <= 0: equity = float(self.latest_account_data.get('equity', 10.0))
-            if avail <= 0: avail = float(self.latest_account_data.get('available', 5.0))
-            
-            # v43.5.0 [DEBUG LOG] Force transparency on margin
-            logger.info(f"💰 [MARGIN CHECK] {symbol} | Available: ${avail:.2f} | Equity: ${equity:.2f}")
+            # v44.0.0 [DEBUG LOG] Pure transparency
+            logger.info(f"💰 [SIZING AUDIT] {symbol} | Avail: ${avail:.2f} | Eq: ${equity:.2f} | Pct: {self.percent_per_trade}%")
             
             if avail < 1.0:
+                logger.warning(f"⚠️ [SIZING] Available margin too low ($ {avail:.2f}). Skipping.")
                 return 0
             
-            # v43.3.12 [SURVIVOR FIX] Adapt to available margin
+            # Target sizing based on equity percentage (e.g., 50% for Blitz)
             target_margin = equity * (self.percent_per_trade / 100.0)
-            # Use 95% of available if we can't reach target, but ensure it's at least $1 for Bitget limits
-            margin_to_use = min(max(5.1, target_margin), avail * 0.95)
             
-            if margin_to_use < 1.0: 
-                logger.warning(f"⚠️ [SURVIVOR] Insufficient margin for {symbol} ($ {margin_to_use:.2f})")
-                return 0
+            # v44.0.0 [MARGIN BUFFER] Legacy v29 logic: use 95% of available to allow for fees/price-shift
+            # Ensure we respect Bitget's $5 minimum notional by targeting at least $5.1
+            margin_to_use = min(target_margin, avail * 0.95)
+            
+            # Hard floor for Bitget execution ($5 min notional)
+            if (margin_to_use * target_leverage) < 5.0:
+                # Try to boost margin to reach $5.1 if available
+                if avail >= 5.1 / target_leverage:
+                    margin_to_use = 5.1 / target_leverage
+                else:
+                    logger.warning(f"⚠️ [SIZING] Notional too low for {symbol} ($ {margin_to_use * target_leverage:.2f} < $5.0)")
+                    return 0
                 
-            if margin_to_use < target_margin:
-                logger.info(f"🦾 [SURVIVOR SIZING] Reduced margin for {symbol} ($ {margin_to_use:.2f})")
+            notional = margin_to_use * target_leverage
+            amount = notional / price
+            
+            # Apply precision filter from exchange
+            final_amount = float(self.gateway.exchange.amount_to_precision(symbol, amount))
+            logger.info(f"✅ [SIZING DONE] {symbol} | Final Amount: {final_amount} (Notional: ${notional:.2f})")
+            return final_amount
                 
             notional = margin_to_use * target_leverage
             amount = notional / price
             return float(self.gateway.exchange.amount_to_precision(symbol, amount))
-        except: return 0
+        except Exception as e:
+            logger.error(f"❌ [SIZING ERROR] {e}")
+            return 0
 
-    async def run_deliberative_analysis_loop(self):
+    async def run_main_atomic_loop(self):
+        """🧬 [MAIN CORE] The Atomic Sniper Heartbeat (Inspired by v29)."""
         while True:
             try:
                 if not self.initialized: await asyncio.sleep(10); continue
+                
+                # 1. ATOMIC SYNC: Ensured state consistency BEFORE analysis
                 await self.sync_state()
                 
+                # 2. CIRCUIT BREAKER
                 if await self.shield.check_daily_circuit_breaker():
                     logger.warning("🚨 [HALT] Daily Loss Limit reached.")
                     await asyncio.sleep(600); continue
+
+                # 3. TICKER-FIRST SCAN (v44.0.0 [GWEN OPTIMIZATION])
+                # Replaces 60 individual fetch_ohlcv calls with ONE global ticker fetch (Zero Latency)
+                tickers = await self.gateway.exchange.fetch_tickers()
                 
-                # v43.5.3 [DB RESET] Clear ghost positions if no real positions on exchange
-                # Ensures new Sniper positions can be opened after manual closes
-                active_on_exchange = await self.gateway.fetch_positions_robustly()
-                if not active_on_exchange:
-                    logger.info("🧹 [DB RESET] No active positions on Bitget. Clearing local trade_levels ghost records.")
-                    self.trade_levels = {}
-
-                current_time = time.time()
-                if not self.dynamic_symbols or (current_time - self.last_pair_update) > self.pair_update_interval:
-                    raw_assets = await self.scanner.scan(limit=150)
-                    sorted_assets = sorted(raw_assets, key=lambda x: x.get('volume', 0), reverse=True)
-                    self.dynamic_symbols = [a['symbol'] for a in sorted_assets[:60]]
-                    self.last_pair_update = current_time
-
-                all_raw = await self.scanner.scan(active_symbols=list(self.active_positions.keys()), limit=150)
-                assets = [a for a in all_raw if a['symbol'] in self.dynamic_symbols]
+                # Filter by volume and spread to find true candidates
                 candidates = []
+                # Use current active symbols or scan for new ones
+                dynamic_symbols = list(self.dynamic_symbols) if self.dynamic_symbols else ["BTC/USDT", "ETH/USDT"]
                 
-                for asset in assets:
-                    symbol = asset['symbol']
+                for symbol, ticker in tickers.items():
+                    # Only focus on USDT symbols with high relative volume
+                    if "/USDT" in symbol and symbol not in self.config.get('blacklisted_symbols', []):
+                        vol = float(ticker.get('quoteVolume', 0))
+                        if vol > 500000: # $500k min volume filtering (Legacy v29 logic)
+                            candidates.append({'symbol': symbol, 'vol': vol, 'ticker': ticker})
+                
+                # Only analyze top 5 by volume to preserve API rate limits and speed
+                top_candidates = sorted(candidates, key=lambda x: x['vol'], reverse=True)[:5]
+                
+                # 4. DEEP ANALYSIS (Only for the elite top candidates)
+                sniper_candidates = []
+                for cand in top_candidates:
+                    symbol = cand['symbol']
                     try:
                         ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.25: # v43.5.3 [SENSITIVITY] Lowered to 0.25 for immediate unlock
-                            candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
+                        if tech_snapshot['tech_score'] >= 0.25:
+                            sniper_candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
-                
-                # v43.5.0 [COST Capping] Only analyze top 3 best signals per cycle
-                candidates = sorted(candidates, key=lambda x: x['tech_snapshot']['tech_score'], reverse=True)[:3]
-                
-                if not candidates:
-                    pass
-                for cand in candidates[:3]:
+
+                # 5. AI EXECUTION
+                for cand in sniper_candidates[:3]:
                     symbol = cand['symbol']
-                    # v43.5.3 [RESILIENCE] Added retry for LLM 503/Server errors
                     analysis = None
                     for attempt in range(3):
                         try:
                             analysis = await self.strategy.analyze_opportunity(symbol, {'df': cand['df']}, cand['tech_snapshot'])
                             if analysis: break
-                        except Exception as e:
-                            logger.warning(f"⚠️ [RETRY] AI Analysis attempt {attempt+1} failed for {symbol}: {e}")
-                            await asyncio.sleep(3)
+                        except: await asyncio.sleep(2)
                     
                     if analysis and analysis.get('decision') == 'APPROVE':
-                         await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
+                          await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                 
-                # v43.3.1 [GWEN OVERDRIVE] Fast analysis for Blitz (5 min instead of 10 min)
+                # 6. STAGNATION AUDIT (v44.0.0 [LEGACY RECOVERY])
+                # Auto-exit if position is dead flat for 3 hours
+                for symbol, trade in list(self.trade_levels.items()):
+                    if not trade: continue
+                    age_h = (time.time() - trade.get('opened_at', 0)) / 3600
+                    if age_h >= 3.0:
+                         # Fetch current price
+                         curr_price = float(tickers.get(symbol, {}).get('last', 0))
+                         if curr_price > 0:
+                             entry = trade['entry_price']
+                             pnl = abs(curr_price - entry) / entry
+                             if pnl < 0.005: # Less than 0.5% move in 3h = Stagnation
+                                 logger.warning(f"🛡️ [STAGNATION EXIT] {symbol} flat for 3h. Freeing margin.")
+                                 await self.close_position(symbol, trade, reason="STAGNATION_CLEANUP")
+
+                # Sleep until next pulse
                 wait_time = 300 if self.profile_type == 'blitz' else 600
                 await asyncio.sleep(wait_time)
             except Exception as e:
-                logger.error(f"Analysis Loop Error: {e}")
+                logger.error(f"❌ [CORE LOOP ERROR] {e}")
                 await asyncio.sleep(60)
 
     async def run_reactive_safety_loop(self):
@@ -408,52 +470,7 @@ class CryptoBot:
                 await asyncio.sleep(3600)
             except: await asyncio.sleep(300)
 
-    async def run_zombie_sync_loop(self):
-        while True:
-            try:
-                if not self.initialized: await asyncio.sleep(10); continue
-                zombies = await self.gateway.sync_zombie_positions()
-                zombie_symbols = [self.gateway.normalize_symbol(z['symbol']) for z in zombies]
-                
-                # v43.4.0 [PRUNING FIX] Remove stale positions from internal database if not on exchange
-                for symbol in list(self.trade_levels.keys()):
-                    if symbol not in zombie_symbols:
-                        logger.warning(f"🧹 [SYNC] Removing stale position for {symbol} (manual close detected).")
-                        del self.trade_levels[symbol]
-                        self.db.save_state("trade_levels", self.trade_levels)
-
-                for z in zombies:
-                    # v43.3.4 [GWEN FIX] ALWAYS Normalize symbol before adoption
-                    symbol = self.gateway.normalize_symbol(z['symbol'])
-                    if symbol not in self.trade_levels:
-                        logger.warning(f"🧟 [ZOMBIE ADOPTION] Found orphan position for {symbol}. Adopting now.")
-                        # v43.3.3 [GWEN FIX] Default SL at 1.5% from current entry if unknown
-                        sl_price = z['entry_price'] * (0.985 if z['side'] == 'long' else 1.015)
-                        self.trade_levels[symbol] = {
-                            'symbol': symbol,
-                            'side': z['side'],
-                            'entry_price': z['entry_price'],
-                            'sl': sl_price,
-                            'opened_at': int(time.time()),
-                            'leverage': z['leverage'],
-                            'tp1_hit': False
-                        }
-                await asyncio.sleep(60) # Increased frequency for emergency recovery
-            except Exception as e: 
-                logger.error(f"❌ Zombie loop error: {e}")
-                await asyncio.sleep(30)
-
-    async def run_margin_cleanup_loop(self):
-        while True:
-            try:
-                if not self.initialized: await asyncio.sleep(30); continue
-                if self.latest_account_data.get('margin_ratio', 0) >= 0.95:
-                    positions = await self.gateway.fetch_positions_robustly()
-                    if positions:
-                        worst = min(positions, key=lambda x: x['unrealized_pnl'])
-                        await self.close_position(worst['symbol'], self.trade_levels.get(worst['symbol']), "MARGIN_CLEANUP")
-                await asyncio.sleep(20)
-            except: await asyncio.sleep(20)
+    # [v44.0.0] run_zombie_sync_loop and run_margin_cleanup_loop merged into run_main_atomic_loop
 
     async def run_news_radar_loop(self):
         while True:

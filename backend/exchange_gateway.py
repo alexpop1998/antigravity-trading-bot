@@ -67,26 +67,48 @@ class ExchangeGateway:
     async def fetch_positions_robustly(self) -> List[Dict[str, Any]]:
         """
         Fetches all active positions and normalizes them into a standard internal format.
+        v44.0.0 [GWEN FIX] Uses Bitget V2 endpoint for absolute ground truth on position sides.
         """
         try:
-            raw_pos = await self.exchange.fetch_positions()
-            active = []
-            for p in raw_pos:
-                # Filter out zero positions
-                if float(p.get('contracts', 0)) > 0 or float(p.get('notional', 0)) > 0:
-                    symbol = self.normalize_symbol(p['symbol'])
-                    active.append({
-                        'symbol': symbol,
-                        'raw_symbol': p['symbol'],
-                        'side': p['side'],
-                        'contracts': float(p['contracts']),
-                        'notional': float(p['notional']),
-                        'entry_price': float(p['entryPrice']),
-                        'unrealized_pnl': float(p['unrealizedPnl']),
-                        'leverage': float(p['leverage']),
-                        'timestamp': p['timestamp']
-                    })
-            return active
+            if self.exchange_name == "bitget":
+                params = {'productType': 'USDT-FUTURES', 'marginCoin': 'USDT'}
+                res = await self.exchange.private_mix_get_v2_mix_position_all_position(params)
+                raw_list = res.get('data', [])
+                active = []
+                import time
+                for p in raw_list:
+                    if abs(float(p.get('total', 0))) > 0:
+                        symbol = self.normalize_symbol(p.get('symbol'))
+                        active.append({
+                            'symbol': symbol,
+                            'raw_symbol': p.get('symbol'),
+                            'side': p.get('holdSide', '').lower(),
+                            'contracts': abs(float(p.get('total', 0))),
+                            'notional': abs(float(p.get('total', 0))) * float(p.get('openPriceAvg', 1.0)),
+                            'entry_price': float(p.get('openPriceAvg', 0)),
+                            'unrealized_pnl': float(p.get('unrealizedPL', 0)),
+                            'leverage': float(p.get('leverage', 10)),
+                            'timestamp': int(time.time() * 1000)
+                        })
+                return active
+            else:
+                raw_pos = await self.exchange.fetch_positions()
+                active = []
+                for p in raw_pos:
+                    if float(p.get('contracts', 0)) > 0 or float(p.get('notional', 0)) > 0:
+                        symbol = self.normalize_symbol(p['symbol'])
+                        active.append({
+                            'symbol': symbol,
+                            'raw_symbol': p['symbol'],
+                            'side': p['side'],
+                            'contracts': float(p['contracts']),
+                            'notional': float(p['notional']),
+                            'entry_price': float(p['entryPrice']),
+                            'unrealized_pnl': float(p['unrealizedPnl']),
+                            'leverage': float(p['leverage']),
+                            'timestamp': p['timestamp']
+                        })
+                return active
         except Exception as e:
             logger.error(f"❌ Failed to fetch positions: {e}")
             return []
