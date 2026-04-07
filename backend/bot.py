@@ -412,7 +412,7 @@ class CryptoBot:
                             if analysis: break
                         except: await asyncio.sleep(2)
                     
-                    if analysis and analysis.get('verdict') == 'APPROVE':
+                    if analysis and (analysis.get('ai_approved') or analysis.get('score', 0) >= self.consensus_threshold):
                           await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                 
                 # 6. STAGNATION AUDIT (v44.1.0 [GWEN NORMALIZATION])
