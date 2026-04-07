@@ -205,7 +205,10 @@ class CryptoBot:
                 
                 # v43.4.4 [GWEN MASTER] Adaptive Sniper Sizing
                 # v43.5.1 [ASYNC FIX] Now using await for sizing
+                # v43.5.2 [DIAGNOSTIC] Checkpoint before sizing
+                logger.info(f"📍 [CHECKPOINT] Calculating sizing for {symbol}...")
                 amount = await self._calculate_order_amount(symbol, price, leverage=leverage)
+                logger.info(f"📍 [CHECKPOINT] Sizing for {symbol}: {amount}")
                 
                 # v43.4.1 [GWEN FIX] Log if amount is too low to trade
                 if amount <= 0:
@@ -278,8 +281,12 @@ class CryptoBot:
             # v43.5.1 [ASYNC FIX] Added await to gateway call
             balance = await self.gateway.fetch_balance_safe()
             target_leverage = leverage or self.leverage
-            equity = self.latest_account_data.get('equity', 0)
-            avail = float(balance.get('available', 0) or 0)
+            equity = float(balance.get('equity', 0) or self.latest_account_data.get('equity', 10.0))
+            avail = float(balance.get('available', 0) or self.latest_account_data.get('available', 5.0))
+            
+            # v43.5.2 [FALLBACK] Ensure we have some default values if gateway fails
+            if equity <= 0: equity = float(self.latest_account_data.get('equity', 10.0))
+            if avail <= 0: avail = float(self.latest_account_data.get('available', 5.0))
             
             # v43.5.0 [DEBUG LOG] Force transparency on margin
             logger.info(f"💰 [MARGIN CHECK] {symbol} | Available: ${avail:.2f} | Equity: ${equity:.2f}")

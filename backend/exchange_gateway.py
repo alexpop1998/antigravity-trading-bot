@@ -98,7 +98,10 @@ class ExchangeGateway:
         """
         try:
             # v43.5.0 [ROBUSTNESS] Force 10s timeout to prevent hanging
+            # v43.5.2 [DIAGNOSTIC] Log API start
+            logger.info("📍 [GATEWAY] Attempting Bitget balance fetch...")
             balance = await asyncio.wait_for(self.exchange.fetch_balance(), timeout=10.0)
+            logger.info("✅ [GATEWAY] Bitget balance fetched successfully.")
             equity = 0.0
             
             if self.exchange_name == "bitget":
