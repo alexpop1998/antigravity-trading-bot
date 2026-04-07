@@ -115,10 +115,16 @@ class NewsRadar:
             await asyncio.sleep(10) 
             
             # 0. Local Filter (Pre-Gatekeeper)
-            # Only use LLM for extremely high-priority subjects to save tokens
+            # v43.4.0 [COST OPTIMIZATION] Only evaluate news for active or top potential symbols
             high_priority_kws = ["sec", "fed", "hack", "etf", "lawsuit", "bnb", "binance", "cz", "usdt"]
-            if not any(kw in title.lower() for kw in high_priority_kws):
-                logger.info(f"⏭️ Skipping Gatekeeper (Non-critical): {title}")
+            
+            # Add dynamic symbols from bot scanner
+            relevant_symbols = [s.split('/')[0].lower() for s in self.bot.dynamic_symbols[:10]]
+            active_symbols = [s.split('/')[0].lower() for s in self.bot.active_positions.keys()]
+            watch_list = list(set(high_priority_kws + relevant_symbols + active_symbols))
+            
+            if not any(kw in title.lower() for kw in watch_list):
+                logger.info(f"⏭️ Skipping Gatekeeper (Irrelevant to current focus): {title}")
                 return
 
             logger.info(f"🕷️ Scraping article text from: {link}")

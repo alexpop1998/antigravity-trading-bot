@@ -315,7 +315,7 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.10: # Gwen: lowered prefilter for Blitz
+                        if tech_snapshot['tech_score'] >= 0.30: # v43.4.0 [COST OPTIMIZATION] Reduced LLM calls
                             candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
                 
@@ -369,6 +369,15 @@ class CryptoBot:
             try:
                 if not self.initialized: await asyncio.sleep(10); continue
                 zombies = await self.gateway.sync_zombie_positions()
+                zombie_symbols = [self.gateway.normalize_symbol(z['symbol']) for z in zombies]
+                
+                # v43.4.0 [PRUNING FIX] Remove stale positions from internal database if not on exchange
+                for symbol in list(self.trade_levels.keys()):
+                    if symbol not in zombie_symbols:
+                        logger.warning(f"🧹 [SYNC] Removing stale position for {symbol} (manual close detected).")
+                        del self.trade_levels[symbol]
+                        self.db.save_state("trade_levels", self.trade_levels)
+
                 for z in zombies:
                     # v43.3.4 [GWEN FIX] ALWAYS Normalize symbol before adoption
                     symbol = self.gateway.normalize_symbol(z['symbol'])

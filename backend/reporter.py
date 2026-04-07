@@ -56,9 +56,11 @@ class BotReporter:
             cum_pnl = 0
             chart_points = []
             for t in closed_trades:
-                cum_pnl += float(t['pnl'])
+                pnl_val = float(t.get('pnl', 0) or 0)
+                cum_pnl += pnl_val
+                ts = t.get('timestamp') or "N/A"
                 chart_points.append({
-                    "x": t['timestamp'].split(' ')[1] if ' ' in t['timestamp'] else t['timestamp'],
+                    "x": ts.split(' ')[1] if ' ' in ts else ts,
                     "y": round(cum_pnl, 2)
                 })
             
@@ -160,7 +162,7 @@ class BotReporter:
         <table style="margin-bottom:40px">
             <thead><tr><th>Asset</th><th>Side</th><th>Entry Price</th><th>Unrealized Performance</th></tr></thead>
             <tbody>
-                {"".join([f"<tr><td style='font-weight:700'>{p.get('symbol')}</td><td><span class='badge'>{p.get('side','').upper()}</span></td><td style='font-family:monospace'>${float(p.get('entryPrice',0)):,.4f}</td><td class='{'pos' if float(p.get('unrealizedPnl',0)) >= 0 else 'neg'}' style='font-weight:800'>${float(p.get('unrealizedPnl',0)):+,.2f}</td></tr>" for p in active_positions]) if active_positions else "<tr><td colspan='4' style='text-align:center; opacity:0.3; padding:40px;'>No active market exposure detected.</td></tr>"}
+                {"".join([f"<tr><td style='font-weight:700'>{p.get('symbol', 'N/A')}</td><td><span class='badge'>{str(p.get('side','N/A')).upper()}</span></td><td style='font-family:monospace'>${float(p.get('entryPrice',0) or 0):,.4f}</td><td class='{'pos' if float(p.get('unrealizedPnl',0) or 0) >= 0 else 'neg'}' style='font-weight:800'>${float(p.get('unrealizedPnl',0) or 0):+,.2f}</td></tr>" for p in active_positions]) if active_positions else "<tr><td colspan='4' style='text-align:center; opacity:0.3; padding:40px;'>No active market exposure detected.</td></tr>"}
             </tbody>
         </table>
 
@@ -168,7 +170,7 @@ class BotReporter:
         <table>
             <thead><tr><th>Timestamp</th><th>Symbol</th><th>Side</th><th>Closed PnL</th><th>Execution Note</th></tr></thead>
             <tbody>
-                {"".join([f"<tr><td style='opacity:0.4; font-size:13px;'>{t['timestamp']}</td><td style='font-weight:700'>{t['symbol']}</td><td><span class='badge' style='background:rgba(255,255,255,0.05); color:var(--text);'>{t['side']}</span></td><td class='{'pos' if float(t['pnl']) >= 0 else 'neg'}' style='font-weight:800'>${float(t['pnl']):+,.2f}</td><td style='font-size:12px; opacity:0.6;'>{t['reason']}</td></tr>" for t in list(reversed(closed_trades))[:15]]) if closed_trades else "<tr><td colspan='5' style='text-align:center; opacity:0.3; padding:40px;'>Historical data pending synchronisation.</td></tr>"}
+                {"".join([f"<tr><td style='opacity:0.4; font-size:13px;'>{t.get('timestamp','N/A')}</td><td style='font-weight:700'>{t.get('symbol','N/A')}</td><td><span class='badge' style='background:rgba(255,255,255,0.05); color:var(--text);'>{t.get('side','N/A')}</span></td><td class='{'pos' if float(t.get('pnl',0) or 0) >= 0 else 'neg'}' style='font-weight:800'>${float(t.get('pnl',0) or 0):+,.2f}</td><td style='font-size:12px; opacity:0.6;'>{t.get('reason','N/A')}</td></tr>" for t in list(reversed(closed_trades))[:15]]) if closed_trades else "<tr><td colspan='5' style='text-align:center; opacity:0.3; padding:40px;'>Historical data pending synchronisation.</td></tr>"}
             </tbody>
         </table>
     </div>
