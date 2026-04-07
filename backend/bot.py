@@ -203,8 +203,10 @@ class CryptoBot:
                     leverage = max(leverage, 25)
                     if analysis.get('confidence', 0) > 0.85: leverage = 50
                 
-                # v43.3.11 [GWEN FIX] Pass leverage to sizing to ensure margin coherence
-                amount = self._calculate_order_amount(symbol, price, leverage=leverage)
+                # v43.4.1 [GWEN FIX] Log if amount is too low to trade
+                if amount <= 0:
+                    logger.warning(f"⚠️ [EXECUTION] Skipping order for {symbol}: Calculated amount is 0.0 (Check margin balance).")
+                    return
                 
                 await self.gateway.set_leverage(symbol, leverage)
                 await self.gateway.place_order(symbol, side.lower(), amount)

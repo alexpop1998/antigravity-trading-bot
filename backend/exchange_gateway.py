@@ -111,11 +111,17 @@ class ExchangeGateway:
                             equity += float(val)
                 else:
                     equity = float(info.get('accountEquity') or info.get('usdtEquity') or info.get('equity', 0))
-            else:
-                equity = float(balance.get('total', {}).get('USDT', 0))
-                
             # v43.3.12 [SURVIVOR FIX] Capture real available margin for Bitget
             avail = float(balance.get('free', {}).get('USDT', 0))
+            
+            # v43.4.1 [GWEN ROBUSTNESS] Fallback to raw info for Bitget V2 availability
+            if self.exchange_name == "bitget" and avail <= 0:
+                info = balance.get('info', {})
+                if isinstance(info, list):
+                    for item in info:
+                        if (item.get('marginCoin') == 'USDT') or (item.get('coin') == 'USDT'):
+                            avail = float(item.get('available') or item.get('availableMargin') or 0)
+                            break
             
             return {
                 'equity': equity,
