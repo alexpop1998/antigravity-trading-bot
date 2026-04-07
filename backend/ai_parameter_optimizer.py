@@ -13,12 +13,13 @@ class AIParameterOptimizer:
     def __init__(self, bot_instance):
         self.bot = bot_instance
         self.api_key = os.getenv("LLM_API_KEY")
-        self.base_url = os.getenv("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-        self.model_name = os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash-latest")
+        self.base_url = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
+        self.model_name = os.getenv("LLM_MODEL_NAME", "deepseek-chat")
         
+        # --- v45.0.0 DEEPSEEK (OpenAI-Compatible) ---
         self.ai_client = AsyncOpenAI(
             api_key=self.api_key,
-            base_url=self.base_url
+            base_url=f"{self.base_url}/v1"
         ) if self.api_key else None
         
         self.config_path = os.path.join(os.path.dirname(__file__), self.bot.config_file)

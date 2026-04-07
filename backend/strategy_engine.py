@@ -19,6 +19,7 @@ class StrategyEngine:
         self.predictor = MLPredictor()
         self.analyst = LLMAnalyst(self.bot)
         self.regime_detector = RegimeDetector()
+        self.mtf_cache = {} # v44.1.0 [GWEN OPTIMIZATION]
         
         # v29 logic config
         tp = getattr(bot_instance, 'config', {}).get('trading_parameters', {})
@@ -189,14 +190,24 @@ class StrategyEngine:
             return {'symbol': symbol, 'score': 0.0, 'error': str(e), 'side': side}
 
     async def _check_mtf_trend(self, symbol: str) -> int:
+        now = time.time()
+        if symbol in self.mtf_cache:
+            bias, timestamp = self.mtf_cache[symbol]
+            if (now - timestamp) < 3600: # 1h TTL
+                return bias
+
         try:
             ohlcv_4h = await self.bot.gateway.exchange.fetch_ohlcv(symbol, '4h', limit=100)
             df_4h = pd.DataFrame(ohlcv_4h, columns=['t','o','h','l','c','v'])
             ema200 = df_4h['c'].ewm(span=200, adjust=False).mean().iloc[-1]
             last_close = df_4h['c'].iloc[-1]
-            if last_close > (ema200 * 1.002): return 1
-            elif last_close < (ema200 * 0.998): return -1
-            return 0
+            
+            bias = 0
+            if last_close > (ema200 * 1.002): bias = 1
+            elif last_close < (ema200 * 0.998): bias = -1
+            
+            self.mtf_cache[symbol] = (bias, now)
+            return bias
         except Exception as e:
             logger.error(f"MTF Error for {symbol}: {e}")
             return 0

@@ -11,8 +11,14 @@ class AssetScanner:
         self.allowed_symbols = allowed_symbols # Mainnet Symbols only
         # Mandatory symbols to always keep in rotation
         self.mandatory_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
-        # Symbols to ignore (stables, delisted, etc.)
-        self.blacklist = ["USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT"]
+        # Symbols to ignore (stables, delisted, non-crypto, etc.)
+        self.blacklist = [
+            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
+            "XAU/USDT:USDT", "XAG/USDT:USDT", "GOLD/USDT:USDT", "SILV/USDT:USDT",
+            "TSLA/USDT:USDT", "AAPL/USDT:USDT", "NVDA/USDT:USDT", "GOOGL/USDT:USDT",
+            "XAUT/USDT:USDT", "XAG/USDT:USDT", "PAXG/USDT:USDT", "AMZN/USDT:USDT",
+            "META/USDT:USDT", "MSFT/USDT:USDT", "TSLA/USDT", "AAPL/USDT", "NVDA/USDT"
+        ]
 
     def set_allowed_symbols(self, symbols: List[str]):
         """Updates the list of confirmed real market symbols."""
@@ -28,7 +34,7 @@ class AssetScanner:
         Scansiona tutti i mercati Futures USDT-M e restituisce i top N per (Volume * Volatilità).
         """
         try:
-            logger.info("🔍 Scanning Binance Markets for top opportunities...")
+            logger.info("🔍 Scanning Bitget Live Markets for top opportunities...")
             # Fetch all tickers
             tickers = await self.exchange.fetch_tickers()
             
@@ -47,8 +53,8 @@ class AssetScanner:
                 change_pct = abs(float(data.get('percentage') or 0)) # 24h Absolute change
                 
                 # v43.3 [GWEN FIX] Hardened Liquidity & Volatility Audit
-                # Rule 1: Minimum Liquidity (5M USDT) for clean HFT exits
-                if volume < 5_000_000:
+                # Rule 1: Minimum Liquidity (1M USDT) for Blitz
+                if volume < 1_000_000:
                     continue
                 
                 # Rule 2: Minimum Volatility (0.5%) to avoid stagnant 'capital traps'

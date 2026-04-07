@@ -33,7 +33,7 @@
         "technical_confluence_mode": "loose",
         "stop_loss_pct": 0.025,
         "take_profit_pct": 0.035,
-        "max_concurrent_positions": 2,
+        "max_concurrent_positions": 3,
         "max_global_margin_ratio": 0.98,
         "daily_loss_limit": 25.0,
         "panic_drawdown_threshold": 0.35,

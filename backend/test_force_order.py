@@ -3,6 +3,7 @@ import os
 import sys
 import logging
 import json
+import time
 from dotenv import load_dotenv
 
 # Ensure we can import from the current directory
@@ -15,100 +16,79 @@ logger = logging.getLogger("TestOpening")
 from bot import CryptoBot
 
 async def test_opening():
-    logger.info("🚀 [TEST] Initializing Diagnostic Test Opening...")
-    
-    # Force profile to blitz for the test
-    os.environ["CONFIG_PROFILE"] = "blitz"
+    logger.info("🚀 [TEST] Initializing Diagnostic Test Opening (v44.1.0)...")
     
     # Ensure .env is loaded
     load_dotenv(override=True)
+    os.environ["CONFIG_PROFILE"] = "blitz" # Force blitz
     
-    bot = CryptoBot(config_file="config_blitz.json")
+    bot = CryptoBot()
     
     try:
         logger.info("📡 Connecting to exchange...")
-        await bot.initialize()
+        await bot.gateway.exchange.load_markets()
         
-        # --- [NEW] Mock LLM Analyst to Force Approval for Test ---
+        # --- [FIX] Mock Strategy Engine / Analyst ---
         async def mock_decide_strategy(*args, **kwargs):
             logger.warning("🦾 [Test Bypass] Mocking LLM Analyst approval...")
-            return True, 1.0, bot.leverage, 1.0, 1.0, None, "TEST_FORCE_APPROVAL"
+            # (approved, confidence, strength, leverage, sl_mult, tp_mult, tp_p, reason, side)
+            return True, 0.95, 1.0, 25, 1.0, 1.0, None, "TEST_FORCE_APPROVAL", "buy"
         
-        bot.analyst.decide_strategy = mock_decide_strategy
+        bot.strategy.analyst.decide_strategy = mock_decide_strategy
         # --------------------------------------------------------
         
         # Select BTC for the test
         symbol = "BTC/USDT:USDT"
+        if symbol not in bot.gateway.exchange.markets:
+             symbol = next((k for k in bot.gateway.exchange.markets.keys() if "BTC/USDT" in k), None)
         
-        # Verify symbol exists in markets
-        if symbol not in bot.exchange.markets:
-            logger.warning(f"❌ Symbol {symbol} not found on Bitget. Checking alternatives...")
-            btc_markets = [s for s in bot.exchange.markets.keys() if "BTC/USDT" in s]
-            if btc_markets:
-                symbol = btc_markets[0]
-                logger.info(f"✅ Found alternative: {symbol}")
-            else:
-                logger.error("❌ BTC/USDT not found. Aborting.")
-                return
+        if not symbol:
+            logger.error("❌ BTC/USDT not found. Aborting.")
+            return
 
         logger.info(f"🔍 [TEST] Fetching current price for {symbol}...")
-        ticker = await bot.exchange.fetch_ticker(symbol)
+        ticker = await bot.gateway.exchange.fetch_ticker(symbol)
         price = float(ticker.get('last') or ticker.get('close'))
         logger.info(f"💰 Current Price: {price} USDT")
         
-        # --- [NEW] Check Indicators for Analysis ---
-        indicators = bot.latest_data.get(symbol, {})
-        logger.info(f"📊 Indicators for {symbol}: {json.dumps(indicators, indent=2)}")
+        # Update bot data state so execute_order has price
+        bot.latest_data[symbol] = {'price': price}
         
-        # Manually trigger execute_order
+        # Manually trigger execute_order with correct signature
         logger.info(f"🔥 [EXECUTION] Forcing Market BUY for {symbol}...")
-        # consensus_score=10 ensures it passes most internal filters
-        await bot.execute_order(
-            symbol=symbol, 
-            side='buy', 
-            current_price=price, 
-            consensus_score=10.0, 
-            signal_type='MANUAL_TEST'
-        )
+        test_analysis = {
+            'score': 0.99,
+            'side': 'buy',
+            'leverage': 25,
+            'reference_price': price,
+            'confidence': 0.95
+        }
+        
+        await bot.execute_order(symbol, 'buy', test_analysis)
         
         logger.info("⏳ Waiting for 10 seconds for position confirmation...")
         await asyncio.sleep(10)
         
-        # Refresh account state to verify position
-        await bot._update_account_state()
+        # Verify real exchange positions
+        pos_all = await bot.gateway.fetch_positions_robustly()
+        exchange_pos = [p for p in pos_all if p['symbol'] == symbol]
         
-        # Check active positions in bot state
-        is_active = bot.active_positions.get(symbol) == 'LONG'
-        
-        # Check real exchange positions via latest_account_data
-        exchange_pos = [p for p in bot.latest_account_data.get('positions', []) 
-                       if (p.get('symbol') == symbol or p.get('instId') == bot.exchange.market(symbol)['id'])
-                       and float(p.get('contracts', p.get('amount', p.get('total', 0)))) != 0]
-        
-        if is_active or exchange_pos:
-            logger.info(f"✅ Position detected! Bot State: {bot.active_positions.get(symbol)}, Exchange Scan: {len(exchange_pos)} positions.")
+        if exchange_pos:
+            logger.info(f"✅ Position detected! Amount: {exchange_pos[0].get('amount')}")
             
-            trade = bot.trade_levels.get(symbol)
-            if trade:
-                logger.info(f"📦 [TRADE DATA] Amount: {trade.get('amount')}, Entry: {trade.get('entry_price')}")
-            
-            logger.info(f"🆘 [CLOSURE] Closing position for {symbol}...")
-            # If trade is missing, we create a dummy one for the closer
-            if not trade:
-                trade = {'side': 'buy', 'amount': abs(float(exchange_pos[0].get('contracts', exchange_pos[0].get('amount', 1.0)))) if exchange_pos else 1.0}
-            
-            await bot.close_position(symbol, trade, reason="MANUAL_TEST_COMPLETED")
+            logger.info(f"🆘 [CLOSURE] Closing test position for {symbol}...")
+            await bot.gateway.close_all_for_symbol(symbol)
             logger.info("✅ Position closed successfully.")
         else:
-            logger.error("❌ No active position detected after execute_order.")
+            logger.error("❌ No active position detected after execute_order. Check Bitget logs.")
             
     except Exception as e:
         logger.error(f"❌ [ERROR] Diagnostic test failed: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        if hasattr(bot, 'exchange') and bot.exchange:
-            await bot.exchange.close()
+        if hasattr(bot, 'gateway') and bot.gateway:
+            await bot.gateway.exchange.close()
         logger.info("🏁 Test finished.")
 
 if __name__ == "__main__":

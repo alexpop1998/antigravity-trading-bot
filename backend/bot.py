@@ -350,10 +350,6 @@ class CryptoBot:
             final_amount = float(self.gateway.exchange.amount_to_precision(symbol, amount))
             logger.info(f"✅ [SIZING DONE] {symbol} | Final Amount: {final_amount} (Notional: ${notional:.2f})")
             return final_amount
-                
-            notional = margin_to_use * target_leverage
-            amount = notional / price
-            return float(self.gateway.exchange.amount_to_precision(symbol, amount))
         except Exception as e:
             logger.error(f"❌ [SIZING ERROR] {e}")
             return 0
@@ -372,40 +368,34 @@ class CryptoBot:
                     logger.warning("🚨 [HALT] Daily Loss Limit reached.")
                     await asyncio.sleep(600); continue
 
-                # 3. TICKER-FIRST SCAN (v44.0.0 [GWEN OPTIMIZATION])
-                # Replaces 60 individual fetch_ohlcv calls with ONE global ticker fetch (Zero Latency)
-                tickers = await self.gateway.exchange.fetch_tickers()
+                # 3. PANORAMIC SCAN (v46.0.0 [GWEN BLACKLIST ENFORCEMENT])
+                # Uses AssetScanner to respect hard blacklist (AAPL, TSLA, Gold, etc.)
+                active_symbols = list(self.active_positions.keys())
+                raw_candidates = await self.scanner.scan(active_symbols=active_symbols, limit=60)
                 
-                # Filter by volume and spread to find true candidates
-                candidates = []
-                # Use current active symbols or scan for new ones
-                dynamic_symbols = list(self.dynamic_symbols) if self.dynamic_symbols else ["BTC/USDT", "ETH/USDT"]
+                logger.info(f"🔍 [PULSE] Scanner retrieved {len(raw_candidates)} elite crypto assets.")
                 
-                for symbol, ticker in tickers.items():
-                    # Only focus on USDT symbols with high relative volume
-                    if "/USDT" in symbol and symbol not in self.config.get('blacklisted_symbols', []):
-                        vol = float(ticker.get('quoteVolume', 0))
-                        if vol > 500000: # $500k min volume filtering (Legacy v29 logic)
-                            candidates.append({'symbol': symbol, 'vol': vol, 'ticker': ticker})
-                
-                # Only analyze top 5 by volume to preserve API rate limits and speed
-                top_candidates = sorted(candidates, key=lambda x: x['vol'], reverse=True)[:5]
-                
-                # 4. DEEP ANALYSIS (Only for the elite top candidates)
+                # 4. DEEP ANALYSIS
                 sniper_candidates = []
-                for cand in top_candidates:
+                for cand in raw_candidates:
                     symbol = cand['symbol']
                     try:
                         ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.25:
+                        score = tech_snapshot.get('tech_score', 0)
+                        
+                        # v44.2.0 [GWEN MASTER FIX] - Remove invisible wall for Blitz
+                        if self.profile_type == 'blitz' or score >= 0.25:
+                            logger.info(f"🧬 [TECH AUDIT] {symbol} | Score: {score} | Status: {'PASS (Blitz Neutral)' if score < 0.25 else 'PASS'} -> Proceeding to AI Deep Analysis.")
                             sniper_candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
+                        else:
+                            logger.info(f"⏭️ [TECH AUDIT] {symbol} | Score: {score} | Status: REJECTED (Below 0.25 floor)")
                     except: continue
 
                 # 5. AI EXECUTION
-                for cand in sniper_candidates[:3]:
+                for cand in sniper_candidates[:20]:
                     symbol = cand['symbol']
                     analysis = None
                     for attempt in range(3):
@@ -417,18 +407,20 @@ class CryptoBot:
                     if analysis and analysis.get('decision') == 'APPROVE':
                           await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                 
-                # 6. STAGNATION AUDIT (v44.0.0 [LEGACY RECOVERY])
+                # 6. STAGNATION AUDIT (v44.1.0 [GWEN NORMALIZATION])
                 # Auto-exit if position is dead flat for 3 hours
                 for symbol, trade in list(self.trade_levels.items()):
                     if not trade: continue
                     age_h = (time.time() - trade.get('opened_at', 0)) / 3600
                     if age_h >= 3.0:
-                         # Fetch current price
-                         curr_price = float(tickers.get(symbol, {}).get('last', 0))
+                         # Normalize symbol for ticker lookup (handle Bitget suffix)
+                         ticker_key = symbol if symbol in tickers else next((k for k in tickers if k in symbol), None)
+                         curr_price = float(tickers.get(ticker_key or symbol, {}).get('last', 0))
+                         
                          if curr_price > 0:
                              entry = trade['entry_price']
                              pnl = abs(curr_price - entry) / entry
-                             if pnl < 0.005: # Less than 0.5% move in 3h = Stagnation
+                             if pnl < 0.005: 
                                  logger.warning(f"🛡️ [STAGNATION EXIT] {symbol} flat for 3h. Freeing margin.")
                                  await self.close_position(symbol, trade, reason="STAGNATION_CLEANUP")
 
