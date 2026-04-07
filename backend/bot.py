@@ -320,6 +320,13 @@ class CryptoBot:
                 if await self.shield.check_daily_circuit_breaker():
                     logger.warning("🚨 [HALT] Daily Loss Limit reached.")
                     await asyncio.sleep(600); continue
+                
+                # v43.5.3 [DB RESET] Clear ghost positions if no real positions on exchange
+                # Ensures new Sniper positions can be opened after manual closes
+                active_on_exchange = await self.gateway.fetch_positions_robustly()
+                if not active_on_exchange:
+                    logger.info("🧹 [DB RESET] No active positions on Bitget. Clearing local trade_levels ghost records.")
+                    self.trade_levels = {}
 
                 current_time = time.time()
                 if not self.dynamic_symbols or (current_time - self.last_pair_update) > self.pair_update_interval:
@@ -339,7 +346,7 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.35: # v43.5.1 [OPTIMIZATION] Lowered to 0.35
+                        if tech_snapshot['tech_score'] >= 0.25: # v43.5.3 [SENSITIVITY] Lowered to 0.25 for immediate unlock
                             candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
                 
@@ -350,9 +357,18 @@ class CryptoBot:
                     pass
                 for cand in candidates[:3]:
                     symbol = cand['symbol']
-                    analysis = await self.strategy.analyze_opportunity(symbol, {'df': cand['df']}, cand['tech_snapshot'])
-                    if analysis.get('score', 0) >= self.consensus_threshold:
-                        await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
+                    # v43.5.3 [RESILIENCE] Added retry for LLM 503/Server errors
+                    analysis = None
+                    for attempt in range(3):
+                        try:
+                            analysis = await self.strategy.analyze_opportunity(symbol, {'df': cand['df']}, cand['tech_snapshot'])
+                            if analysis: break
+                        except Exception as e:
+                            logger.warning(f"⚠️ [RETRY] AI Analysis attempt {attempt+1} failed for {symbol}: {e}")
+                            await asyncio.sleep(3)
+                    
+                    if analysis and analysis.get('decision') == 'APPROVE':
+                         await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
                 
                 # v43.3.1 [GWEN OVERDRIVE] Fast analysis for Blitz (5 min instead of 10 min)
                 wait_time = 300 if self.profile_type == 'blitz' else 600
