@@ -196,12 +196,15 @@ class CryptoBot:
                     else: return
 
                 price = curr_price or self.latest_data.get(symbol, {}).get('price', 0)
-                leverage = int(analysis.get('leverage', self.leverage))
+                leverage = int(analysis.get('leverage', self.leverage) if analysis else self.leverage)
                 
                 # v43.3.1 [GWEN OVERDRIVE] Target 50x for Blitz
                 if self.profile_type == 'blitz':
                     leverage = max(leverage, 25)
                     if analysis.get('confidence', 0) > 0.85: leverage = 50
+                
+                # v43.4.4 [GWEN MASTER] Adaptive Sniper Sizing
+                amount = self._calculate_order_amount(symbol, price, leverage=leverage)
                 
                 # v43.4.1 [GWEN FIX] Log if amount is too low to trade
                 if amount <= 0:
@@ -317,7 +320,7 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.30: # v43.4.0 [COST OPTIMIZATION] Reduced LLM calls
+                        if tech_snapshot['tech_score'] >= 0.20: # v43.4.2 [OPTIMIZATION] Lowered to 0.20 for current market
                             candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
                 
