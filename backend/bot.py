@@ -268,6 +268,11 @@ class CryptoBot:
 
     def _calculate_order_amount(self, symbol, price, leverage=None):
         try:
+            # v43.4.5 [BLINDATURA] Zero Price Protection
+            if not price or float(price) <= 0:
+                logger.error(f"❌ [SIZING] Invalid price for {symbol}: {price}. Skipping.")
+                return 0
+            
             # v43.3.11 [GWEN FIX] Use dynamic leverage for precise sizing
             target_leverage = leverage or self.leverage
             equity = self.latest_account_data.get('equity', 0)
