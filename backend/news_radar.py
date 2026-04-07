@@ -41,6 +41,7 @@ class NewsRadar:
             logger.warning("☣️ [NEWS] Detected Google Poison in Environment. Overriding to absolute DeepSeek.")
         
         self.api_endpoint = f"{self.base_url}/v1/chat/completions"
+        self.model_name = "deepseek-chat" # [v52.1.1] Force consistency
 
     async def _ask_deepseek(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> str:
         """Centralized DeepSeek API Caller for News (v51.3.1 Instrumented)"""
