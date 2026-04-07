@@ -187,8 +187,10 @@ class CryptoBot:
                 # v43.3 [GWEN FIX] Slippage Guard
                 if ref_price > 0 and curr_price > 0:
                     slippage = abs(curr_price - ref_price) / ref_price
-                    if slippage > 0.005:
-                        logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled (Slip: {slippage:.2%}, Ref: {ref_price}, Curr: {curr_price})")
+                    # [v52.1.0] [BLITZ OVERDRIVE] Increased slippage for Blitz (1.5%)
+                    max_slip = 0.015 if self.profile_type == 'blitz' else 0.005
+                    if slippage > max_slip:
+                        logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled (Slip: {slippage:.2%}, Max: {max_slip:.2%}, Ref: {ref_price}, Curr: {curr_price})")
                         return
 
                 logger.info(f"🚀 [EXECUTION] Triggering order for {symbol} | Score: {new_score}")
@@ -214,12 +216,12 @@ class CryptoBot:
                             await asyncio.sleep(1)
                             # Refresh active positions after clear
                             active_positions = await self.gateway.fetch_positions_robustly()
-                        else:
-                            if avail_margin < 2.0: return # Still no room
-                    else:
                         if avail_margin < 2.0: 
                             logger.warning(f"🛡️ [MARGIN GUARD] {symbol} skipped. Insufficient margin ({avail_margin:.2f} USDT).")
                             return # No room for mid-score signals
+                        else:
+                            logger.warning(f"🛡️ [TECH GUARD] {symbol} score {new_score:.2f} insufficient for Margin Swap.")
+                            return
 
                 # Conflict/Flip Logic
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
@@ -231,8 +233,12 @@ class CryptoBot:
                             logger.info(f"🔄 [FORCED FLIP] Closing opposite side for {symbol} to free margin.")
                             await self.gateway.close_all_for_symbol(symbol)
                             await asyncio.sleep(1)
-                        else: return
-                    else: return
+                        else: 
+                            logger.info(f"🛡️ [FLIP GUARD] Skipping {symbol} opposite side (Confidence too low for swap).")
+                            return
+                    else: 
+                        logger.info(f"🛡️ [DUPLICATE GUARD] Already in {symbol} {existing_side}. Skipping.")
+                        return
 
                 price = curr_price or self.latest_data.get(symbol, {}).get('price', 0)
                 leverage = int(analysis.get('leverage', self.leverage) if analysis else self.leverage)

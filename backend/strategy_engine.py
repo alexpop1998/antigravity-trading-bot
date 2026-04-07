@@ -165,10 +165,12 @@ class StrategyEngine:
             # v43.3.1 [GWEN OVERDRIVE BOOST]
             if self.bot.profile_type == 'blitz' and approved:
                 if ai_confidence > 0.85: 
+                    logger.info(f"⚡ [BLITZ BOOST] High AI Confidence ({ai_confidence}) -> Forcing 0.99 Score.")
                     final_score = 0.99
                     leverage = 50
                 else:
                     final_score = max(0.81, (0.7 * ai_confidence) + (0.3 * aligned_tech_score))
+                    logger.info(f"⚡ [BLITZ MELD] Score: {final_score:.2f} (AI: {ai_confidence:.2f}, Tech: {aligned_tech_score:.2f})")
             else:
                 final_score = (0.6 * ai_confidence) + (0.4 * aligned_tech_score) if approved else 0.0
             
