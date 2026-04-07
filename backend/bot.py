@@ -204,7 +204,8 @@ class CryptoBot:
                     if analysis.get('confidence', 0) > 0.85: leverage = 50
                 
                 # v43.4.4 [GWEN MASTER] Adaptive Sniper Sizing
-                amount = self._calculate_order_amount(symbol, price, leverage=leverage)
+                # v43.5.1 [ASYNC FIX] Now using await for sizing
+                amount = await self._calculate_order_amount(symbol, price, leverage=leverage)
                 
                 # v43.4.1 [GWEN FIX] Log if amount is too low to trade
                 if amount <= 0:
@@ -266,7 +267,7 @@ class CryptoBot:
         except Exception as e:
             logger.error(f"❌ [PARTIAL FAILED] {e}")
 
-    def _calculate_order_amount(self, symbol, price, leverage=None):
+    async def _calculate_order_amount(self, symbol, price, leverage=None):
         try:
             # v43.4.5 [BLINDATURA] Zero Price Protection
             if not price or float(price) <= 0:
@@ -274,6 +275,8 @@ class CryptoBot:
                 return 0
             
             # v43.3.11 [GWEN FIX] Use dynamic leverage for precise sizing
+            # v43.5.1 [ASYNC FIX] Added await to gateway call
+            balance = await self.gateway.fetch_balance_safe()
             target_leverage = leverage or self.leverage
             equity = self.latest_account_data.get('equity', 0)
             avail = float(balance.get('available', 0) or 0)
@@ -329,7 +332,7 @@ class CryptoBot:
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        if tech_snapshot['tech_score'] >= 0.50: # v43.5.0 [COST CAPPING] Ultra-strict threshold
+                        if tech_snapshot['tech_score'] >= 0.35: # v43.5.1 [OPTIMIZATION] Lowered to 0.35
                             candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
                     except: continue
                 
