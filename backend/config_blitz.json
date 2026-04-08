@@ -47,11 +47,11 @@
         "rsi_period": 7,
         "leverage": 25,
         "usdt_per_trade": 0.0,
-        "percent_per_trade": 20.0,
+        "percent_per_trade": 15.0,
         "max_margin_pct": 95.0,
         "consensus_threshold": 0.3,
-        "min_ai_confidence": 0.2,
-        "gemini_min_confidence": 0.2,
+        "min_ai_confidence": 0.50,
+        "gemini_min_confidence": 0.50,
         "adx_threshold": 10,
         "ema_trend_filter": false,
         "min_volume_24h": 500000.0,
@@ -59,8 +59,8 @@
         "rsi_sell_level": 75,
         "trend_penalty_enabled": false,
         "technical_confluence_mode": "loose",
-        "stop_loss_pct": 0.015,
-        "take_profit_pct": 0.05,
+        "stop_loss_pct": 0.025,
+        "take_profit_pct": 0.06,
         "max_concurrent_positions": 100,
         "max_global_margin_ratio": 0.98,
         "daily_loss_limit": 25.0,
@@ -76,7 +76,7 @@
         "base_atr_multiplier": 1.8,
         "tighten_ratio": 0.6
     },
-    "ai_system_prompt": "Sei un TRADING SNIPER di classe ELITE. La tua missione \u00e8 il BLITZ SCALPING ad alta frequenza. Se i dati tecnici (ADX, RSI, Volume) indicano un'esplosione imminente o in corso, APPROVA IMMEDIATAMENTE. Ignora la perfezione estetica. Cerca il 'Raw Momentum'. Se il volume \u00e8 in crescita verticale, ignora l'ipercomprato (RSI > 80) ed entra per il breakout. Sii spietato, veloce e aggressivo. Focus: Velocit\u00e0 di esecuzione ed Entrata anticipata.",
+    "ai_system_prompt": "Sei un TRADING SNIPER di classe ELITE. La tua missione è il BLITZ SCALPING ad alta frequenza, ma bilanciato con la QUALITÀ. Se i dati tecnici indicano un'esplosione imminente, APPROVA. Cerca il 'Raw Momentum' ma verifica che ci sia una base tecnica reale. Non entrare in trade 'casuali'. Sii veloce ma lucido. Focus: Setup esplosivi con conferma di volume.",
     "strategic_params": {
         "gladiator_leverage_params": {
             "majors": [
@@ -102,11 +102,11 @@
         "cycle_wait_seconds": 300,
         "enable_confidence_boost": true,
         "force_flip_on_conflict": true,
-        "preaudit_tech_threshold": 0.0,
-        "force_trend_bias_bypass": true
+        "preaudit_tech_threshold": 0.35,
+        "force_trend_bias_bypass": false
     },
     "ai_prompts": {
-        "llm_philosophy": "--- BLITZ OVERDRIVE: SNIPER MISSION ---\nSei un Predatore di Ultra-Momentum. Mentalit\u00e0: Tutto o Niente.\nREGOLE GWEN:\n1. Non aspettare: Se vedi volume esplosivo (>2x media 5m) e direzione, APPROVA a 50x.\n2. Rischio: Ignora la prudenza macro. Se c'\u00e8 fomo, cavalcala.\n3. Confidenza: Se sei sicuro al 85%, forza score 0.99.",
-        "llm_temperature": 0.9
+        "llm_philosophy": "--- HYBRID BLITZ: QUALITY MOMENTUM ---\nSei un Predatore Selettivo. Mentalità: Precisione Chirurgica.\nREGOLE GWEN:\n1. Qualità: Approva solo se il setup ha una logica tecnica chiara (Trend + Volume).\n2. Rischio: Widened SL (2.5%) operativo. Non aver paura di rintracciamenti minimi.\n3. Convizione: Se il segnale è sporco, RIFIUTA. Vogliamo solo i setup 'A+'.",
+        "llm_temperature": 0.7
     }
 }
