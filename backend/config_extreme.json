@@ -53,6 +53,9 @@
         "enable_confidence_boost": false,
         "force_flip_on_conflict": false,
         "preaudit_tech_threshold": 0.45,
+        "trend_guard_mode": "OFF",
+        "tech_score_aligned": 0.45,
+        "tech_score_mismatch": 0.45,
         "force_trend_bias_bypass": false
     },
     "ai_prompts": {
