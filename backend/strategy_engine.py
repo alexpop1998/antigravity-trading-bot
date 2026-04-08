@@ -46,6 +46,7 @@ class StrategyEngine:
             df['rsi'] = self._calculate_rsi(close)
             df['macd'], df['signal'], df['hist'] = self._calculate_macd(close)
             df['bb_up'], df['bb_mid'], df['bb_low'] = self._calculate_bollinger(close)
+            df['atr'] = self._calculate_atr(df)
             df['ema200'] = close.ewm(span=200, adjust=False).mean()
             
             # Latest
@@ -103,6 +104,9 @@ class StrategyEngine:
                 'symbol': symbol,
                 'tech_score': score,
                 'side': side,
+                'atr': df['atr'].iloc[-1],
+                'price': price,
+                'rsi': rsi,
                 'regime': regime_type,
                 'trend_bias': trend_bias,
                 'size_multiplier': size_multiplier
@@ -119,13 +123,13 @@ class StrategyEngine:
             side = snapshot['side']
             tech_score = snapshot['tech_score']
             
-            # v43.3.1 [GWEN OVERDRIVE] Blitz Optimization
-            if self.bot.profile_type == 'blitz':
-                preaudit_threshold = 0.0
+            # v43.3.1 Data-Driven Configuration for Pre-Audit and Bias
+            strategic = self.bot.config.get('strategic_params', {})
+            preaudit_threshold = strategic.get('preaudit_tech_threshold', 0.45)
+            
+            if strategic.get('force_trend_bias_bypass', False):
                 # Force MTF bias to 1 to bypass EMA200 filter in technical scoring
                 snapshot['trend_bias'] = 1 if side == 'buy' else -1
-            else:
-                preaudit_threshold = 0.45
 
             if tech_score < preaudit_threshold:
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
@@ -146,9 +150,9 @@ class StrategyEngine:
                 indicators=data
             )
             
-            if result[-1] == "RATE_LIMIT_429" and self.bot.profile_type == 'blitz':
+            if result[-1] == "RATE_LIMIT_429" and strategic.get('llm_cooldown_bypass', False):
                 if tech_score >= 0.75:
-                    return {'symbol': symbol, 'score': 0.90, 'side': side, 'reason': 'blitz_fallback', 'leverage': 25, 'reference_price': ref_price}
+                    return {'symbol': symbol, 'score': 0.90, 'side': side, 'reason': 'llm_bypassed', 'leverage': 25, 'reference_price': ref_price}
 
             approved = result[0] if result else False
             ai_confidence = result[1] if result and len(result) > 1 else 0.0
@@ -162,15 +166,15 @@ class StrategyEngine:
             
             aligned_tech_score = tech_score if side.lower() == final_side.lower() else 0.0
             
-            # v43.3.1 [GWEN OVERDRIVE BOOST]
-            if self.bot.profile_type == 'blitz' and approved:
+            # v43.3.1 Data-Driven Boost
+            if approved and strategic.get('enable_confidence_boost', False):
                 if ai_confidence > 0.85: 
-                    logger.info(f"⚡ [BLITZ BOOST] High AI Confidence ({ai_confidence}) -> Forcing 0.99 Score.")
+                    logger.info(f"⚡ [CONFIG BOOST] High AI Confidence ({ai_confidence}) -> Forcing 0.99 Score.")
                     final_score = 0.99
                     leverage = 50
                 else:
                     final_score = max(0.81, (0.7 * ai_confidence) + (0.3 * aligned_tech_score))
-                    logger.info(f"⚡ [BLITZ MELD] Score: {final_score:.2f} (AI: {ai_confidence:.2f}, Tech: {aligned_tech_score:.2f})")
+                    logger.info(f"⚡ [CONFIG MELD] Score: {final_score:.2f} (AI: {ai_confidence:.2f}, Tech: {aligned_tech_score:.2f})")
             else:
                 final_score = (0.6 * ai_confidence) + (0.4 * aligned_tech_score) if approved else 0.0
             
@@ -232,3 +236,13 @@ class StrategyEngine:
         ma = series.rolling(window=period).mean()
         msd = series.rolling(window=period).std()
         return ma + std * msd, ma, ma - std * msd
+
+    def _calculate_atr(self, df, period=14):
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        return tr.rolling(window=period).mean()

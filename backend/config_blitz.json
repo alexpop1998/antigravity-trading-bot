@@ -7,13 +7,41 @@
     ],
     "trading_parameters": {
         "symbols": [
-            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT",
-            "PEPE/USDT:USDT", "WIF/USDT:USDT", "AVAX/USDT:USDT", "ADA/USDT:USDT", "SHIB/USDT:USDT",
-            "DOT/USDT:USDT", "NEAR/USDT:USDT", "SUI/USDT:USDT", "TIA/USDT:USDT", "OP/USDT:USDT",
-            "ARB/USDT:USDT", "INJ/USDT:USDT", "FTM/USDT:USDT", "AAVE/USDT:USDT", "CRV/USDT:USDT",
-            "LINK/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT", "SEI/USDT:USDT", "FET/USDT:USDT",
-            "RENDER/USDT:USDT", "GALA/USDT:USDT", "MKR/USDT:USDT", "DYDX/USDT:USDT", "SNX/USDT:USDT",
-            "JUP/USDT:USDT", "PYTH/USDT:USDT", "BONK/USDT:USDT", "FLOKI/USDT:USDT", "POPCAT/USDT:USDT"
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "PEPE/USDT:USDT",
+            "WIF/USDT:USDT",
+            "AVAX/USDT:USDT",
+            "ADA/USDT:USDT",
+            "SHIB/USDT:USDT",
+            "DOT/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "SUI/USDT:USDT",
+            "TIA/USDT:USDT",
+            "OP/USDT:USDT",
+            "ARB/USDT:USDT",
+            "INJ/USDT:USDT",
+            "FTM/USDT:USDT",
+            "AAVE/USDT:USDT",
+            "CRV/USDT:USDT",
+            "LINK/USDT:USDT",
+            "LTC/USDT:USDT",
+            "BCH/USDT:USDT",
+            "SEI/USDT:USDT",
+            "FET/USDT:USDT",
+            "RENDER/USDT:USDT",
+            "GALA/USDT:USDT",
+            "MKR/USDT:USDT",
+            "DYDX/USDT:USDT",
+            "SNX/USDT:USDT",
+            "JUP/USDT:USDT",
+            "PYTH/USDT:USDT",
+            "BONK/USDT:USDT",
+            "FLOKI/USDT:USDT",
+            "POPCAT/USDT:USDT"
         ],
         "timeframe": "5m",
         "rsi_period": 7,
@@ -21,9 +49,9 @@
         "usdt_per_trade": 0.0,
         "percent_per_trade": 20.0,
         "max_margin_pct": 95.0,
-        "consensus_threshold": 0.30,
-        "min_ai_confidence": 0.20,
-        "gemini_min_confidence": 0.20,
+        "consensus_threshold": 0.3,
+        "min_ai_confidence": 0.2,
+        "gemini_min_confidence": 0.2,
         "adx_threshold": 10,
         "ema_trend_filter": false,
         "min_volume_24h": 500000.0,
@@ -38,17 +66,23 @@
         "daily_loss_limit": 25.0,
         "panic_drawdown_threshold": 0.35,
         "breakeven_pct": 0.003,
-        "be_trigger_pct": 0.008
+        "be_trigger_pct": 0.008,
+        "max_slippage_pct": 0.015,
+        "flash_pump_threshold": 0.008,
+        "velocity_exit_floor": 0.007
     },
     "trailing_params": {
         "activation_pnl_pct": 0.6,
         "base_atr_multiplier": 1.8,
         "tighten_ratio": 0.6
     },
-    "ai_system_prompt": "Sei un TRADING SNIPER di classe ELITE. La tua missione è il BLITZ SCALPING ad alta frequenza. Se i dati tecnici (ADX, RSI, Volume) indicano un'esplosione imminente o in corso, APPROVA IMMEDIATAMENTE. Ignora la perfezione estetica. Cerca il 'Raw Momentum'. Se il volume è in crescita verticale, ignora l'ipercomprato (RSI > 80) ed entra per il breakout. Sii spietato, veloce e aggressivo. Focus: Velocità di esecuzione ed Entrata anticipata.",
+    "ai_system_prompt": "Sei un TRADING SNIPER di classe ELITE. La tua missione \u00e8 il BLITZ SCALPING ad alta frequenza. Se i dati tecnici (ADX, RSI, Volume) indicano un'esplosione imminente o in corso, APPROVA IMMEDIATAMENTE. Ignora la perfezione estetica. Cerca il 'Raw Momentum'. Se il volume \u00e8 in crescita verticale, ignora l'ipercomprato (RSI > 80) ed entra per il breakout. Sii spietato, veloce e aggressivo. Focus: Velocit\u00e0 di esecuzione ed Entrata anticipata.",
     "strategic_params": {
         "gladiator_leverage_params": {
-            "majors": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            "majors": [
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT"
+            ],
             "leverage_major_high": 50,
             "leverage_major_std": 25,
             "leverage_alt_std": 20,
@@ -64,7 +98,12 @@
         "leverage_range": [
             25,
             50
-        ]
+        ],
+        "cycle_wait_seconds": 300,
+        "enable_confidence_boost": true,
+        "force_flip_on_conflict": true,
+        "preaudit_tech_threshold": 0.0,
+        "force_trend_bias_bypass": true
     },
     "ai_prompts": {
         "llm_philosophy": "--- BLITZ OVERDRIVE: SNIPER MISSION ---\nSei un Predatore di Ultra-Momentum. Mentalit\u00e0: Tutto o Niente.\nREGOLE GWEN:\n1. Non aspettare: Se vedi volume esplosivo (>2x media 5m) e direzione, APPROVA a 50x.\n2. Rischio: Ignora la prudenza macro. Se c'\u00e8 fomo, cavalcala.\n3. Confidenza: Se sei sicuro al 85%, forza score 0.99.",

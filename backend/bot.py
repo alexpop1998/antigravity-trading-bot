@@ -191,7 +191,7 @@ class CryptoBot:
 
     async def run_targeted_analysis(self, symbol, side_hint=None):
         try:
-            ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
+            ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, self.timeframe, limit=50)
             df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
             self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
             tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
@@ -215,7 +215,7 @@ class CryptoBot:
                 if ref_price > 0 and curr_price > 0:
                     slippage = abs(curr_price - ref_price) / ref_price
                     # [v52.1.0] [BLITZ OVERDRIVE] Increased slippage for Blitz (1.5%)
-                    max_slip = 0.015 if self.profile_type == 'blitz' else 0.005
+                    max_slip = self.config.get('trading_parameters', {}).get('max_slippage_pct', 0.005)
                     if slippage > max_slip:
                         logger.warning(f"🚫 [SLIPPAGE] {symbol} cancelled (Slip: {slippage:.2%}, Max: {max_slip:.2%}, Ref: {ref_price}, Curr: {curr_price})")
                         return
@@ -259,8 +259,8 @@ class CryptoBot:
                 if existing:
                     existing_side = existing['side'].lower()
                     if existing_side != side.lower():
-                        # v43.3.11 [GWEN FIX] Force Flip for Blitz always to free margin (Ignore 0.85 conf)
-                        if self.profile_type == 'blitz' or analysis.get('confidence', 0) > 0.85:
+                        # v43.3.11 [GWEN FIX] Force Flip based on strategic config to free margin
+                        if self.config.get('strategic_params', {}).get('force_flip_on_conflict', False) or analysis.get('confidence', 0) > 0.85:
                             logger.info(f"🔄 [FORCED FLIP] Closing opposite side for {symbol} to free margin.")
                             await self.gateway.close_all_for_symbol(symbol)
                             await asyncio.sleep(1)
@@ -470,7 +470,7 @@ class CryptoBot:
                 for cand in raw_candidates:
                     symbol = cand['symbol']
                     try:
-                        ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
+                        ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, self.timeframe, limit=50)
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
                         self.latest_data[symbol] = {
@@ -557,7 +557,8 @@ class CryptoBot:
                                  await self.close_position(symbol, trade, reason="STAGNATION_CLEANUP")
 
                 # Sleep until next pulse
-                wait_time = 300 if self.profile_type == 'blitz' else 600
+                wait_time = self.config.get("strategic_params", {}).get("cycle_wait_seconds", 600)
+                logger.info(f"⏳ Sleeping for {wait_time}s before next cycle...")
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 logger.error(f"❌ [CORE LOOP ERROR] {e}")

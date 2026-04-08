@@ -3,10 +3,26 @@
     "profile_type": "conservative",
     "trading_parameters": {
         "symbols": [
-            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT", 
-            "PEPE/USDT:USDT", "WIF/USDT:USDT", "AR/USDT:USDT", "NEAR/USDT:USDT", "LINK/USDT:USDT",
-            "AVAX/USDT:USDT", "ADA/USDT:USDT", "SHIB/USDT:USDT", "DOT/USDT:USDT", "MATIC/USDT:USDT",
-            "UNI/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT", "TRX/USDT:USDT", "ETC/USDT:USDT"
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "PEPE/USDT:USDT",
+            "WIF/USDT:USDT",
+            "AR/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "LINK/USDT:USDT",
+            "AVAX/USDT:USDT",
+            "ADA/USDT:USDT",
+            "SHIB/USDT:USDT",
+            "DOT/USDT:USDT",
+            "MATIC/USDT:USDT",
+            "UNI/USDT:USDT",
+            "LTC/USDT:USDT",
+            "BCH/USDT:USDT",
+            "TRX/USDT:USDT",
+            "ETC/USDT:USDT"
         ],
         "timeframe": "15m",
         "rsi_period": 14,
@@ -26,23 +42,34 @@
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.04,
         "max_concurrent_positions": 10,
-        "max_global_margin_ratio": 0.40,
+        "max_global_margin_ratio": 0.4,
         "daily_loss_limit": 2.0,
         "panic_drawdown_threshold": 0.08,
         "breakeven_pct": 0.008,
-        "be_trigger_pct": 0.008
+        "be_trigger_pct": 0.008,
+        "max_slippage_pct": 0.005,
+        "flash_pump_threshold": 0.012,
+        "velocity_exit_floor": 0.012
     },
-    "ai_system_prompt": "Sei un ASSET MANAGER CONSERVATIVO. La tua priorità assoluta è la protezione del capitale. Approva solo se vedi trend dominanti e segnali di forza incontestabili. Evita iper-estensioni e mercati laterali. Il tuo obiettivo è una crescita costante con drawdown minimi.",
+    "ai_system_prompt": "Sei un ASSET MANAGER CONSERVATIVO. La tua priorit\u00e0 assoluta \u00e8 la protezione del capitale. Approva solo se vedi trend dominanti e segnali di forza incontestabili. Evita iper-estensioni e mercati laterali. Il tuo obiettivo \u00e8 una crescita costante con drawdown minimi.",
     "strategic_params": {
         "llm_cooldown_seconds": 900,
         "llm_cooldown_bypass": false,
         "startup_shield_seconds": 300,
         "news_shield_seconds": 600,
         "min_notional_usdt": 20.0,
-        "leverage_range": [2, 10]
+        "leverage_range": [
+            2,
+            10
+        ],
+        "cycle_wait_seconds": 600,
+        "enable_confidence_boost": false,
+        "force_flip_on_conflict": false,
+        "preaudit_tech_threshold": 0.45,
+        "force_trend_bias_bypass": false
     },
     "ai_prompts": {
-        "llm_philosophy": "--- MISSIONE CONSERVATIVE : CRESCITA STABILE ---\nSei un Trader Professionista con un focus sulla gestione del rischio. Cerchi opportunità con un buon rapporto rischio/rendimento.\nREGOLE:\n1. Momentum: Il MACD è incrociato e istogramma in espansione? Il volume supporta il movimento?\n2. Contesto: Il prezzo rispetta i livelli chiave (supporto/resistenza)?\n3. AI Predictor: Se il ML Predictor è >60%, dai più peso.\n4. Leva: Scegli la leva in base alla forza del trend. Usa leva più alta solo se il momentum è forte.",
+        "llm_philosophy": "--- MISSIONE CONSERVATIVE : CRESCITA STABILE ---\nSei un Trader Professionista con un focus sulla gestione del rischio. Cerchi opportunit\u00e0 con un buon rapporto rischio/rendimento.\nREGOLE:\n1. Momentum: Il MACD \u00e8 incrociato e istogramma in espansione? Il volume supporta il movimento?\n2. Contesto: Il prezzo rispetta i livelli chiave (supporto/resistenza)?\n3. AI Predictor: Se il ML Predictor \u00e8 >60%, dai pi\u00f9 peso.\n4. Leva: Scegli la leva in base alla forza del trend. Usa leva pi\u00f9 alta solo se il momentum \u00e8 forte.",
         "llm_temperature": 0.3
     }
 }

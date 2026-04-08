@@ -3,10 +3,26 @@
     "profile_type": "institutional",
     "trading_parameters": {
         "symbols": [
-            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT", 
-            "PEPE/USDT:USDT", "WIF/USDT:USDT", "AR/USDT:USDT", "NEAR/USDT:USDT", "LINK/USDT:USDT",
-            "AVAX/USDT:USDT", "ADA/USDT:USDT", "SHIB/USDT:USDT", "DOT/USDT:USDT", "MATIC/USDT:USDT",
-            "UNI/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT", "TRX/USDT:USDT", "ETC/USDT:USDT"
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "PEPE/USDT:USDT",
+            "WIF/USDT:USDT",
+            "AR/USDT:USDT",
+            "NEAR/USDT:USDT",
+            "LINK/USDT:USDT",
+            "AVAX/USDT:USDT",
+            "ADA/USDT:USDT",
+            "SHIB/USDT:USDT",
+            "DOT/USDT:USDT",
+            "MATIC/USDT:USDT",
+            "UNI/USDT:USDT",
+            "LTC/USDT:USDT",
+            "BCH/USDT:USDT",
+            "TRX/USDT:USDT",
+            "ETC/USDT:USDT"
         ],
         "timeframe": "15m",
         "rsi_period": 14,
@@ -14,8 +30,8 @@
         "usdt_per_trade": 0.0,
         "percent_per_trade": 1.5,
         "max_margin_pct": 2.0,
-        "consensus_threshold": 0.90,
-        "gemini_min_confidence": 0.90,
+        "consensus_threshold": 0.9,
+        "gemini_min_confidence": 0.9,
         "adx_threshold": 30,
         "ema_trend_filter": true,
         "min_volume_24h": 10000000.0,
@@ -26,29 +42,39 @@
         "stop_loss_pct": 0.02,
         "take_profit_pct": 0.06,
         "max_concurrent_positions": 5,
-        "max_global_margin_ratio": 0.20,
+        "max_global_margin_ratio": 0.2,
         "daily_loss_limit": 1.0,
         "panic_drawdown_threshold": 0.05,
-        "breakeven_pct": 0.010,
-        "be_trigger_pct": 0.010
+        "breakeven_pct": 0.01,
+        "be_trigger_pct": 0.01,
+        "max_slippage_pct": 0.005,
+        "flash_pump_threshold": 0.012,
+        "velocity_exit_floor": 0.012
     },
     "trailing_params": {
         "activation_pnl_pct": 1.0,
         "base_atr_multiplier": 1.5,
         "tighten_ratio": 0.9
     },
-    "ai_system_prompt": "Sei un ASSET MANAGER istituzionale. La tua priorità è la conservazione del capitale e la precisione chirurgica. Approva solo se esiste una convergenza perfetta tra trend, volume e indicatori di momentum. Evita situazioni di incertezza e noise di mercato. Il tuo obiettivo è un Win-Rate elevato su operazioni a bassa frequenza.",
+    "ai_system_prompt": "Sei un ASSET MANAGER istituzionale. La tua priorit\u00e0 \u00e8 la conservazione del capitale e la precisione chirurgica. Approva solo se esiste una convergenza perfetta tra trend, volume e indicatori di momentum. Evita situazioni di incertezza e noise di mercato. Il tuo obiettivo \u00e8 un Win-Rate elevato su operazioni a bassa frequenza.",
     "strategic_params": {
         "llm_cooldown_seconds": 1800,
         "llm_cooldown_bypass": false,
         "startup_shield_seconds": 600,
         "news_shield_seconds": 1200,
         "min_notional_usdt": 50.0,
-        "leverage_range": [1, 5]
+        "leverage_range": [
+            1,
+            5
+        ],
+        "cycle_wait_seconds": 600,
+        "enable_confidence_boost": false,
+        "force_flip_on_conflict": false,
+        "preaudit_tech_threshold": 0.45,
+        "force_trend_bias_bypass": false
     },
     "ai_prompts": {
         "llm_philosophy": "--- MISSIONE INSTITUTIONAL : LA FORTEZZA ---\nAgisci come un Risk Manager di un Hedge Fund Istituzionale. Il tuo obiettivo primario \u00e8 la conservazione del capitale. Devi essere estremamente selettivo.\nREGOLE:\n1. Trend (EMA200): Il prezzo deve essere chiaramente sopra (Long) o sotto (Short) con una pendenza consolidata. Niente ranging.\n2. Volatilit\u00e0 (ATR): Rifiuta segnali con ATR in forte espansione (>15% nelle ultime 4h).\n3. Consenso: Il punteggio di consenso deve essere alto (>0.90/1.0).\n4. Decisione: Approva solo se il setup \u00e8 'perfetto'. Se hai il minimo dubbio, RIFIUTA.",
         "llm_temperature": 0.1
     }
 }
-

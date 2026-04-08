@@ -3,8 +3,15 @@
     "profile_type": "extreme",
     "trading_parameters": {
         "symbols": [
-            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT", 
-            "PEPE/USDT:USDT", "WIF/USDT:USDT", "AR/USDT:USDT", "NEAR/USDT:USDT"
+            "BTC/USDT:USDT",
+            "ETH/USDT:USDT",
+            "SOL/USDT:USDT",
+            "XRP/USDT:USDT",
+            "DOGE/USDT:USDT",
+            "PEPE/USDT:USDT",
+            "WIF/USDT:USDT",
+            "AR/USDT:USDT",
+            "NEAR/USDT:USDT"
         ],
         "timeframe": "15m",
         "rsi_period": 14,
@@ -13,7 +20,7 @@
         "percent_per_trade": 50.0,
         "max_margin_pct": 25.0,
         "consensus_threshold": 0.85,
-        "gemini_min_confidence": 0.70,
+        "gemini_min_confidence": 0.7,
         "adx_threshold": 15,
         "ema_trend_filter": false,
         "min_volume_24h": 1000000.0,
@@ -22,12 +29,15 @@
         "stop_loss_pct": 0.015,
         "take_profit_pct": 0.15,
         "max_concurrent_positions": 3,
-        "min_ai_confidence": 0.70,
+        "min_ai_confidence": 0.7,
         "max_global_margin_ratio": 0.95,
         "daily_loss_limit": 50.0,
         "panic_drawdown_threshold": 0.25,
         "breakeven_pct": 0.003,
-        "be_trigger_pct": 0.003
+        "be_trigger_pct": 0.003,
+        "max_slippage_pct": 0.005,
+        "flash_pump_threshold": 0.012,
+        "velocity_exit_floor": 0.012
     },
     "strategic_params": {
         "llm_cooldown_seconds": 60,
@@ -35,11 +45,18 @@
         "startup_shield_seconds": 60,
         "news_shield_seconds": 120,
         "min_notional_usdt": 5.0,
-        "leverage_range": [10, 25]
+        "leverage_range": [
+            10,
+            25
+        ],
+        "cycle_wait_seconds": 600,
+        "enable_confidence_boost": false,
+        "force_flip_on_conflict": false,
+        "preaudit_tech_threshold": 0.45,
+        "force_trend_bias_bypass": false
     },
     "ai_prompts": {
-        "llm_philosophy": "--- MISSIONE EXTREME : HIGH STAKES ---\nSei un Trader d'Assalto con massima tolleranza al rischio. Hai un conto piccolo e cerchi il salto di capitale immediato. Il tuo obiettivo è la frequenza di esecuzione alta.\nREGOLE:\n1. Catalizzatore: C'è volatilità, una rottura di livello o volume interessante?\n2. Struttura: Ogni breakout è una potenziale entrata.\n3. Decisione: Se vedi un movimento in atto, APPROVA immediatamente senza esitazione.\n4. Leva & Forza: Massimizza i parametri. Ogni trade deve essere un colpo secco alla giugulare.",
+        "llm_philosophy": "--- MISSIONE EXTREME : HIGH STAKES ---\nSei un Trader d'Assalto con massima tolleranza al rischio. Hai un conto piccolo e cerchi il salto di capitale immediato. Il tuo obiettivo \u00e8 la frequenza di esecuzione alta.\nREGOLE:\n1. Catalizzatore: C'\u00e8 volatilit\u00e0, una rottura di livello o volume interessante?\n2. Struttura: Ogni breakout \u00e8 una potenziale entrata.\n3. Decisione: Se vedi un movimento in atto, APPROVA immediatamente senza esitazione.\n4. Leva & Forza: Massimizza i parametri. Ogni trade deve essere un colpo secco alla giugulare.",
         "llm_temperature": 0.8
     }
 }
-

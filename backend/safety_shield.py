@@ -50,7 +50,7 @@ class SafetyShield:
         # v43.3.1 [GWEN OVERDRIVE] Accelerated Flash Detection for Blitz
         ref_price = sum(history) / len(history)
         change_pct = (current_price - ref_price) / ref_price
-        threshold = 0.008 if self.bot.profile_type == 'blitz' else 0.012
+        threshold = self.bot.config.get('trading_parameters', {}).get('flash_pump_threshold', 0.012)
         
         if change_pct > threshold:
             return "PUMP"
@@ -68,7 +68,7 @@ class SafetyShield:
         
         # Velocity Threshold: 1.5x ATR expressed as % (or 1.2% hard floor)
         # v43.3.1 [GWEN OVERDRIVE] Tighter floor for Blitz (0.7%)
-        hard_floor = 0.007 if self.bot.profile_type == 'blitz' else 0.012
+        hard_floor = self.bot.config.get('trading_parameters', {}).get('velocity_exit_floor', 0.012)
         atr_pct = (atr / current_price) if current_price > 0 else hard_floor
         sos_threshold = max(hard_floor, atr_pct * 1.5)
         

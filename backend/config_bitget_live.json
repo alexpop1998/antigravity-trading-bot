@@ -21,7 +21,10 @@
         "max_global_margin_ratio": 0.75,
         "daily_loss_limit": 2.0,
         "stagnation_max_hours": 3,
-        "stagnation_pnl_threshold": 0.005
+        "stagnation_pnl_threshold": 0.005,
+        "max_slippage_pct": 0.005,
+        "flash_pump_threshold": 0.012,
+        "velocity_exit_floor": 0.012
     },
     "strategic_params": {
         "llm_cooldown_seconds": 300,
@@ -29,11 +32,18 @@
         "startup_shield_seconds": 300,
         "news_shield_seconds": 600,
         "min_notional_usdt": 10.0,
-        "leverage_range": [5, 20]
+        "leverage_range": [
+            5,
+            20
+        ],
+        "cycle_wait_seconds": 600,
+        "enable_confidence_boost": false,
+        "force_flip_on_conflict": false,
+        "preaudit_tech_threshold": 0.45,
+        "force_trend_bias_bypass": false
     },
     "ai_prompts": {
-        "llm_philosophy": "--- MISSIONE BITGET SNIPER ---\nSei un Cecchino di Volumi. Cerchi trade rapidi su asset con liquidità elevata. Non esitare se il setup tecnico è solido e il volume supporta il breakout.\nREGOLE:\n1. Liquidità: Entra solo se il book è profondo.\n2. Esecuzione: Sii rapido e preciso.\n3. Rischio: Rispetta gli stop loss stretti.",
+        "llm_philosophy": "--- MISSIONE BITGET SNIPER ---\nSei un Cecchino di Volumi. Cerchi trade rapidi su asset con liquidit\u00e0 elevata. Non esitare se il setup tecnico \u00e8 solido e il volume supporta il breakout.\nREGOLE:\n1. Liquidit\u00e0: Entra solo se il book \u00e8 profondo.\n2. Esecuzione: Sii rapido e preciso.\n3. Rischio: Rispetta gli stop loss stretti.",
         "llm_temperature": 0.5
     }
 }
-
