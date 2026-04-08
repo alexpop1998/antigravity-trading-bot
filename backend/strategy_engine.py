@@ -131,6 +131,7 @@ class StrategyEngine:
                 'rsi': rsi,
                 'regime': regime_type,
                 'trend_bias': trend_bias,
+                'is_aligned': is_aligned,
                 'size_multiplier': size_multiplier
             }
         except Exception as e:
@@ -193,12 +194,19 @@ class StrategyEngine:
             
             aligned_tech_score = tech_score if side.lower() == final_side.lower() else 0.0
             
-            # v43.3.1 Data-Driven Boost (v55.9.1 [TOTAL INJECTION])
+            # v55.9.1 Data-Driven Boost (v5.2.2 [ZERO BYPASS])
             boost_trigger = strategic.get('ai_boost_trigger', 0.85)
             boost_score = strategic.get('ai_boost_score', 0.99)
             boost_lev = strategic.get('ai_boost_leverage', 50)
             
-            if approved and strategic.get('enable_confidence_boost', False):
+            # THE HARD GUARD (v5.2.2 [ZERO BYPASS])
+            is_aligned = snapshot.get('is_aligned', False)
+            tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper()
+            
+            if tg_mode == "STRICT" and not is_aligned:
+                final_score = 0.0
+                logger.warning(f"🛡️ [HARD GUARD] Killing counter-trend {final_side} on {symbol} despite AI approval.")
+            elif approved and strategic.get('enable_confidence_boost', False):
                 if ai_confidence > boost_trigger: 
                     logger.info(f"⚡ [CONFIG BOOST] High AI Confidence ({ai_confidence}) -> Forcing {boost_score} Score.")
                     final_score = boost_score
