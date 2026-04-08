@@ -104,6 +104,7 @@
         "force_flip_on_conflict": true,
         "preaudit_tech_threshold": 0.55,
         "trend_guard_mode": "STRICT",
+        "allow_neutral_trend_trading": false,
         "tech_score_aligned": 0.6,
         "tech_score_mismatch": 0.0,
         "bb_tolerance_buy": 1.01,

@@ -61,13 +61,16 @@ class StrategyEngine:
             # 1. Regime Detection
             regime_type, confidence = self.regime_detector.detect_regime(df)
             
-            # 2. MTF Trend (Directional)
-            trend_bias = await self._check_mtf_trend(symbol)
+            # 1. Trend Baseline (4H Gravity Audit)
+            trend_data = await self._check_mtf_trend(symbol)
+            trend_bias = trend_data['bias']
+            ema200 = trend_data['ema200']
+            last_close = trend_data['last_close']
             
-            # 3. CONFLUENCE (v55.9.1 [TOTAL INJECTION])
+            # v55.9.0 [INSTITUTIONAL CORE] Parameter Injection
             strategic = self.bot.config.get('strategic_params', {})
-            tp = self.bot.config.get('trading_parameters', {})
-            
+            tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper()
+            allow_neutral = strategic.get('allow_neutral_trend_trading', False)        
             bb_tol_buy = strategic.get('bb_tolerance_buy', 1.01)
             bb_tol_sell = strategic.get('bb_tolerance_sell', 0.99)
             
@@ -100,15 +103,26 @@ class StrategyEngine:
             elif tech_sell and funding_rate < -fund_threshold: 
                 size_multiplier *= 0.5
 
-            # 5. FINAL TECH SCORE (v55.9.0 [INSTITUTIONAL CORE])
+            # 5. FINAL TECH SCORE (v5.3.0 [ROBUST PIPELINE])
             strategic = self.bot.config.get('strategic_params', {})
-            tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper() # STRICT, FLEXIBLE, OFF
+            tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper()
+            allow_neutral = strategic.get('allow_neutral_trend_trading', False)
             
             score = 0.0
             side = "buy" if tech_buy else ("sell" if tech_sell else "neutral")
             
-            # Trend Alignment Logic
-            is_aligned = (side == "buy" and trend_bias >= 0) or (side == "sell" and trend_bias <= 0)
+            # Trend Alignment Logic (Gatekeeper Phase)
+            is_aligned = False
+            if side == "buy":
+                if trend_bias == 1: is_aligned = True
+                elif trend_bias == 0 and allow_neutral: is_aligned = True
+            elif side == "sell":
+                if trend_bias == -1: is_aligned = True
+                elif trend_bias == 0 and allow_neutral: is_aligned = True
+            
+            # [TREND AUDIT] Extreme visibility
+            trend_str = "UP" if trend_bias == 1 else ("DOWN" if trend_bias == -1 else "NEUTRAL")
+            logger.info(f"📍 [TREND AUDIT] {symbol} | Price: {last_close:.4f} | EMA200: {ema200:.4f} | Bias: {trend_str} | Target: {side.upper()} | Aligned: {is_aligned}")
             
             if side != "neutral":
                 if is_aligned:
@@ -117,8 +131,9 @@ class StrategyEngine:
                     # Counter-Trend Handling
                     if tg_mode == "STRICT":
                         score = 0.0
+                        logger.warning(f"🛡️ [GATEKEEPER] Hard-blocking counter-trend setup on {symbol}")
                     elif tg_mode == "FLEXIBLE":
-                        score = strategic.get('tech_score_mismatch', 0.1) # Heavy penalty
+                        score = strategic.get('tech_score_mismatch', 0.1)
                     else: # OFF
                         score = strategic.get('tech_score_mismatch', 0.4)
                 
@@ -167,6 +182,14 @@ class StrategyEngine:
             # v43.3 [GWEN FIX] Persist the price at analysis time for Slippage Guard
             ref_price = snapshot.get('price', 0)
             
+            # --- [GATEKEEPER v5.3.0] MANDATORY HIERARCHY ---
+            is_aligned = snapshot.get('is_aligned', False)
+            tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper()
+            
+            if tg_mode == "STRICT" and not is_aligned:
+                logger.warning(f"🛡️ [GATEKEEPER] Aborting analyze_opportunity for {symbol} due to Trend Mismatch. AI call Bypassed.")
+                return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'hard_trend_block'}
+
             trend_bias = snapshot.get('trend_bias', 0)
             mtf_context = "UPTREND (EMA200 4H)" if trend_bias == 1 else ("DOWNTREND (EMA200 4H)" if trend_bias == -1 else "NEUTRAL")
 
@@ -199,13 +222,13 @@ class StrategyEngine:
             boost_score = strategic.get('ai_boost_score', 0.99)
             boost_lev = strategic.get('ai_boost_leverage', 50)
             
-            # THE HARD GUARD (v5.2.2 [ZERO BYPASS])
+            # THE HARD GUARD (v5.3.0 [ZERO BYPASS])
             is_aligned = snapshot.get('is_aligned', False)
             tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper()
             
-            if tg_mode == "STRICT" and not is_aligned:
+            if not is_aligned and tg_mode == "STRICT":
+                # Final safeguard, though GATEKEEPER should have already aborted.
                 final_score = 0.0
-                logger.warning(f"🛡️ [HARD GUARD] Killing counter-trend {final_side} on {symbol} despite AI approval.")
             elif approved and strategic.get('enable_confidence_boost', False):
                 if ai_confidence > boost_trigger: 
                     logger.info(f"⚡ [CONFIG BOOST] High AI Confidence ({ai_confidence}) -> Forcing {boost_score} Score.")
@@ -253,10 +276,10 @@ class StrategyEngine:
             elif last_close < (ema200 * (1 - ema_thresh)): bias = -1
             
             self.mtf_cache[symbol] = (bias, now)
-            return bias
+            return {'bias': bias, 'ema200': ema200, 'last_close': last_close}
         except Exception as e:
             logger.error(f"MTF Error for {symbol}: {e}")
-            return 0
+            return {'bias': 0, 'ema200': 0, 'last_close': 0}
 
     def _calculate_rsi(self, series, period=14):
         delta = series.diff()

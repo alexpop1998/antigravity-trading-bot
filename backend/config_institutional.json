@@ -72,6 +72,7 @@
         "force_flip_on_conflict": false,
         "preaudit_tech_threshold": 0.85,
         "trend_guard_mode": "STRICT",
+        "allow_neutral_trend_trading": false,
         "tech_score_aligned": 0.85,
         "tech_score_mismatch": 0.0,
         "bb_tolerance_buy": 1.005,
