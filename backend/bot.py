@@ -115,22 +115,50 @@ class CryptoBot:
             
             # v44.0.0 [SYNC] Immediate position adoption (Zombie & Ghost protection)
             positions = await self.gateway.fetch_positions_robustly()
-            current_symbols = [p['symbol'] for p in positions]
+            current_symbols = [self.gateway.normalize_symbol(p['symbol']) for p in positions]
             
             # v44.0.0 [SIDE RECONCILE] Ensure local side matches exchange truth
             for p in positions:
                 sym = p['symbol']
                 exchange_side = p['side'].lower()
                 
+                norm_sym = self.gateway.normalize_symbol(sym)
+                if sym != norm_sym:
+                    # v55.6.6 [NUCLEAR RE-ANCHOR] Absolute migration of raw keys to canonical
+                    if sym in self.trade_levels and norm_sym not in self.trade_levels:
+                        logger.warning(f"⚓ [RE-ANCHOR] Migrating {sym} -> {norm_sym} in trade_levels.")
+                        self.trade_levels[norm_sym] = self.trade_levels[sym]
+                        self.trade_levels[norm_sym]['symbol'] = norm_sym
+                        del self.trade_levels[sym]
+                    elif norm_sym not in self.trade_levels:
+                        # Case: Find any fuzzy match already in levels
+                        s_clean = norm_sym.replace('/', '').replace(':', '').upper()
+                        for k_raw in list(self.trade_levels.keys()):
+                            if k_raw.replace('/', '').replace(':', '').upper() == s_clean:
+                                logger.warning(f"⚓ [DEEP-LINK ANCHOR] Redirecting {k_raw} -> {norm_sym}")
+                                self.trade_levels[norm_sym] = self.trade_levels[k_raw]
+                                self.trade_levels[norm_sym]['symbol'] = norm_sym
+                                del self.trade_levels[k_raw]
+                                break
+                    sym = norm_sym
+
                 if sym not in self.trade_levels:
+                    # v55.6.0 [MASTER SYMBOL NORMALIZATION]
                     logger.warning(f"🧟 [ADOPTION] Adopting orphan {sym} into internal levels.")
                     sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
+                    
                     self.trade_levels[sym] = {
-                        'symbol': sym, 'side': exchange_side, 'entry_price': p['entry_price'],
-                        'amount': p['amount'], 'leverage': p['leverage'], 'opened_at': time.time(),
-                        'sl': p['entry_price'] * (1 - sl_pct if exchange_side == 'long' else 1 + sl_pct),
-                        'tp1_hit': False, 'entry_score': 0.8 # Manual assumption
+                        'symbol': sym, 
+                        'side': exchange_side, 
+                        'entry_price': p.get('entry_price', 0),
+                        'amount': p.get('contracts', 0) or p.get('amount', 0),
+                        'leverage': p.get('leverage', 10), 
+                        'opened_at': time.time(),
+                        'sl': p.get('entry_price', 0) * (1 - sl_pct if exchange_side == 'long' else 1 + sl_pct),
+                        'tp1_hit': False, 
+                        'entry_score': 0.8 # Manual assumption
                     }
+                    sym = norm_sym # Use normalized for rest of sync
                 else:
                     local_side = self.trade_levels[sym].get('side', '').lower()
                     if local_side != exchange_side:
@@ -146,7 +174,7 @@ class CryptoBot:
                     logger.warning(f"🧹 [PRUNE] Removing stale {sym} (Manual close detected).")
                     del self.trade_levels[sym]
             
-            self.active_positions = {p['symbol']: ('LONG' if p['side'] == 'long' else 'SHORT') for p in positions}
+            self.active_positions = {self.gateway.normalize_symbol(p['symbol']): ('LONG' if p['side'] == 'long' else 'SHORT') for p in positions}
             self.db.save_state("trade_levels", self.trade_levels)
         except Exception as e:
             logger.error(f"❌ [ATOMIC SYNC FAILED] {e}")
@@ -174,7 +202,7 @@ class CryptoBot:
         except Exception as e:
             logger.error(f"Targeted Analysis Failed for {symbol}: {e}")
 
-    async def execute_order(self, symbol: str, side: str, analysis: Dict[str, Any]):
+    async def execute_order(self, symbol: str, side: str, analysis: Dict[str, Any], curr_price: float = None, **kwargs):
         async with self.order_lock:
             try:
                 blacklist = self.config.get('blacklisted_symbols', [])
@@ -201,27 +229,31 @@ class CryptoBot:
                 avail_margin = self.latest_account_data.get('available', 0)
                 if len(active_positions) >= self.max_concurrent_positions or avail_margin < 2.0:
                     if new_score >= 0.90:
+                        # v55.6.10 [SMART MARGIN SWAP] Skip if the asset is already present (Fuzzy Check)
+                        normalized_new = self.gateway.normalize_symbol(symbol)
+                        if any(self.gateway.normalize_symbol(p['symbol']) == normalized_new for p in active_positions):
+                            logger.info(f"📊 [DEDUPE] {symbol} already exists in portafoglio. Skipping swap logic.")
+                            return
+                            
                         weakest_symbol = None
                         weakest_score = 2.0
                         for p in active_positions:
                             s = p['symbol']
-                            entry_score = self.trade_levels.get(s, {}).get('entry_score', self.consensus_threshold)
+                            entry_score = self.trade_levels.get(self.gateway.normalize_symbol(s), {}).get('entry_score', self.consensus_threshold)
                             if entry_score < weakest_score:
                                 weakest_score = entry_score
                                 weakest_symbol = s
                         
                         if weakest_symbol and (new_score - weakest_score) >= 0.10:
                             logger.warning(f"📉 [MARGIN SWAP] Clearing weakest position {weakest_symbol} to prioritize {symbol}")
-                            await self._close_position_internal(weakest_symbol, self.trade_levels.get(weakest_symbol), "MARGIN_PRIORITY")
+                            await self._close_position_internal(weakest_symbol, self.trade_levels.get(self.gateway.normalize_symbol(weakest_symbol)), "MARGIN_PRIORITY")
                             await asyncio.sleep(1)
                             # Refresh active positions after clear
                             active_positions = await self.gateway.fetch_positions_robustly()
+                        
                         if avail_margin < 2.0: 
                             logger.warning(f"🛡️ [MARGIN GUARD] {symbol} skipped. Insufficient margin ({avail_margin:.2f} USDT).")
                             return # No room for mid-score signals
-                        else:
-                            logger.warning(f"🛡️ [TECH GUARD] {symbol} score {new_score:.2f} insufficient for Margin Swap.")
-                            return
 
                 # Conflict/Flip Logic
                 existing = next((p for p in active_positions if p['symbol'] == symbol), None)
@@ -243,16 +275,45 @@ class CryptoBot:
                 price = curr_price or self.latest_data.get(symbol, {}).get('price', 0)
                 leverage = int(analysis.get('leverage', self.leverage) if analysis else self.leverage)
                 
-                # v43.3.1 [GWEN OVERDRIVE] Target 50x for Blitz
-                if self.profile_type == 'blitz':
-                    leverage = max(leverage, 25)
-                    if analysis.get('confidence', 0) > 0.85: leverage = 50
+                # --- v55.0.0 [CONFIG-DRIVEN GLADIATOR LEVERAGE] ---
+                # Logic moved to config files for profile-safety and dynamic scaling.
+                leverage_params = self.config.get('strategic_params', {}).get('gladiator_leverage_params', {})
+                if leverage_params:
+                    majors = leverage_params.get('majors', ['BTC/USDT:USDT', 'ETH/USDT:USDT'])
+                    if symbol in majors:
+                        leverage = leverage_params.get('leverage_major_high', 50) if analysis.get('confidence', 0) >= 0.85 else leverage_params.get('leverage_major_std', 25)
+                    else:
+                        # Altcoin Logic with Special Case Bypass (Blitz Mode)
+                        confidence = analysis.get('confidence', 0)
+                        tech_score = analysis.get('score', 0)
+                        
+                        spec_conf = leverage_params.get('special_conf_threshold', 0.95)
+                        spec_tech = leverage_params.get('special_score_threshold', 0.85)
+                        
+                        if confidence >= spec_conf and tech_score >= spec_tech:
+                            leverage = leverage_params.get('leverage_alt_special', 30)
+                            logger.info(f"🚀 [SPECIAL CASE] {symbol} triggered high-leverage bypass ({leverage}x) due to elite signals.")
+                        else:
+                            leverage = leverage_params.get('leverage_alt_std', 20)
+                else:
+                    # Fallback to standard if config block is missing
+                    leverage = int(analysis.get('leverage', self.leverage) if analysis else self.leverage)
+                
+                logger.info(f"⚖️ [LEVERAGE AUDIT] {symbol} assigned {leverage}x (Conf: {analysis.get('confidence', 0):.2f}, Tech: {analysis.get('score', 0):.2f})")
                 
                 # v43.4.4 [GWEN MASTER] Adaptive Sniper Sizing
                 # v43.5.1 [ASYNC FIX] Now using await for sizing
                 # v43.5.2 [DIAGNOSTIC] Checkpoint before sizing
-                logger.info(f"📍 [CHECKPOINT] Calculating sizing for {symbol}...")
-                amount = await self._calculate_order_amount(symbol, price, leverage=leverage)
+                # v53.0.0 [GLADIATOR SIZING] Adjust amount if multiple winners are being executed
+                # v53.0.1 [BATCH MODE] Support
+                batch_mode = kwargs.get('batch_mode', False)
+                num_winners = kwargs.get('num_winners', 1)
+                
+                logger.info(f"📍 [CHECKPOINT] Calculating sizing for {symbol} (Batch: {batch_mode})...")
+                amount = await self._calculate_order_amount(
+                    symbol, price, leverage=leverage, 
+                    batch_divisor=num_winners if batch_mode else 1
+                )
                 logger.info(f"📍 [CHECKPOINT] Sizing for {symbol}: {amount}")
                 
                 # v43.4.1 [GWEN FIX] Log if amount is too low to trade
@@ -264,18 +325,31 @@ class CryptoBot:
                 await self.gateway.place_order(symbol, side.lower(), amount)
                 
                 is_long = side.lower() in ['buy', 'long']
-                sl_pct = self.config.get("trading_parameters", {}).get("stop_loss_pct", 0.02)
+                params = self.config.get("trading_parameters", {})
+                sl_pct = params.get("stop_loss_pct", 0.02)
+                tp_pct = params.get("take_profit_pct", 0.04)
+                
+                # --- v54.1.0 [GWEN SAFETY] Leverage-aware SL cap ---
+                # Ensure SL is hit BEFORE liquidation (Approx 1.8% at 50x)
+                if leverage >= 50:
+                    sl_pct = min(sl_pct, 0.015) 
+                    logger.warning(f"🛡️ [SAFETY CAP] {symbol} SL tightened to 1.5% for 50x leverage.")
+                elif leverage >= 20:
+                    sl_pct = min(sl_pct, 0.03)
+                
                 initial_sl = price * (1 - sl_pct if is_long else 1 + sl_pct)
+                initial_tp = price * (1 + tp_pct if is_long else 1 - tp_pct)
                 
                 self.trade_levels[symbol] = {
                     "symbol": symbol, "side": 'long' if is_long else 'short',
                     "entry_price": price, "entry_score": new_score,
                     "leverage": leverage, "opened_at": time.time(), "amount": amount,
                     "sl": initial_sl, "original_sl": initial_sl,
-                    "tp1": 0, "tp1_hit": False, "status": "RUNNING", "sl_tightness": "RUN"
+                    "tp1": initial_tp, "tp1_hit": False, "status": "RUNNING", "sl_tightness": "RUN"
                 }
                 self.db.save_state("trade_levels", self.trade_levels)
-                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}\nLeva: {leverage}x | Sizing: {self.percent_per_trade}%")
+                logger.info(f"🛡️ [SAFETY LEVELS] {symbol} SL: {initial_sl:.4f} | TP: {initial_tp:.4f}")
+                await self.notifier.send_message(f"✅ *NUOVA POSIZIONE {side.upper()}*\n🪙 {symbol} @ {price}\nLeva: {leverage}x | Sizing: {self.percent_per_trade}%\n🛡️ SL: {initial_sl:.4f} | TP: {initial_tp:.4f}")
             except Exception as e:
                 logger.error(f"❌ [EXECUTION FAILED] {e}")
 
@@ -315,8 +389,8 @@ class CryptoBot:
         except Exception as e:
             logger.error(f"❌ [PARTIAL FAILED] {e}")
 
-    async def _calculate_order_amount(self, symbol, price, leverage=None):
-        """🧬 [LEGACY SIZING] Robust margin calculation with safety buffer."""
+    async def _calculate_order_amount(self, symbol, price, leverage=None, batch_divisor=1):
+        """🧬 [GLADIATOR SIZING] Robust margin calculation with dynamic batch splitting."""
         try:
             # v44.0.0 [ZERO PRICE GUARD]
             if not price or float(price) <= 0:
@@ -336,11 +410,12 @@ class CryptoBot:
                 return 0
             
             # Target sizing based on equity percentage (e.g., 50% for Blitz)
-            target_margin = equity * (self.percent_per_trade / 100.0)
+            # v53.0.0 [BATCH SPLIT] Divide target margin by number of winners if in batch mode
+            target_margin = (equity * (self.percent_per_trade / 100.0)) / batch_divisor
             
             # v44.0.0 [MARGIN BUFFER] Legacy v29 logic: use 95% of available to allow for fees/price-shift
             # Ensure we respect Bitget's $5 minimum notional by targeting at least $5.1
-            margin_to_use = min(target_margin, avail * 0.95)
+            margin_to_use = min(target_margin, (avail * 0.95) / batch_divisor)
             
             # Hard floor for Bitget execution ($5 min notional)
             if (margin_to_use * target_leverage) < 5.0:
@@ -383,47 +458,92 @@ class CryptoBot:
                 
                 logger.info(f"🔍 [PULSE] Scanner retrieved {len(raw_candidates)} elite crypto assets.")
                 
-                # 4. DEEP ANALYSIS
-                sniper_candidates = []
+                # --- v53.0.0 [GLADIATOR UPGRADE] ---
+                # Step 1: Wide Tech Scan (Analyze all 60 raw candidates first)
+                logger.info(f"🧬 [TECH AUDIT] Phase 1: Analyzing all {len(raw_candidates)} candidates for technical quality...")
+                tech_candidates = []
+                
                 for cand in raw_candidates:
                     symbol = cand['symbol']
                     try:
                         ohlcv = await self.gateway.exchange.fetch_ohlcv(symbol, '5m' if self.profile_type == 'blitz' else '15m', limit=50)
                         df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                        self.latest_data[symbol] = {'price': df['close'].iloc[-1], 'df': df}
                         tech_snapshot = await self.strategy.get_technical_score(symbol, {'df': df})
-                        score = tech_snapshot.get('tech_score', 0)
+                        self.latest_data[symbol] = {
+                            'price': df['close'].iloc[-1], 
+                            'df': df,
+                            'atr': tech_snapshot.get('atr', 0),
+                            'rsi': tech_snapshot.get('rsi', 0)
+                        }
                         
-                        # v44.2.0 [GWEN MASTER FIX] - Remove invisible wall for Blitz
-                        if self.profile_type == 'blitz' or score >= 0.25:
-                            logger.info(f"🧬 [TECH AUDIT] {symbol} | Score: {score} | Status: {'PASS (Blitz Neutral)' if score < 0.25 else 'PASS'} -> Proceeding to AI Deep Analysis.")
-                            sniper_candidates.append({'symbol': symbol, 'tech_snapshot': tech_snapshot, 'df': df})
-                        else:
-                            logger.info(f"⏭️ [TECH AUDIT] {symbol} | Score: {score} | Status: REJECTED (Below 0.25 floor)")
+                        tech_candidates.append({
+                            'symbol': symbol,
+                            'momentum_score': cand['score'],
+                            'tech_score': tech_snapshot.get('tech_score', 0),
+                            'tech_snapshot': tech_snapshot,
+                            'price': df['close'].iloc[-1],
+                            'df': df,
+                            'change': cand.get('change', 0)
+                        })
                     except: continue
 
-                # 5. AI EXECUTION
-                for cand in sniper_candidates[:20]:
-                    symbol = cand['symbol']
-                    analysis = None
-                    for attempt in range(3):
-                        try:
-                            analysis = await self.strategy.analyze_opportunity(symbol, {'df': cand['df']}, cand['tech_snapshot'])
-                            if analysis: break
-                        except: await asyncio.sleep(2)
-                    
-                    if analysis and (analysis.get('ai_approved') or analysis.get('score', 0) >= self.consensus_threshold):
-                          await self.execute_order(symbol, analysis.get('side', 'buy'), analysis)
+                if not tech_candidates:
+                    logger.warning("⚠️ No valid tech candidates survived the audit. Skipping cycle.")
+                    continue
+
+                # Step 2: MELD SCORE RANKING (0.6 * Heat + 0.4 * Tech)
+                max_mom = max([c['momentum_score'] for c in tech_candidates]) or 1
+                for c in tech_candidates:
+                    norm_mom = c['momentum_score'] / max_mom
+                    c['meld_score'] = (0.6 * norm_mom) + (0.4 * c['tech_score'])
+
+                # Sort and pick top 20 "Gladiators"
+                tech_candidates.sort(key=lambda x: x['meld_score'], reverse=True)
+                gladiators = tech_candidates[:20]
                 
+                logger.info(f"🏆 [GLADIATOR BOARD] Selected {len(gladiators)} gladiators for parallel AI analysis. Top 5: {[f'{c['symbol']}({c['meld_score']:.2f})' for c in gladiators[:5]]}")
+
+                # Step 3: PARALLEL AI ANALYSIS
+                async def analyze_gladiator(cand):
+                    try:
+                        res = await self.strategy.analyze_opportunity(cand['symbol'], {'df': cand['df']}, cand['tech_snapshot'])
+                        if res and (res.get('ai_approved') or res.get('score', 0) >= self.consensus_threshold):
+                            return {**res, 'tech_score': cand['tech_score'], 'conviction': (res.get('confidence', 0) * cand['tech_score']), 'change': cand.get('change', 0)}
+                    except: pass
+                    return None
+
+                ai_results = await asyncio.gather(*[analyze_gladiator(c) for c in gladiators])
+                approved_winners = [r for r in ai_results if r is not None]
+                
+                if not approved_winners:
+                    logger.info("🛡️ [GLADIATORS] All contenders rejected by AI. Defending portfolio.")
+                else:
+                    # Step 4: COMPETITIVE RANKING (by true momentum/volatility)
+                    approved_winners.sort(key=lambda x: x['change'], reverse=True)
+                    num_winners = len(approved_winners)
+                    logger.info(f"⚔️ [BATTLE REPORT] {num_winners} Assets Approved. ELITE: {approved_winners[0]['symbol']} (Change: {approved_winners[0].get('change', 0):.2%})")
+
+                    # Step 5: BATCH EXECUTION
+                    for winner in approved_winners:
+                        # Refresh positions to avoid overloading
+                        current_pos = await self.gateway.fetch_positions_robustly()
+                        if len(current_pos) >= self.max_concurrent_positions:
+                            logger.warning(f"🚫 [LIMIT] Max positions ({self.max_concurrent_positions}) reached. Standing down.")
+                            break
+                        
+                        await self.execute_order(
+                            winner['symbol'], winner.get('side', 'buy'), winner, 
+                            batch_mode=True, num_winners=min(num_winners, 2) # Limit divisor to 2 for Blitz safety
+                        )
+
                 # 6. STAGNATION AUDIT (v44.1.0 [GWEN NORMALIZATION])
                 # Auto-exit if position is dead flat for 3 hours
                 for symbol, trade in list(self.trade_levels.items()):
                     if not trade: continue
                     age_h = (time.time() - trade.get('opened_at', 0)) / 3600
                     if age_h >= 3.0:
-                         # Normalize symbol for ticker lookup (handle Bitget suffix)
-                         ticker_key = symbol if symbol in tickers else next((k for k in tickers if k in symbol), None)
-                         curr_price = float(tickers.get(ticker_key or symbol, {}).get('last', 0))
+                         # v55.6.4 [FIX NAMEERROR] Use latest_data instead of undefined tickers
+                         curr_price = self.latest_data.get(symbol, {}).get('price', 0)
                          
                          if curr_price > 0:
                              entry = trade['entry_price']
@@ -445,16 +565,54 @@ class CryptoBot:
                 if not self.initialized: await asyncio.sleep(5); continue
                 active_symbols = list(self.active_positions.keys())
                 if not active_symbols: await asyncio.sleep(10); continue
-                tickers = await self.gateway.exchange.fetch_tickers(active_symbols)
+                
+                # v55.6.6 [GLOBAL TICKER PULSE] Fetch all available tickers for absolute fuzzy linking
+                tickers = await self.gateway.exchange.fetch_tickers()
+                
                 for symbol in active_symbols:
-                    trade = self.trade_levels.get(symbol)
+                    norm_symbol = self.gateway.normalize_symbol(symbol)
+                    trade = self.trade_levels.get(norm_symbol)
+                    
+                    # Fuzzy Trade Re-Link (v55.6.6)
+                    if not trade:
+                        s_clean = symbol.replace('/', '').replace(':', '').upper()
+                        for k, v in self.trade_levels.items():
+                            if k.replace('/', '').replace(':', '').upper() == s_clean:
+                                trade = v
+                                break
+                    
                     if not trade: continue
-                    curr_price = float(tickers.get(symbol, {}).get('last', 0))
+                    
+                    # Fuzzy Price Hook (v55.6.7) - Priority to symbol_map
+                    norm_symbol = self.gateway.symbol_map.get(symbol, symbol)
+                    ticker = tickers.get(symbol) or tickers.get(norm_symbol)
+                    
+                    if not ticker:
+                        # Improved Nuclear Fuzzy Search (strips trailing USDT duplication)
+                        s_clean = symbol.replace('/', '').replace(':', '').upper()
+                        for t_key, t_val in tickers.items():
+                            t_clean = t_key.replace('/', '').replace(':', '').upper()
+                            if t_clean == s_clean or t_clean == f"{s_clean}USDT": 
+                                ticker = t_val
+                                break
+                    
+                    if not ticker:
+                        logger.warning(f"⚠️ [SAFETY LOOP] Price missing for {symbol}. Skipping check.")
+                        continue
+                    
+                    curr_price = float(ticker.get('last', 0))
                     if curr_price <= 0: continue
-                    atr = self.latest_data.get(symbol, {}).get('atr', 0)
+                    
+                    # Process check
+                    atr = self.latest_data.get(symbol, {}).get('atr', 0) or (curr_price * 0.005)
                     exit_triggered, reason = await self.shield.check_position(symbol, trade, curr_price, current_atr=atr)
-                    if exit_triggered: await self.close_position(symbol, trade, reason)
-                await asyncio.sleep(5)
+                    if exit_triggered: 
+                        await self.close_position(symbol, trade, reason)
+                    else:
+                        # v55.5.0 [SAFETY SYNC] Save state immediately
+                        self.db.save_state("trade_levels", self.trade_levels)
+                        
+                await asyncio.sleep(2)
             except Exception as e:
                 logger.error(f"Safety Loop Error: {e}")
                 await asyncio.sleep(10)

@@ -94,16 +94,21 @@ class AssetScanner:
                             'change': abs(float(active_data.get('percentage', 0)))
                         })
             
-            # Ensure mandatory symbols are present
+            # Ensure mandatory symbols are present but with their organic score
             for mandatory in self.mandatory_symbols:
                 if mandatory not in [a['symbol'] for a in top_scored] and mandatory in tickers:
                     active_data = tickers[mandatory]
-                    top_scored.insert(0, {
+                    real_vol = float(active_data.get('quoteVolume', 0))
+                    real_chg = abs(float(active_data.get('percentage', 0)))
+                    top_scored.append({
                         'symbol': mandatory,
-                        'score': 999_999_998, # High priority
-                        'volume': float(active_data.get('quoteVolume', 0)),
-                        'change': abs(float(active_data.get('percentage', 0)))
+                        'score': real_vol * real_chg, # Organic priority
+                        'volume': real_vol,
+                        'change': real_chg
                     })
+            
+            # Re-sort to respect the organic momentum if mandatory symbols were appended
+            top_scored.sort(key=lambda x: x['score'], reverse=True)
             
             final_selection = top_scored[:limit]
             logger.info(f"✅ Scanner identified {len(final_selection)} assets. Top 3: {[a['symbol'] for a in final_selection[:3]]}")

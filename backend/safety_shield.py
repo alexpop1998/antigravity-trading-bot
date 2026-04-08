@@ -15,10 +15,9 @@ class SafetyShield:
         self.session_start_time = time.time()
         self.startup_shield_seconds = 300
         self.trade_protection_seconds = 60
-        self.price_history_2m: Dict[str, List[float]] = {} # 12 samples (10s each)
         self.price_history_5m: Dict[str, List[float]] = {} # 30 samples (10s each)
+        self.price_history_2m: Dict[str, List[float]] = {} # 12 samples (10s each)
         self.panic_drawdown_notified = False
-        self.peak_prices: Dict[str, float] = {} # Highest/Lowest reached per symbol
 
     def is_startup_shield_active(self) -> bool:
         return (time.time() - self.session_start_time) < self.startup_shield_seconds
@@ -145,19 +144,26 @@ class SafetyShield:
             self._update_price_history(symbol, current_price)
             if self._check_velocity_exit(symbol, current_price, side, current_atr):
                 return True, "VELOCITY_EXIT"
-
             flash_event = self._check_flash_detection(symbol, current_price)
             if flash_event:
                 if (is_long and flash_event == "DUMP") or (not is_long and flash_event == "PUMP"):
                     logger.critical(f"🆘 [FLASH EXIT] {symbol} due to {flash_event}.")
                     return True, f"FLASH_{flash_event}_EXIT"
 
-            # --- 1. PEAK TRACKING (For Trailing) ---
-            old_peak = self.peak_prices.get(symbol, current_price)
+            # --- 0.5 EMERGENCY UNDERWATER SAFEGUARD (v55.5.1) ---
+            # If the position is massively underwater (-50% ROI), we exit immediately.
+            if pnl_pct <= -0.50:
+                logger.critical(f"⚠️ [UNDERWATER SAFEGUARD] {symbol} hit -50% ROI limit. Emergency exit triggered.")
+                return True, "SAFEGUARD_UNDERWATER_EXIT"
+
+            # --- 1. PEAK TRACKING (For Trailing - Persisted in trade dict) ---
+            peak_price = float(trade.get('peak_price', current_price))
             if is_long:
-                self.peak_prices[symbol] = max(old_peak, current_price)
+                peak_price = max(peak_price, current_price)
             else:
-                self.peak_prices[symbol] = min(old_peak, current_price)
+                # For shorts, a 'peak' is the lowest price reached
+                peak_price = min(peak_price, current_price)
+            trade['peak_price'] = peak_price
 
             # --- 2. HARD STOP LOSS ---
             if (is_long and current_price <= sl) or (not is_long and current_price >= sl):
@@ -170,18 +176,39 @@ class SafetyShield:
             activation_pnl = float(trailing_config.get("activation_pnl_pct", 1.5)) / 100.0
             
             # 3.1 Algorithmic Trailing
-            if pnl_pct >= activation_pnl and current_atr > 0:
-                atr_mult = float(trailing_config.get("base_atr_multiplier", 3.0))
+            if pnl_pct >= activation_pnl:
+                # v55.5.0 [SAFETY HARDENING] Fallback ATR if not yet loaded after restart
+                if current_atr <= 0:
+                    current_atr = current_price * 0.005 # Fallback to 0.5% volatility
+                    logger.warning(f"⚠️ [ATR FALLBACK] {symbol} using placeholder ATR for trailing.")
+
+                atr_mult = float(trailing_config.get("base_atr_multiplier", 1.8))
                 if trade.get('sl_tightness') == 'TIGHTEN':
                     atr_mult *= float(trailing_config.get("tighten_ratio", 0.7))
                 
                 dist = current_atr * atr_mult
-                new_tsl = self.peak_prices[symbol] - dist if is_long else self.peak_prices[symbol] + dist
+                new_tsl = peak_price - dist if is_long else peak_price + dist
                 
                 if (is_long and new_tsl > sl) or (not is_long and new_tsl < sl):
                     sl = new_tsl
                     trade['sl'] = sl
-                    logger.debug(f"📈 [TRAILING] {symbol} moved SL to {sl:.4f}")
+                    
+                    # v55.6.9 [SMART SILENCE] Throttled Notification
+                    last_notify_sl = float(trade.get('last_notify_sl', 0))
+                    last_notify_time = float(trade.get('last_notify_time', 0))
+                    
+                    # Notify only if SL moved by > 0.5% OR > 30 minutes since last notification
+                    sl_change_pct = abs(sl - last_notify_sl) / (last_notify_sl or 1)
+                    time_since_notify = time.time() - last_notify_time
+                    
+                    if sl_change_pct > 0.005 or time_since_notify > 1800:
+                        logger.info(f"📈 [TRAILING] {symbol} moved SL to {sl:.4f} (NOTIFIED)")
+                        trade['last_notify_sl'] = sl
+                        trade['last_notify_time'] = time.time()
+                        # v55.4.0 - Telegram Alert for Trailing Movement (Fix Double Leverage Bug)
+                        self.bot.notifier.notify_trailing(symbol, f"{sl:.4f}", pnl_pct * 100)
+                    else:
+                        logger.debug(f"📈 [TRAILING] {symbol} moved SL to {sl:.4f} (SILENT)")
 
             # 3.2 Adaptive Tightening (v43.3 [GWEN FIX] - Never widen)
             if pnl_pct < 0 and trade.get('sl_tightness') == 'TIGHTEN':
