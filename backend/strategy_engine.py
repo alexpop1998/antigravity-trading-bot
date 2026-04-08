@@ -91,22 +91,27 @@ class StrategyEngine:
             elif tech_sell and funding_rate < -0.0005: 
                 size_multiplier *= 0.5
 
-            # 5. FINAL TECH SCORE
+            # 5. FINAL TECH SCORE (v55.9.0 [INSTITUTIONAL CORE])
+            strategic = self.bot.config.get('strategic_params', {})
+            tg_mode = strategic.get('trend_guard_mode', 'STRICT').upper() # STRICT, FLEXIBLE, OFF
+            
             score = 0.0
             side = "buy" if tech_buy else ("sell" if tech_sell else "neutral")
             
-            if tech_buy:
-                # v55.8.0 [HARD GUARD] Zero score if LONG in DOWNTREND
-                if trend_bias == -1:
-                    score = 0.0
+            # Trend Alignment Logic
+            is_aligned = (side == "buy" and trend_bias >= 0) or (side == "sell" and trend_bias <= 0)
+            
+            if side != "neutral":
+                if is_aligned:
+                    score = strategic.get('tech_score_aligned', 0.6)
                 else:
-                    score = 0.6 if trend_bias >= 0 else 0.4
-            elif tech_sell:
-                # v55.8.0 [HARD GUARD] Zero score if SHORT in UPTREND
-                if trend_bias == 1:
-                    score = 0.0
-                else:
-                    score = 0.6 if trend_bias <= 0 else 0.4
+                    # Counter-Trend Handling
+                    if tg_mode == "STRICT":
+                        score = 0.0
+                    elif tg_mode == "FLEXIBLE":
+                        score = strategic.get('tech_score_mismatch', 0.1) # Heavy penalty
+                    else: # OFF
+                        score = strategic.get('tech_score_mismatch', 0.4)
                 
             return {
                 'symbol': symbol,
@@ -131,14 +136,14 @@ class StrategyEngine:
             side = snapshot['side']
             tech_score = snapshot['tech_score']
             
-            # v43.3.1 Data-Driven Configuration for Pre-Audit and Bias
+            # [INSTITUTIONAL CORE] Data-Driven Configuration
             strategic = self.bot.config.get('strategic_params', {})
             preaudit_threshold = strategic.get('preaudit_tech_threshold', 0.45)
             
-            # [GWEN PURGE] force_trend_bias_bypass is now strictly FORBIDDEN for Blitz safety
-            if strategic.get('force_trend_bias_bypass', False):
-                logger.warning(f"⚠️ [SAFETY] Bypass detected in config but OVERRIDDEN for {symbol}. Trend Guard is Mandatory.")
-                # We do NOT allow bypass anymore in this emergency fix
+            # Trend Guard Override Check (Legacy support or emergency bypass)
+            if strategic.get('force_trend_bias_bypass', False) and strategic.get('trend_guard_mode') == 'OFF':
+                # Only allow bypass if Trend Guard is explicitly OFF in config
+                snapshot['trend_bias'] = 1 if side == 'buy' else -1
 
             if tech_score < preaudit_threshold:
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}

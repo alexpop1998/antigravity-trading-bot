@@ -47,8 +47,8 @@ class CryptoBot:
         self.max_slippage_pct = float(tp.get('max_slippage_pct', 0.005))
         
         # v43.3.1 [GWEN OVERDRIVE]
-        if self.profile_type == 'blitz':
-            logger.info(f"⚔️ [BLITZ OVERDRIVE] Sizing is {self.percent_per_trade}%.")
+        # [INSTITUTIONAL CORE] Generic Configuration Audit
+        logger.info(f"📊 [PROFILER] Profile: {self.profile_type.upper()} | Lev: {self.leverage}x | Risk: {self.percent_per_trade}%")
 
         exchange_name = self.config.get("strategic_params", {}).get("active_exchange", os.getenv("ACTIVE_EXCHANGE", "bitget"))
         self.active_exchange_name = exchange_name

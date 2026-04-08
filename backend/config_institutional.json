@@ -70,7 +70,10 @@
         "cycle_wait_seconds": 600,
         "enable_confidence_boost": false,
         "force_flip_on_conflict": false,
-        "preaudit_tech_threshold": 0.45,
+        "preaudit_tech_threshold": 0.85,
+        "trend_guard_mode": "STRICT",
+        "tech_score_aligned": 0.85,
+        "tech_score_mismatch": 0.0,
         "force_trend_bias_bypass": false
     },
     "ai_prompts": {
