@@ -55,7 +55,7 @@ class CryptoBot:
         self.gateway = ExchangeGateway(exchange_name)
         self.shield = SafetyShield(self)
         self.strategy = StrategyEngine(self)
-        self.scanner = AssetScanner(self.gateway.exchange)
+        self.scanner = AssetScanner(self)
         self.news_radar = NewsRadar(self)
         self.reporter = BotReporter()
         

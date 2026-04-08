@@ -64,13 +64,19 @@ class StrategyEngine:
             # 2. MTF Trend (Directional)
             trend_bias = await self._check_mtf_trend(symbol)
             
-            # 3. CONFLUENCE (v43.3 [GWEN FIX])
+            # 3. CONFLUENCE (v55.9.1 [TOTAL INJECTION])
+            strategic = self.bot.config.get('strategic_params', {})
+            tp = self.bot.config.get('trading_parameters', {})
+            
+            bb_tol_buy = strategic.get('bb_tolerance_buy', 1.01)
+            bb_tol_sell = strategic.get('bb_tolerance_sell', 0.99)
+            
             is_rsi_buy = rsi <= self.rsi_buy_level
-            is_bb_buy = price <= (bb_low * 1.01)
+            is_bb_buy = price <= (bb_low * bb_tol_buy)
             is_macd_buy = macd_hist > 0
             
             is_rsi_sell = rsi >= self.rsi_sell_level
-            is_bb_sell = price >= (bb_up * 0.99)
+            is_bb_sell = price >= (bb_up * bb_tol_sell)
             is_macd_sell = macd_hist < 0
 
             if self.technical_confluence_mode == "loose":
@@ -80,15 +86,18 @@ class StrategyEngine:
                 tech_buy = is_rsi_buy and is_bb_buy and is_macd_buy
                 tech_sell = is_rsi_sell and is_bb_sell and is_macd_sell
 
-            # 4. SIZING MODIFIER
+            # 4. SIZING MODIFIER (v55.9.1 [TOTAL INJECTION])
             size_multiplier = 1.0
-            if tech_sell and change_15m > 0.015:
+            vol_prot = strategic.get('volatility_protection_threshold', 0.015)
+            fund_threshold = strategic.get('funding_penalty_threshold', 0.0005)
+            
+            if tech_sell and change_15m > vol_prot:
                 tech_sell = False
 
             funding_rate = data.get('funding_rate', 0)
-            if tech_buy and funding_rate > 0.0005: 
+            if tech_buy and funding_rate > fund_threshold: 
                 size_multiplier *= 0.5
-            elif tech_sell and funding_rate < -0.0005: 
+            elif tech_sell and funding_rate < -fund_threshold: 
                 size_multiplier *= 0.5
 
             # 5. FINAL TECH SCORE (v55.9.0 [INSTITUTIONAL CORE])
@@ -180,12 +189,16 @@ class StrategyEngine:
             
             aligned_tech_score = tech_score if side.lower() == final_side.lower() else 0.0
             
-            # v43.3.1 Data-Driven Boost
+            # v43.3.1 Data-Driven Boost (v55.9.1 [TOTAL INJECTION])
+            boost_trigger = strategic.get('ai_boost_trigger', 0.85)
+            boost_score = strategic.get('ai_boost_score', 0.99)
+            boost_lev = strategic.get('ai_boost_leverage', 50)
+            
             if approved and strategic.get('enable_confidence_boost', False):
-                if ai_confidence > 0.85: 
-                    logger.info(f"⚡ [CONFIG BOOST] High AI Confidence ({ai_confidence}) -> Forcing 0.99 Score.")
-                    final_score = 0.99
-                    leverage = 50
+                if ai_confidence > boost_trigger: 
+                    logger.info(f"⚡ [CONFIG BOOST] High AI Confidence ({ai_confidence}) -> Forcing {boost_score} Score.")
+                    final_score = boost_score
+                    leverage = boost_lev
                 else:
                     final_score = max(0.81, (0.7 * ai_confidence) + (0.3 * aligned_tech_score))
                     logger.info(f"⚡ [CONFIG MELD] Score: {final_score:.2f} (AI: {ai_confidence:.2f}, Tech: {aligned_tech_score:.2f})")
@@ -222,9 +235,10 @@ class StrategyEngine:
             ema200 = df_4h['c'].ewm(span=200, adjust=False).mean().iloc[-1]
             last_close = df_4h['c'].iloc[-1]
             
+            ema_thresh = self.bot.config.get('strategic_params', {}).get('mtf_ema_threshold', 0.002)
             bias = 0
-            if last_close > (ema200 * 1.002): bias = 1
-            elif last_close < (ema200 * 0.998): bias = -1
+            if last_close > (ema200 * (1 + ema_thresh)): bias = 1
+            elif last_close < (ema200 * (1 - ema_thresh)): bias = -1
             
             self.mtf_cache[symbol] = (bias, now)
             return bias

@@ -6,8 +6,9 @@ from typing import List, Dict, Any
 logger = logging.getLogger("AssetScanner")
 
 class AssetScanner:
-    def __init__(self, exchange, allowed_symbols: List[str] = None):
-        self.exchange = exchange
+    def __init__(self, bot_instance, allowed_symbols: List[str] = None):
+        self.bot = bot_instance
+        self.exchange = bot_instance.gateway.exchange
         self.allowed_symbols = allowed_symbols # Mainnet Symbols only
         # Mandatory symbols to always keep in rotation
         self.mandatory_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
@@ -52,13 +53,17 @@ class AssetScanner:
                 volume = float(data.get('quoteVolume') or 0) # 24h Volume in USDT
                 change_pct = abs(float(data.get('percentage') or 0)) # 24h Absolute change
                 
-                # v43.3 [GWEN FIX] Hardened Liquidity & Volatility Audit (v49.0.0 Refined)
-                # Rule 1: Minimum Liquidity (300k USDT) for high-frequency Blitz
-                if volume < 300_000:
+                # v55.9.1 [TOTAL INJECTION] Dynamic market thresholds
+                strategic = self.bot.config.get('strategic_params', {})
+                min_vol_usdt = strategic.get('min_liquidity_threshold', 300_000)
+                min_chg_pct = strategic.get('min_volatility_threshold', 0.1)
+
+                # Rule 1: Minimum Liquidity
+                if volume < min_vol_usdt:
                     continue
                 
-                # Rule 2: Minimum Volatility (0.1%) to include early-stage breakouts
-                if change_pct < 0.1:
+                # Rule 2: Minimum Volatility
+                if change_pct < min_chg_pct:
                     continue
                 
                 # Momentum Score: A mix of high volume and high volatility
