@@ -39,7 +39,8 @@ class AssetScanner:
                 if not (symbol.endswith(":USDT") or ":USDT" in symbol):
                     continue
                 
-                if symbol in self.blacklist:
+                if any(b in symbol for b in self.blacklist):
+                    logger.debug(f"🚫 [BLACKLIST] Filtering out {symbol}")
                     continue
                 
                 # Extract metrics

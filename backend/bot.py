@@ -72,6 +72,11 @@ class CryptoBot:
         self.last_pair_update = 0
         self.pair_update_interval = self.config.get('operational_params', {}).get('pair_update_interval', 3600)
         self.dynamic_symbols = []
+        
+        # v5.5.0 [COLD START INHIBITOR]
+        self.warmup_seconds = 90
+        self.warmup_until = self.start_time + self.warmup_seconds
+        logger.info(f"🛡️ [COLD START] Bot in WARMUP mode for {self.warmup_seconds}s. Monitoring only.")
 
     def _load_config(self):
         try:
@@ -294,6 +299,9 @@ class CryptoBot:
                 leverage_params = self.config.get('strategic_params', {}).get('gladiator_leverage_params', {})
                 if leverage_params:
                     majors = leverage_params.get('majors', ['BTC/USDT:USDT', 'ETH/USDT:USDT'])
+                    if any(b in symbol for b in self.blacklist):
+                        logger.debug(f"🚫 [BLACKLIST] Filtering out {symbol}")
+                        return
                     if symbol in majors:
                         leverage = leverage_params.get('leverage_major_high', 50) if analysis.get('confidence', 0) >= 0.85 else leverage_params.get('leverage_major_std', 25)
                     else:
@@ -490,6 +498,14 @@ class CryptoBot:
         """🧬 [MAIN CORE] The Atomic Sniper Heartbeat (Inspired by v29)."""
         while True:
             try:
+                # v5.5.0 [WARMUP SHIELD]
+                if time.time() < self.warmup_until:
+                    remaining = int(self.warmup_until - time.time())
+                    if remaining % 30 == 0:
+                        logger.info(f"⏱️ [WARMUP] Blocked for {remaining}s. Safety Shield is ACTIVE but new trades are INHIBITED.")
+                    await asyncio.sleep(10)
+                    continue
+                
                 if not self.initialized: await asyncio.sleep(10); continue
                 
                 # 1. ATOMIC SYNC: Ensured state consistency BEFORE analysis
@@ -609,8 +625,6 @@ class CryptoBot:
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 logger.error(f"❌ [CORE LOOP ERROR] {e}")
-                await asyncio.sleep(60)
-
     async def run_reactive_safety_loop(self):
         while True:
             try:
