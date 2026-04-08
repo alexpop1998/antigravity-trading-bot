@@ -43,6 +43,8 @@ class CryptoBot:
         self.stop_loss_pct = float(tp.get('stop_loss_pct', 0.02))
         self.take_profit_pct = float(tp.get('take_profit_pct', 0.04))
         self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
+        self.timeframe = tp.get('timeframe', '15m')
+        self.max_slippage_pct = float(tp.get('max_slippage_pct', 0.005))
         
         # v43.3.1 [GWEN OVERDRIVE]
         if self.profile_type == 'blitz':
@@ -483,7 +485,9 @@ class CryptoBot:
                 # 2. CIRCUIT BREAKER
                 if await self.shield.check_daily_circuit_breaker():
                     logger.warning("🚨 [HALT] Daily Loss Limit reached.")
-                    await asyncio.sleep(600); continue
+                    await asyncio.sleep(600)
+                    continue
+
 
                 # 3. PANORAMIC SCAN (v46.0.0 [GWEN BLACKLIST ENFORCEMENT])
                 # Uses AssetScanner to respect hard blacklist (AAPL, TSLA, Gold, etc.)
@@ -522,55 +526,55 @@ class CryptoBot:
                     except: continue
 
                 if not tech_candidates:
-                    logger.warning("⚠️ No valid tech candidates survived the audit. Skipping cycle.")
-                    continue
-
-                # Step 2: MELD SCORE RANKING (0.6 * Heat + 0.4 * Tech)
-                max_mom = max([c['momentum_score'] for c in tech_candidates]) or 1
-                for c in tech_candidates:
-                    norm_mom = c['momentum_score'] / max_mom
-                    c['meld_score'] = (0.6 * norm_mom) + (0.4 * c['tech_score'])
-
-                # Sort and pick top 20 "Gladiators"
-                tech_candidates.sort(key=lambda x: x['meld_score'], reverse=True)
-                gladiators = tech_candidates[:20]
-                
-                logger.info(f"🏆 [GLADIATOR BOARD] Selected {len(gladiators)} gladiators for parallel AI analysis. Top 5: {[f'{c['symbol']}({c['meld_score']:.2f})' for c in gladiators[:5]]}")
-
-                # Step 3: PARALLEL AI ANALYSIS
-                async def analyze_gladiator(cand):
-                    try:
-                        res = await self.strategy.analyze_opportunity(cand['symbol'], {'df': cand['df']}, cand['tech_snapshot'])
-                        if res and (res.get('ai_approved') or res.get('score', 0) >= self.consensus_threshold):
-                            return {**res, 'tech_score': cand['tech_score'], 'conviction': (res.get('confidence', 0) * cand['tech_score']), 'change': cand.get('change', 0)}
-                    except: pass
-                    return None
-
-                ai_results = await asyncio.gather(*[analyze_gladiator(c) for c in gladiators])
-                approved_winners = [r for r in ai_results if r is not None]
-                
-                if not approved_winners:
-                    logger.info("🛡️ [GLADIATORS] All contenders rejected by AI. Defending portfolio.")
+                    logger.warning("⚠️ No valid tech candidates survived the audit.")
                 else:
-                    # Step 4: COMPETITIVE RANKING (by true momentum/volatility)
-                    approved_winners.sort(key=lambda x: x['change'], reverse=True)
-                    num_winners = len(approved_winners)
-                    logger.info(f"⚔️ [BATTLE REPORT] {num_winners} Assets Approved. ELITE: {approved_winners[0]['symbol']} (Change: {approved_winners[0].get('change', 0):.2%})")
+                    # Step 2: MELD SCORE RANKING (0.6 * Heat + 0.4 * Tech)
+                    max_mom = max([c['momentum_score'] for c in tech_candidates]) or 1
+                    for c in tech_candidates:
+                        norm_mom = c['momentum_score'] / max_mom
+                        c['meld_score'] = (0.6 * norm_mom) + (0.4 * c['tech_score'])
 
-                    # Step 5: BATCH EXECUTION
-                    for winner in approved_winners:
-                        # Refresh positions to avoid overloading
-                        current_pos = await self.gateway.fetch_positions_robustly()
-                        if len(current_pos) >= self.max_concurrent_positions:
-                            logger.warning(f"🚫 [LIMIT] Max positions ({self.max_concurrent_positions}) reached. Standing down.")
-                            break
-                        
-                        await self.execute_order(
-                            winner['symbol'], winner.get('side', 'buy'), winner, 
-                            batch_mode=True, num_winners=min(num_winners, 2) # Limit divisor to 2 for Blitz safety
-                        )
+                    # Sort and pick top 20 "Gladiators"
+                    tech_candidates.sort(key=lambda x: x['meld_score'], reverse=True)
+                    gladiators = tech_candidates[:20]
+                    
+                    logger.info(f"🏆 [GLADIATOR BOARD] Selected {len(gladiators)} gladiators for parallel AI analysis. Top 5: {[f'{c['symbol']}({c['meld_score']:.2f})' for c in gladiators[:5]]}")
+
+                    # Step 3: PARALLEL AI ANALYSIS
+                    async def analyze_gladiator(cand):
+                        try:
+                            res = await self.strategy.analyze_opportunity(cand['symbol'], {'df': cand['df']}, cand['tech_snapshot'])
+                            if res and (res.get('ai_approved') or res.get('score', 0) >= self.consensus_threshold):
+                                return {**res, 'tech_score': cand['tech_score'], 'conviction': (res.get('confidence', 0) * cand['tech_score']), 'change': cand.get('change', 0)}
+                        except: pass
+                        return None
+
+                    ai_results = await asyncio.gather(*[analyze_gladiator(c) for c in gladiators])
+                    approved_winners = [r for r in ai_results if r is not None]
+                    
+                    if not approved_winners:
+                        logger.info("🛡️ [GLADIATORS] All contenders rejected by AI. Defending portfolio.")
+                    else:
+                        # Step 4: COMPETITIVE RANKING (by true momentum/volatility)
+                        approved_winners.sort(key=lambda x: x['change'], reverse=True)
+                        num_winners = len(approved_winners)
+                        logger.info(f"⚔️ [BATTLE REPORT] {num_winners} Assets Approved. ELITE: {approved_winners[0]['symbol']} (Change: {approved_winners[0].get('change', 0):.2%})")
+
+                        # Step 5: BATCH EXECUTION
+                        for winner in approved_winners:
+                            # Refresh positions to avoid overloading
+                            current_pos = await self.gateway.fetch_positions_robustly()
+                            if len(current_pos) >= self.max_concurrent_positions:
+                                logger.warning(f"🚫 [LIMIT] Max positions ({self.max_concurrent_positions}) reached. Standing down.")
+                                break
+                            
+                            await self.execute_order(
+                                winner['symbol'], winner.get('side', 'buy'), winner, 
+                                batch_mode=True, num_winners=min(num_winners, 2) # Limit divisor to 2 for Blitz safety
+                            )
 
                 # 6. STAGNATION AUDIT (v44.1.0 [GWEN NORMALIZATION])
+
                 # Auto-exit if position is dead flat for 3 hours
                 for symbol, trade in list(self.trade_levels.items()):
                     if not trade: continue
