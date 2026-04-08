@@ -211,8 +211,18 @@ class CryptoBot:
     async def execute_order(self, symbol: str, side: str, analysis: Dict[str, Any], curr_price: float = None, **kwargs):
         async with self.order_lock:
             try:
-                blacklist = self.config.get('blacklisted_symbols', [])
-                if symbol in blacklist: return
+                # v5.5.1 [WARMUP SHIELD] FINAL BARRIER
+                if time.time() < self.warmup_until:
+                    remaining = int(self.warmup_until - time.time())
+                    logger.warning(f"🛡️ [WARMUP SHIELD] Inibizione EXECUTION attiva. Bloccatato ordine per {symbol}. Residui: {remaining}s")
+                    return
+
+                # v5.5.1 [ZERO-HARDCODE FIX] Correct path for blacklist
+                filters = self.config.get('market_filters', {})
+                blacklist = filters.get('blacklist', [])
+                if any(b in symbol for b in blacklist):
+                    logger.warning(f"🚫 [BLACKLIST] Blocked attempted order for {symbol}")
+                    return
 
                 new_score = analysis.get('score', 0)
                 ref_price = analysis.get('reference_price', 0)
