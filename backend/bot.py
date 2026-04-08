@@ -257,21 +257,34 @@ class CryptoBot:
                             return # No room for mid-score signals
 
                 # Conflict/Flip Logic
-                existing = next((p for p in active_positions if p['symbol'] == symbol), None)
-                if existing:
-                    existing_side = existing['side'].lower()
-                    if existing_side != side.lower():
-                        # v43.3.11 [GWEN FIX] Force Flip based on strategic config to free margin
-                        if self.config.get('strategic_params', {}).get('force_flip_on_conflict', False) or analysis.get('confidence', 0) > 0.85:
-                            logger.info(f"🔄 [FORCED FLIP] Closing opposite side for {symbol} to free margin.")
-                            await self.gateway.close_all_for_symbol(symbol)
-                            await asyncio.sleep(1)
-                        else: 
-                            logger.info(f"🛡️ [FLIP GUARD] Skipping {symbol} opposite side (Confidence too low for swap).")
+                # v56.0.0 [ATOMIC PRE-FLIGHT & SELECTIVE SCALING]
+                # Check absolute truth from exchange before placing order
+                pos = await self.gateway.fetch_atomic_position(symbol)
+                confidence = analysis.get('confidence', 0) if analysis else 0
+                
+                if pos:
+                    existing_side = pos['side'].lower()
+                    if existing_side == side.lower():
+                        # Selective Pyramiding Logic
+                        equity = float(self.latest_account_data.get('equity', 0))
+                        entry_price = float(pos.get('entry_price', 0))
+                        # Current margin is approx: amount * entry_price / leverage
+                        current_margin = (float(pos['amount']) * entry_price) / float(pos.get('leverage', self.leverage))
+                        margin_ratio = current_margin / (equity if equity > 0 else 1)
+                        
+                        if confidence >= 0.90 and margin_ratio < 0.40:
+                            logger.info(f"💎 [SELECTIVE SCALING] Conviction is HIGH ({confidence:.2f}). Adding to {symbol} {existing_side} (Current Margin: {margin_ratio:.1%}).")
+                        else:
+                            logger.info(f"🛡️ [DUPLICATE GUARD] Already in {symbol} {existing_side} ({margin_ratio:.1%}). Skipping.")
                             return
-                    else: 
-                        logger.info(f"🛡️ [DUPLICATE GUARD] Already in {symbol} {existing_side}. Skipping.")
-                        return
+                    else:
+                        # Flip Logic
+                        if confidence < 0.85:
+                            logger.info(f"🛡️ [FLIP GUARD] Skipping {symbol} opposite side (Confidence {confidence:.2f} too low for swap).")
+                            return
+                        else:
+                            logger.warning(f"🔄 [FLIP] Strong signal ({confidence:.2f}) for {side.upper()} against {existing_side.upper()}. Closing and flipping.")
+                            await self._close_position_internal(symbol, self.trade_levels.get(symbol, {}), "FLIP_SIGNAL")
 
                 price = curr_price or self.latest_data.get(symbol, {}).get('price', 0)
                 leverage = int(analysis.get('leverage', self.leverage) if analysis else self.leverage)

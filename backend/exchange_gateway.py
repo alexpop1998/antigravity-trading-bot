@@ -40,9 +40,18 @@ class ExchangeGateway:
             self.markets = await self.exchange.load_markets()
             # Create a reverse map for unslashed symbols (e.g., NOMUSDT -> NOM/USDT:USDT)
             for symbol, market in self.markets.items():
-                if market.get('id'):
-                    self.symbol_map[market['id']] = symbol
-            logger.info(f"✅ [{self.exchange_name.upper()}] Loaded {len(self.markets)} markets.")
+                m_id = market.get('id')
+                if not m_id: continue
+                
+                # v55.6.6 [NUCLEAR PROTOCOL] Explicitly prioritize Swap/Futures market data
+                market_type = str(market.get('type', '')).upper()
+                is_swap = market.get('swap', False) or ':USDT' in symbol or 'SWAP' in market_type or 'FUTURE' in market_type
+                
+                # Check for existing mapping and only overwrite if current is swap
+                if m_id not in self.symbol_map or is_swap:
+                    self.symbol_map[m_id] = symbol
+                    
+            logger.info(f"✅ [{self.exchange_name.upper()}] Loaded {len(self.markets)} markets (Priority Swap Alignment).")
         except Exception as e:
             logger.error(f"❌ Failed to load markets: {e}")
 
@@ -57,9 +66,16 @@ class ExchangeGateway:
         if symbol in self.markets:
             res = symbol
         else:
-            # Try unslashed mapping
-            clean_symbol = symbol.replace('/', '').replace(':', '')
-            res = self.symbol_map.get(clean_symbol, symbol)
+            # v55.6.1 [FUZZY MASTER] Try mapping and then absolute stripping search
+            clean_input = symbol.replace('/', '').replace(':', '').replace('-', '').replace('_', '').upper()
+            res = self.symbol_map.get(clean_input, symbol)
+            
+            # If map fails, search the entire symbol list for a match
+            if res == symbol:
+                for canon_sym, clean_mapped in {s: s.replace('/', '').replace(':', '').replace('-', '').replace('_', '').upper() for s in self.markets.keys()}.items():
+                    if clean_input == clean_mapped:
+                        res = canon_sym
+                        break
             
         self.symbol_cache[symbol] = res
         return res
@@ -244,7 +260,9 @@ class ExchangeGateway:
                         'side': matching.get('holdSide', '').lower(),
                         'amount': abs(float(matching.get('total', 0))),
                         'entry_price': float(matching.get('openPriceAvg', 0)),
-                        'leverage': float(matching.get('leverage', 0))
+                        'leverage': float(matching.get('leverage', 0)),
+                        'unrealizedPnl': float(matching.get('unrealizedPL', 0)),
+                        'percentage': float(matching.get('percentage', 0)) * 100.0 # Standardize to % 
                     }
             else:
                 # Standard CCXT path for Binance/Others

@@ -68,8 +68,8 @@
         "breakeven_pct": 0.003,
         "be_trigger_pct": 0.008,
         "max_slippage_pct": 0.015,
-        "flash_pump_threshold": 0.008,
-        "velocity_exit_floor": 0.007
+        "flash_pump_threshold": 0.02,
+        "velocity_exit_floor": 0.015
     },
     "trailing_params": {
         "activation_pnl_pct": 0.6,

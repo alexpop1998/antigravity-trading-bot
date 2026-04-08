@@ -26,6 +26,10 @@ class TelegramNotifier:
         if not self.enabled:
             return
 
+        # v55.6.10 [MARKDOWN HARDENING] Escape special characters that break Telegram
+        # We manually escape symbols like '/' and ':' if they are not inside code blocks
+        # but the safest is to ensure symbols are ALWAYS in backticks.
+        
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {
             "chat_id": self.chat_id,
@@ -37,7 +41,11 @@ class TelegramNotifier:
             async with httpx.AsyncClient() as client:
                 resp = await client.post(url, json=payload, timeout=10.0)
                 if resp.status_code != 200:
-                    logger.error(f"Errore invio Telegram: {resp.text}")
+                    # v55.6.10 [FALLBACK] If Markdown fails, try sending as plain text
+                    logger.warning(f"⚠️ Markdown failed, retrying as plain text: {resp.text}")
+                    payload["parse_mode"] = ""
+                    payload["text"] = message.replace("*", "").replace("`", "")
+                    await client.post(url, json=payload, timeout=10.0)
         except Exception as e:
             logger.error(f"Errore connessione Telegram: {e}")
 
@@ -93,6 +101,22 @@ class TelegramNotifier:
         if reason_it:
             msg += f"Motivazione: `{reason_it}`"
             
+        asyncio.create_task(self.send_message(msg))
+
+    def notify_trailing(self, symbol, new_sl, pnl_pct):
+        """Notifica lo spostamento dello Stop Loss tramite Trailing Stop."""
+        if not self.enabled:
+            return
+            
+        exchange_prefix = f" [{self.active_exchange}]" if self.active_exchange != "UNKNOWN" else ""
+        emoji = "📈" if pnl_pct >= 0 else "📉"
+        
+        safe_symbol = str(symbol).replace("_", "\\_")
+        msg = f"{emoji} *TRAILING STOP ATTIVATO{exchange_prefix}*\n\n" \
+              f"Strumento: `{safe_symbol}`\n" \
+              f"Nuovo SL: `{new_sl}`\n" \
+              f"ROE Attuale: `{pnl_pct:+.2f}%`"
+              
         asyncio.create_task(self.send_message(msg))
 
     def notify_alert(self, type, title, value=""):
