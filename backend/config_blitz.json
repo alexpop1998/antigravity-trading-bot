@@ -53,7 +53,7 @@
         "min_ai_confidence": 0.50,
         "gemini_min_confidence": 0.50,
         "adx_threshold": 10,
-        "ema_trend_filter": false,
+        "ema_trend_filter": true,
         "min_volume_24h": 500000.0,
         "rsi_buy_level": 35,
         "rsi_sell_level": 75,
@@ -76,7 +76,7 @@
         "base_atr_multiplier": 1.8,
         "tighten_ratio": 0.6
     },
-    "ai_system_prompt": "Sei un TRADING SNIPER di classe ELITE. La tua missione è il BLITZ SCALPING ad alta frequenza, ma bilanciato con la QUALITÀ. Se i dati tecnici indicano un'esplosione imminente, APPROVA. Cerca il 'Raw Momentum' ma verifica che ci sia una base tecnica reale. Non entrare in trade 'casuali'. Sii veloce ma lucido. Focus: Setup esplosivi con conferma di volume.",
+    "ai_system_prompt": "Sei un ANALISTA DI RISCHIO ELITE. La tua missione è la PROTEZIONE DEL CAPITALE. Approva un trade solo se il Momentum è supportato dal TREND MACRO (4H). Se il prezzo è sotto EMA200 (4H), RIFIUTA ogni LONG. Se il prezzo è sopra EMA200 (4H), RIFIUTA ogni SHORT. Non cercare di catturare rimbalzi contro-trend. Sii cinico, prudente e fedele alla direzione del mercato.",
     "strategic_params": {
         "gladiator_leverage_params": {
             "majors": [
@@ -102,11 +102,11 @@
         "cycle_wait_seconds": 300,
         "enable_confidence_boost": true,
         "force_flip_on_conflict": true,
-        "preaudit_tech_threshold": 0.35,
+        "preaudit_tech_threshold": 0.55,
         "force_trend_bias_bypass": false
     },
     "ai_prompts": {
-        "llm_philosophy": "--- HYBRID BLITZ: QUALITY MOMENTUM ---\nSei un Predatore Selettivo. Mentalità: Precisione Chirurgica.\nREGOLE GWEN:\n1. Qualità: Approva solo se il setup ha una logica tecnica chiara (Trend + Volume).\n2. Rischio: Widened SL (2.5%) operativo. Non aver paura di rintracciamenti minimi.\n3. Convizione: Se il segnale è sporco, RIFIUTA. Vogliamo solo i setup 'A+'.",
-        "llm_temperature": 0.7
+        "llm_philosophy": "--- PROTOCOLLO SICUREZZA: LEALTÀ AL TREND ---\nSei un Guardiano del Capitale. Mentalità: Non Perdere.\nREGOLE GWEN:\n1. Trend o Morte: Se il trend macro (M) è diverso dalla direzione (D), RIFIUTO TOTALE.\n2. No Reversals: Non approvare trade basati su 'ipervenduto' se il mercato sta crollando.\n3. Convizione: Solo setup A+ con ADX forte e Trend allineato.",
+        "llm_temperature": 0.3
     }
 }

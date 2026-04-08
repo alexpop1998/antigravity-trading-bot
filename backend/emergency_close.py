@@ -26,13 +26,10 @@ async def close_positions():
             side = pos['side'].lower()
             amount = abs(float(pos.get('amount', pos.get('contracts', 0))))
             
-            if 'NOM' in symbol or 'PEPE' in symbol:
-                print(f"🚀 Chiusura d'emergenza per {symbol} ({side} {amount})...")
-                close_side = 'sell' if side == 'long' else 'buy'
-                order = await exchange.create_order(symbol, 'market', close_side, amount, None, {'reduceOnly': True})
-                print(f"✅ Ordine inviato: {order['id'] if isinstance(order, dict) else 'OK'}")
-            else:
-                print(f"ℹ️ {symbol} ignorato.")
+            print(f"🚀 Chiusura d'emergenza per {symbol} ({side} {amount})...")
+            close_side = 'sell' if side == 'long' else 'buy'
+            order = await exchange.create_order(symbol, 'market', close_side, amount, None, {'reduceOnly': True})
+            print(f"✅ Ordine inviato: {order['id'] if isinstance(order, dict) else 'OK'}")
                 
     except Exception as e:
         print(f"❌ Errore: {e}")

@@ -96,9 +96,17 @@ class StrategyEngine:
             side = "buy" if tech_buy else ("sell" if tech_sell else "neutral")
             
             if tech_buy:
-                score = 0.6 if trend_bias >= 0 else 0.4
+                # v55.8.0 [HARD GUARD] Zero score if LONG in DOWNTREND
+                if trend_bias == -1:
+                    score = 0.0
+                else:
+                    score = 0.6 if trend_bias >= 0 else 0.4
             elif tech_sell:
-                score = 0.6 if trend_bias <= 0 else 0.4
+                # v55.8.0 [HARD GUARD] Zero score if SHORT in UPTREND
+                if trend_bias == 1:
+                    score = 0.0
+                else:
+                    score = 0.6 if trend_bias <= 0 else 0.4
                 
             return {
                 'symbol': symbol,
@@ -127,9 +135,10 @@ class StrategyEngine:
             strategic = self.bot.config.get('strategic_params', {})
             preaudit_threshold = strategic.get('preaudit_tech_threshold', 0.45)
             
+            # [GWEN PURGE] force_trend_bias_bypass is now strictly FORBIDDEN for Blitz safety
             if strategic.get('force_trend_bias_bypass', False):
-                # Force MTF bias to 1 to bypass EMA200 filter in technical scoring
-                snapshot['trend_bias'] = 1 if side == 'buy' else -1
+                logger.warning(f"⚠️ [SAFETY] Bypass detected in config but OVERRIDDEN for {symbol}. Trend Guard is Mandatory.")
+                # We do NOT allow bypass anymore in this emergency fix
 
             if tech_score < preaudit_threshold:
                 return {'symbol': symbol, 'score': 0.0, 'side': side, 'reason': 'low_tech_score_prefilter'}
