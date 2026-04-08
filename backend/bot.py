@@ -299,7 +299,7 @@ class CryptoBot:
                 leverage_params = self.config.get('strategic_params', {}).get('gladiator_leverage_params', {})
                 if leverage_params:
                     majors = leverage_params.get('majors', ['BTC/USDT:USDT', 'ETH/USDT:USDT'])
-                    if any(b in symbol for b in self.blacklist):
+                    if any(b in symbol for b in self.scanner.blacklist):
                         logger.debug(f"🚫 [BLACKLIST] Filtering out {symbol}")
                         return
                     if symbol in majors:

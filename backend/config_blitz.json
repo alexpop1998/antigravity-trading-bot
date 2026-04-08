@@ -124,7 +124,7 @@
         "blacklist": [
             "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
             "XAU/USDT:USDT", "XAG/USDT:USDT", "GOLD/USDT:USDT", "SILV/USDT:USDT",
-            "PAXG/USDT:USDT", "XAUT/USDT:USDT"
+            "PAXG/USDT:USDT", "XAUT/USDT:USDT", "AAPL", "TSLA", "NVDA", "ARM", "GOOGL", "MSFT"
         ]
     },
     "operational_params": {

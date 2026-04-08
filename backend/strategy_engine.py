@@ -260,9 +260,9 @@ class StrategyEngine:
     async def _check_mtf_trend(self, symbol: str) -> int:
         now = time.time()
         if symbol in self.mtf_cache:
-            bias, timestamp = self.mtf_cache[symbol]
+            bias_data, timestamp = self.mtf_cache[symbol]
             if (now - timestamp) < 3600: # 1h TTL
-                return bias
+                return bias_data
 
         try:
             ohlcv_4h = await self.bot.gateway.exchange.fetch_ohlcv(symbol, '4h', limit=100)
@@ -275,8 +275,9 @@ class StrategyEngine:
             if last_close > (ema200 * (1 + ema_thresh)): bias = 1
             elif last_close < (ema200 * (1 - ema_thresh)): bias = -1
             
-            self.mtf_cache[symbol] = (bias, now)
-            return {'bias': bias, 'ema200': ema200, 'last_close': last_close}
+            res = {'bias': bias, 'ema200': ema200, 'last_close': last_close}
+            self.mtf_cache[symbol] = (res, now)
+            return res
         except Exception as e:
             logger.error(f"MTF Error for {symbol}: {e}")
             return {'bias': 0, 'ema200': 0, 'last_close': 0}
