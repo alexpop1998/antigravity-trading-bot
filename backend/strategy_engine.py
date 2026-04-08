@@ -29,7 +29,7 @@ class StrategyEngine:
         
         # v38.1 Gemini Cost Optimization
         self.ai_cache = {} 
-        self.ai_cache_ttl = 1800 
+        self.ai_cache_ttl = self.bot.config.get('operational_params', {}).get('ai_cache_ttl', 3600)
 
     async def get_technical_score(self, symbol: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """

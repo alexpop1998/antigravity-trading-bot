@@ -56,6 +56,23 @@
         "mtf_ema_threshold": 0.001,
         "force_trend_bias_bypass": false
     },
+    "market_filters": {
+        "mandatory_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+        "blacklist": [
+            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
+            "PAXG/USDT:USDT", "XAUT/USDT:USDT"
+        ]
+    },
+    "operational_params": {
+        "ai_cache_ttl": 3600,
+        "pair_update_interval": 3600,
+        "llm_cooldown_seconds": 300
+    },
+    "safety_thresholds": {
+        "startup_shield_seconds": 300,
+        "trade_protection_seconds": 60,
+        "emergency_roi_limit": -0.50
+    },
     "ai_prompts": {
         "llm_philosophy": "--- MISSIONE BITGET SNIPER ---\nSei un Cecchino di Volumi. Cerchi trade rapidi su asset con liquidit\u00e0 elevata. Non esitare se il setup tecnico \u00e8 solido e il volume supporta il breakout.\nREGOLE:\n1. Liquidit\u00e0: Entra solo se il book \u00e8 profondo.\n2. Esecuzione: Sii rapido e preciso.\n3. Rischio: Rispetta gli stop loss stretti.",
         "llm_temperature": 0.5

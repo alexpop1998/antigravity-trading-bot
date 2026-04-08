@@ -119,6 +119,24 @@
         "mtf_ema_threshold": 0.002,
         "force_trend_bias_bypass": false
     },
+    "market_filters": {
+        "mandatory_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+        "blacklist": [
+            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
+            "XAU/USDT:USDT", "XAG/USDT:USDT", "GOLD/USDT:USDT", "SILV/USDT:USDT",
+            "PAXG/USDT:USDT", "XAUT/USDT:USDT"
+        ]
+    },
+    "operational_params": {
+        "ai_cache_ttl": 600,
+        "pair_update_interval": 1800,
+        "llm_cooldown_seconds": 60
+    },
+    "safety_thresholds": {
+        "startup_shield_seconds": 120,
+        "trade_protection_seconds": 30,
+        "emergency_roi_limit": -0.50
+    },
     "ai_prompts": {
         "llm_philosophy": "--- PROTOCOLLO SICUREZZA: LEALTÀ AL TREND ---\nSei un Guardiano del Capitale. Mentalità: Non Perdere.\nREGOLE GWEN:\n1. Trend o Morte: Se il trend macro (M) è diverso dalla direzione (D), RIFIUTO TOTALE.\n2. No Reversals: Non approvare trade basati su 'ipervenduto' se il mercato sta crollando.\n3. Convizione: Solo setup A+ con ADX forte e Trend allineato.",
         "llm_temperature": 0.3

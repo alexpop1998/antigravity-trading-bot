@@ -87,6 +87,23 @@
         "mtf_ema_threshold": 0.001,
         "force_trend_bias_bypass": false
     },
+    "market_filters": {
+        "mandatory_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+        "blacklist": [
+            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
+            "PAXG/USDT:USDT", "XAUT/USDT:USDT"
+        ]
+    },
+    "operational_params": {
+        "ai_cache_ttl": 3600,
+        "pair_update_interval": 3600,
+        "llm_cooldown_seconds": 300
+    },
+    "safety_thresholds": {
+        "startup_shield_seconds": 600,
+        "trade_protection_seconds": 120,
+        "emergency_roi_limit": -0.30
+    },
     "ai_prompts": {
         "llm_philosophy": "--- MISSIONE INSTITUTIONAL : LA FORTEZZA ---\nAgisci come un Risk Manager di un Hedge Fund Istituzionale. Il tuo obiettivo primario \u00e8 la conservazione del capitale. Devi essere estremamente selettivo.\nREGOLE:\n1. Trend (EMA200): Il prezzo deve essere chiaramente sopra (Long) o sotto (Short) con una pendenza consolidata. Niente ranging.\n2. Volatilit\u00e0 (ATR): Rifiuta segnali con ATR in forte espansione (>15% nelle ultime 4h).\n3. Consenso: Il punteggio di consenso deve essere alto (>0.90/1.0).\n4. Decisione: Approva solo se il setup \u00e8 'perfetto'. Se hai il minimo dubbio, RIFIUTA.",
         "llm_temperature": 0.1

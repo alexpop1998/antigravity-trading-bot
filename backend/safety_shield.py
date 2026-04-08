@@ -12,9 +12,10 @@ class SafetyShield:
     
     def __init__(self, bot_instance):
         self.bot = bot_instance
+        safety = bot_instance.config.get('safety_thresholds', {})
         self.session_start_time = time.time()
-        self.startup_shield_seconds = 300
-        self.trade_protection_seconds = 60
+        self.startup_shield_seconds = safety.get('startup_shield_seconds', 300)
+        self.trade_protection_seconds = safety.get('trade_protection_seconds', 60)
         self.price_history_5m: Dict[str, List[float]] = {} # 30 samples (10s each)
         self.price_history_2m: Dict[str, List[float]] = {} # 12 samples (10s each)
         self.panic_drawdown_notified = False
@@ -150,10 +151,11 @@ class SafetyShield:
                     logger.critical(f"🆘 [FLASH EXIT] {symbol} due to {flash_event}.")
                     return True, f"FLASH_{flash_event}_EXIT"
 
-            # --- 0.5 EMERGENCY UNDERWATER SAFEGUARD (v55.5.1) ---
-            # If the position is massively underwater (-50% ROI), we exit immediately.
-            if pnl_pct <= -0.50:
-                logger.critical(f"⚠️ [UNDERWATER SAFEGUARD] {symbol} hit -50% ROI limit. Emergency exit triggered.")
+            # --- 0.5 EMERGENCY UNDERWATER SAFEGUARD (v5.4.0 [DYNAMIC]) ---
+            # If the position is massively underwater, we exit immediately.
+            emergency_limit = self.bot.config.get('safety_thresholds', {}).get('emergency_roi_limit', -0.50)
+            if pnl_pct <= emergency_limit:
+                logger.critical(f"⚠️ [UNDERWATER SAFEGUARD] {symbol} hit {emergency_limit:.0%} ROI limit. Emergency exit triggered.")
                 return True, "SAFEGUARD_UNDERWATER_EXIT"
 
             # --- 1. PEAK TRACKING (For Trailing - Persisted in trade dict) ---

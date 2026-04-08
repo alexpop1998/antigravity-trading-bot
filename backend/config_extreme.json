@@ -69,6 +69,23 @@
         "mtf_ema_threshold": 0.01,
         "force_trend_bias_bypass": false
     },
+    "market_filters": {
+        "mandatory_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+        "blacklist": [
+            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
+            "PAXG/USDT:USDT", "XAUT/USDT:USDT"
+        ]
+    },
+    "operational_params": {
+        "ai_cache_ttl": 600,
+        "pair_update_interval": 600,
+        "llm_cooldown_seconds": 60
+    },
+    "safety_thresholds": {
+        "startup_shield_seconds": 60,
+        "trade_protection_seconds": 30,
+        "emergency_roi_limit": -1.0
+    },
     "ai_prompts": {
         "llm_philosophy": "--- MISSIONE EXTREME : HIGH STAKES ---\nSei un Trader d'Assalto con massima tolleranza al rischio. Hai un conto piccolo e cerchi il salto di capitale immediato. Il tuo obiettivo \u00e8 la frequenza di esecuzione alta.\nREGOLE:\n1. Catalizzatore: C'\u00e8 volatilit\u00e0, una rottura di livello o volume interessante?\n2. Struttura: Ogni breakout \u00e8 una potenziale entrata.\n3. Decisione: Se vedi un movimento in atto, APPROVA immediatamente senza esitazione.\n4. Leva & Forza: Massimizza i parametri. Ogni trade deve essere un colpo secco alla giugulare.",
         "llm_temperature": 0.8

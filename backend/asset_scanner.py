@@ -10,16 +10,9 @@ class AssetScanner:
         self.bot = bot_instance
         self.exchange = bot_instance.gateway.exchange
         self.allowed_symbols = allowed_symbols # Mainnet Symbols only
-        # Mandatory symbols to always keep in rotation
-        self.mandatory_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
-        # Symbols to ignore (stables, delisted, non-crypto, etc.)
-        self.blacklist = [
-            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
-            "XAU/USDT:USDT", "XAG/USDT:USDT", "GOLD/USDT:USDT", "SILV/USDT:USDT",
-            "TSLA/USDT:USDT", "AAPL/USDT:USDT", "NVDA/USDT:USDT", "GOOGL/USDT:USDT",
-            "XAUT/USDT:USDT", "XAG/USDT:USDT", "PAXG/USDT:USDT", "AMZN/USDT:USDT",
-            "META/USDT:USDT", "MSFT/USDT:USDT", "TSLA/USDT", "AAPL/USDT", "NVDA/USDT"
-        ]
+        filters = bot_instance.config.get('market_filters', {})
+        self.mandatory_symbols = filters.get('mandatory_symbols', ["BTC/USDT:USDT", "ETH/USDT:USDT"])
+        self.blacklist = filters.get('blacklist', [])
 
     def set_allowed_symbols(self, symbols: List[str]):
         """Updates the list of confirmed real market symbols."""

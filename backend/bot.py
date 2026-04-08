@@ -70,7 +70,7 @@ class CryptoBot:
         self.initialized = False
         self.start_time = time.time()
         self.last_pair_update = 0
-        self.pair_update_interval = 3600
+        self.pair_update_interval = self.config.get('operational_params', {}).get('pair_update_interval', 3600)
         self.dynamic_symbols = []
 
     def _load_config(self):

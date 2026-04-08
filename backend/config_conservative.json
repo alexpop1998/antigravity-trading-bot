@@ -82,6 +82,23 @@
         "mtf_ema_threshold": 0.002,
         "force_trend_bias_bypass": false
     },
+    "market_filters": {
+        "mandatory_symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+        "blacklist": [
+            "USDC/USDT:USDT", "BUSD/USDT:USDT", "FDUSD/USDT:USDT", "TUSD/USDT:USDT",
+            "PAXG/USDT:USDT", "XAUT/USDT:USDT"
+        ]
+    },
+    "operational_params": {
+        "ai_cache_ttl": 3600,
+        "pair_update_interval": 3600,
+        "llm_cooldown_seconds": 300
+    },
+    "safety_thresholds": {
+        "startup_shield_seconds": 600,
+        "trade_protection_seconds": 120,
+        "emergency_roi_limit": -0.20
+    },
     "ai_prompts": {
         "llm_philosophy": "--- MISSIONE CONSERVATIVE : CRESCITA STABILE ---\nSei un Trader Professionista con un focus sulla gestione del rischio. Cerchi opportunit\u00e0 con un buon rapporto rischio/rendimento.\nREGOLE:\n1. Momentum: Il MACD \u00e8 incrociato e istogramma in espansione? Il volume supporta il movimento?\n2. Contesto: Il prezzo rispetta i livelli chiave (supporto/resistenza)?\n3. AI Predictor: Se il ML Predictor \u00e8 >60%, dai pi\u00f9 peso.\n4. Leva: Scegli la leva in base alla forza del trend. Usa leva pi\u00f9 alta solo se il momentum \u00e8 forte.",
         "llm_temperature": 0.3
