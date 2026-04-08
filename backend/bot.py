@@ -363,10 +363,40 @@ class CryptoBot:
 
     async def _close_position_internal(self, symbol: str, trade: Dict[str, Any], reason: str = "EXIT"):
         try:
+            # 1. Fetch live metrics before closing
+            pos = await self.gateway.fetch_atomic_position(symbol)
+            pnl_val = float(pos.get('unrealizedPnl', 0)) if pos else 0.0
+            roe_val = float(pos.get('percentage', 0)) if pos else 0.0
+            
+            if not roe_val and pos:
+                ep = pos.get('entry_price', trade.get('entry_price', 0))
+                cp = pos.get('mark_price', trade.get('peak_price', 0))
+                if ep and cp:
+                    raw_pct = (cp - ep) / ep
+                    if pos.get('side', 'long') != 'long': raw_pct = -raw_pct
+                    roe_val = raw_pct * pos.get('leverage', trade.get('leverage', 10)) * 100.0
+            
+            # 2. Close position
             await self.gateway.close_all_for_symbol(symbol)
             if symbol in self.trade_levels: del self.trade_levels[symbol]
             self.db.save_state("trade_levels", self.trade_levels)
-            await self.notifier.send_message(f"🏁 *POSIZIONE CHIUSA*\n🪙 {symbol} | 🎯 {reason}")
+            
+            # 3. Formulate Rich Messaging
+            display_reason = reason
+            if "HARD_STOP_LOSS" in reason:
+                # If we are in profit, it was actually a Trailing Stop hit!
+                if roe_val > 0:
+                    display_reason = "TRAILING_STOP (Profitti Protetti)"
+                else:
+                    display_reason = "RESCUE_STOP_LOSS (Perdita Tagliata)"
+                    
+            msg = f"🏁 *POSIZIONE CHIUSA*\n🪙 {symbol} | 🎯 {display_reason}"
+            if pnl_val or roe_val:
+                # Format to show emoji based on performance
+                emoji = "🟩" if roe_val > 0 else "🟥"
+                msg += f"\n{emoji} Profitto: {pnl_val:.2f} USDT | 📈 ROE: {roe_val:.2f}%"
+                
+            await self.notifier.send_message(msg)
         except Exception as e:
             logger.error(f"❌ [CLOSE FAILED] {e}")
 
