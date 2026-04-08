@@ -316,7 +316,7 @@ class CryptoBot:
                 logger.info(f"📍 [CHECKPOINT] Calculating sizing for {symbol} (Batch: {batch_mode})...")
                 amount = await self._calculate_order_amount(
                     symbol, price, leverage=leverage, 
-                    batch_divisor=num_winners if batch_mode else 1
+                    batch_divisor=1 # Always use full configured % per trade
                 )
                 logger.info(f"📍 [CHECKPOINT] Sizing for {symbol}: {amount}")
                 
