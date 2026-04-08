@@ -19,8 +19,8 @@
         "rsi_period": 7,
         "leverage": 25,
         "usdt_per_trade": 0.0,
-        "percent_per_trade": 50.0,
-        "max_margin_pct": 90.0,
+        "percent_per_trade": 20.0,
+        "max_margin_pct": 95.0,
         "consensus_threshold": 0.30,
         "min_ai_confidence": 0.20,
         "gemini_min_confidence": 0.20,
@@ -31,9 +31,9 @@
         "rsi_sell_level": 75,
         "trend_penalty_enabled": false,
         "technical_confluence_mode": "loose",
-        "stop_loss_pct": 0.025,
-        "take_profit_pct": 0.035,
-        "max_concurrent_positions": 3,
+        "stop_loss_pct": 0.015,
+        "take_profit_pct": 0.05,
+        "max_concurrent_positions": 5,
         "max_global_margin_ratio": 0.98,
         "daily_loss_limit": 25.0,
         "panic_drawdown_threshold": 0.35,
@@ -41,12 +41,21 @@
         "be_trigger_pct": 0.008
     },
     "trailing_params": {
-        "activation_pnl_pct": 1.0,
-        "base_atr_multiplier": 2.5,
+        "activation_pnl_pct": 0.6,
+        "base_atr_multiplier": 1.8,
         "tighten_ratio": 0.6
     },
     "ai_system_prompt": "Sei un TRADING SNIPER di classe ELITE. La tua missione è il BLITZ SCALPING ad alta frequenza. Se i dati tecnici (ADX, RSI, Volume) indicano un'esplosione imminente o in corso, APPROVA IMMEDIATAMENTE. Ignora la perfezione estetica. Cerca il 'Raw Momentum'. Se il volume è in crescita verticale, ignora l'ipercomprato (RSI > 80) ed entra per il breakout. Sii spietato, veloce e aggressivo. Focus: Velocità di esecuzione ed Entrata anticipata.",
     "strategic_params": {
+        "gladiator_leverage_params": {
+            "majors": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            "leverage_major_high": 50,
+            "leverage_major_std": 25,
+            "leverage_alt_std": 20,
+            "leverage_alt_special": 30,
+            "special_conf_threshold": 0.95,
+            "special_score_threshold": 0.85
+        },
         "llm_cooldown_seconds": 30,
         "llm_cooldown_bypass": true,
         "startup_shield_seconds": 0,

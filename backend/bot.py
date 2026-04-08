@@ -44,10 +44,9 @@ class CryptoBot:
         self.take_profit_pct = float(tp.get('take_profit_pct', 0.04))
         self.min_notional_usdt = float(self.config.get("strategic_params", {}).get("min_notional_usdt", 5.0))
         
-        # v43.3.1 [GWEN OVERDRIVE] Force Sizing 50% for Blitz
+        # v43.3.1 [GWEN OVERDRIVE]
         if self.profile_type == 'blitz':
-            self.percent_per_trade = max(self.percent_per_trade, 50.0)
-            logger.warning("⚔️ [BLITZ OVERDRIVE] Sizing forced to 50% per trade.")
+            logger.info(f"⚔️ [BLITZ OVERDRIVE] Sizing is {self.percent_per_trade}%.")
 
         exchange_name = self.config.get("strategic_params", {}).get("active_exchange", os.getenv("ACTIVE_EXCHANGE", "bitget"))
         self.active_exchange_name = exchange_name
@@ -299,6 +298,11 @@ class CryptoBot:
                     # Fallback to standard if config block is missing
                     leverage = int(analysis.get('leverage', self.leverage) if analysis else self.leverage)
                 
+                # Double clamp safety on Altcoins to completely prevent 50x
+                majors_list = leverage_params.get('majors', ['BTC/USDT:USDT', 'ETH/USDT:USDT']) if leverage_params else ['BTC/USDT:USDT', 'ETH/USDT:USDT']
+                if symbol not in majors_list:
+                    leverage = min(leverage, leverage_params.get('leverage_alt_special', 30) if leverage_params else 30)
+
                 logger.info(f"⚖️ [LEVERAGE AUDIT] {symbol} assigned {leverage}x (Conf: {analysis.get('confidence', 0):.2f}, Tech: {analysis.get('score', 0):.2f})")
                 
                 # v43.4.4 [GWEN MASTER] Adaptive Sniper Sizing
