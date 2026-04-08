@@ -166,11 +166,15 @@ class StrategyEngine:
             # v43.3 [GWEN FIX] Persist the price at analysis time for Slippage Guard
             ref_price = snapshot.get('price', 0)
             
+            trend_bias = snapshot.get('trend_bias', 0)
+            mtf_context = "UPTREND (EMA200 4H)" if trend_bias == 1 else ("DOWNTREND (EMA200 4H)" if trend_bias == -1 else "NEUTRAL")
+
             result = await self.analyst.decide_strategy(
                 symbol=symbol,
                 side=side,
                 signal_type="DEEP_RANKED_SCAN",
-                indicators=data
+                indicators=data,
+                mtf_context=mtf_context
             )
             
             if result[-1] == "RATE_LIMIT_429" and strategic.get('llm_cooldown_bypass', False):
