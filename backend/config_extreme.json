@@ -56,6 +56,16 @@
         "trend_guard_mode": "OFF",
         "tech_score_aligned": 0.45,
         "tech_score_mismatch": 0.45,
+        "bb_tolerance_buy": 1.05,
+        "bb_tolerance_sell": 0.95,
+        "volatility_protection_threshold": 0.05,
+        "funding_penalty_threshold": 0.001,
+        "ai_boost_trigger": 0.65,
+        "ai_boost_score": 0.99,
+        "ai_boost_leverage": 50,
+        "min_liquidity_threshold": 100000,
+        "min_volatility_threshold": 0.1,
+        "mtf_ema_threshold": 0.01,
         "force_trend_bias_bypass": false
     },
     "ai_prompts": {
